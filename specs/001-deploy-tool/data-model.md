@@ -20,6 +20,7 @@ repo 內 `home/` 底下的所有檔案。每個檔案以相對於 `home/` 的路
 | `entries[].path` | string | 相對於 `~/.claude` 的路徑，以 `/` 分隔 |
 | `entries[].sha256` | string | 部署當下的內容雜湊 |
 | `entries[].backup` | boolean | 是否有被取代的原檔備份 |
+| `entries[].previous` | string（選填） | 只在 `status` 為 `applying` 時出現：寫入前該路徑的內容雜湊，供中斷後判斷歸屬 |
 | `created_dirs` | array of string | 由本工具建立的目錄（相對路徑），移除時若為空就刪除 |
 
 規則：
