@@ -88,7 +88,7 @@ description: "Task list for 002 全域 CLAUDE.md"
 
 - [X] T011 [P] 更新 `README.md`：在開頭的內容說明加入全域 CLAUDE.md，並註明其中引用的 skill 在 003 至 008 完成前尚未提供
 - [X] T012 在暫存家目錄以 `uv run tools/deploy.py` 驗證 `home/CLAUDE.md` 被安裝且位元組與來源相同，並執行完整測試 `uv run --with pytest pytest`
-- [ ] T013 推送後確認 CI 在 `ubuntu-latest` 與 `windows-latest` 都通過；Windows 以 CI 結果為準
+- [X] T013 推送後確認 CI 在 `ubuntu-latest` 與 `windows-latest` 都通過；Windows 以 CI 結果為準
 
 ---
 
