@@ -10,7 +10,7 @@ description: "Task list for 002 全域 CLAUDE.md"
 **Prerequisites**: plan.md、spec.md、research.md、data-model.md、contracts/claude-md-structure.md、quickstart.md
 
 **Tests**: 需要。Constitution 原則 II 要求每個功能 MUST 有自動測試，且在 Windows 與 Linux 的 CI 上都通過才能合併。
-自動測試驗證文件結構；Claude 的實際行為以 quickstart 的情境人工驗收（research.md R4）。
+自動測試驗證文件結構；Claude 的實際行為以 quickstart 的情境人工驗收（research.md R4），不列為勾選任務，見 Notes。
 
 **Organization**: 依 user story 分組。兩個 story 寫入同一份 `home/CLAUDE.md` 的不同段落。
 
@@ -89,7 +89,6 @@ description: "Task list for 002 全域 CLAUDE.md"
 - [X] T011 [P] 更新 `README.md`：在開頭的內容說明加入全域 CLAUDE.md，並註明其中引用的 skill 在 003 至 008 完成前尚未提供
 - [X] T012 在暫存家目錄以 `uv run tools/deploy.py` 驗證 `home/CLAUDE.md` 被安裝且位元組與來源相同，並執行完整測試 `uv run --with pytest pytest`
 - [ ] T013 推送後確認 CI 在 `ubuntu-latest` 與 `windows-latest` 都通過；Windows 以 CI 結果為準
-- [ ] T014 由維護者依 `specs/002-global-claude-md/quickstart.md` 的 10 個情境人工驗收；這一項需要維護者在真實的 Claude Code session 進行，無法自動完成
 
 ---
 
@@ -135,10 +134,10 @@ Task: "T003 建立 tests/unit/test_claude_md.py 的解析與文件層級測試"
 1. Foundational：骨架與解析
 2. US1：溝通與 Git
 3. US2：規格驅動開發
-4. Polish：README、部署驗證、CI、人工驗收
+4. Polish：README、部署驗證、CI
 
 ## Notes
 
 - 每完成一個任務或一組相關任務就 commit
-- T014 是人工驗收，完成與否由維護者回報
+- 人工驗收（原 T014）由維護者在 003 至 008 完成並部署後，依 `quickstart.md` 的 10 個情境進行，不列為勾選任務
 - 在 003 至 008 完成前，不建議把這份文件部署到維護者實際的 `~/.claude`（plan.md 的說明）
