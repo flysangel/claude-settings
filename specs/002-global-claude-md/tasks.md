@@ -51,13 +51,13 @@ description: "Task list for 002 全域 CLAUDE.md"
 
 > 先寫測試並確認失敗，再實作
 
-- [ ] T004 [US1] 在 `tests/unit/test_claude_md.py` 加入：每個頂層清單項目的下一個非空行以兩個空白加「預期：」開頭（data-model.md「規則」，contracts 約定 2）；「溝通」段有 3 條規則、「Git」段有 3 條規則
-- [ ] T005 [US1] 在 `tests/unit/test_claude_md.py` 加入：文件不含電子信箱、以 `/home/` 或 `/Users/` 開頭的路徑、`C:\` 這類磁碟路徑（FR-009，contracts 約定 5）
+- [X] T004 [US1] 在 `tests/unit/test_claude_md.py` 加入：每個頂層清單項目的下一個非空行以兩個空白加「預期：」開頭（data-model.md「規則」，contracts 約定 2）；「溝通」段有 3 條規則、「Git」段有 3 條規則
+- [X] T005 [US1] 在 `tests/unit/test_claude_md.py` 加入：文件不含電子信箱、以 `/home/` 或 `/Users/` 開頭的路徑、`C:\` 這類磁碟路徑（FR-009，contracts 約定 5）
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] 在 `home/CLAUDE.md` 撰寫「溝通」段的 3 條規則與預期：繁體中文回覆並保留原文術語；以 AskUserQuestion 呈現選項並標出建議；skill 要求文字或表格提問時仍改用 AskUserQuestion（FR-002、FR-003，research.md R1）
-- [ ] T007 [US1] 在 `home/CLAUDE.md` 撰寫「Git」段的 3 條規則與預期：每項異動就 commit；不直接 commit 到 `main`；明確要求才 push（FR-004，research.md R1）
+- [X] T006 [US1] 在 `home/CLAUDE.md` 撰寫「溝通」段的 3 條規則與預期：繁體中文回覆並保留原文術語；以 AskUserQuestion 呈現選項並標出建議；skill 要求文字或表格提問時仍改用 AskUserQuestion（FR-002、FR-003，research.md R1）
+- [X] T007 [US1] 在 `home/CLAUDE.md` 撰寫「Git」段的 3 條規則與預期：每項異動就 commit；不直接 commit 到 `main`；明確要求才 push（FR-004，research.md R1）
 
 **Checkpoint**: 文件已可部署並提供溝通與 Git 偏好
 

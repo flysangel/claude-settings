@@ -70,3 +70,31 @@ def test_lf_line_endings_and_trailing_newline():
 
     assert b"\r" not in data
     assert data.endswith(b"\n")
+
+
+# ------------------------------------------------- US1: 溝通與 Git 的規則
+
+
+def test_every_rule_is_followed_by_exactly_one_expectation():
+    lines = read_text().split("\n")
+    rules = parse_rules(lines)
+
+    assert rules
+    for requirement, following in rules:
+        assert following is not None and following.startswith(EXPECTATION_PREFIX), requirement
+        assert following[len(EXPECTATION_PREFIX) :].strip(), requirement
+    assert sum("預期：" in l for l in lines) == len(rules)
+
+
+@pytest.mark.parametrize("name", ["溝通", "Git"])
+def test_communication_and_git_sections_have_three_rules(name):
+    assert len(section_rules(name)) == 3
+
+
+def test_no_personal_information():
+    text = read_text()
+
+    assert not re.search(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", text)
+    assert "/home/" not in text
+    assert "/Users/" not in text
+    assert not re.search(r"\b[A-Za-z]:\\", text)
