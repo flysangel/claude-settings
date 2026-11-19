@@ -1,0 +1,123 @@
+{
+  "speckit_version": "1.4.2",
+  "script": "sh",
+  "created": [
+    {
+      "path": ".claude/skills/speckit-analyze/SKILL.md",
+      "sha256": "302d6ef88575d801cb2a413fe1c8c1890c74ab58a5e8bf081c438ac689acc522"
+    },
+    {
+      "path": ".claude/skills/speckit-checklist/SKILL.md",
+      "sha256": "8b58d54ff4d40d90c69d3379c69410b3f9a730d6a10c4900af88408628cde2e0"
+    },
+    {
+      "path": ".claude/skills/speckit-clarify/SKILL.md",
+      "sha256": "b7d69b8d7ffb17503c50c9f12250e4a2b9edc940d3cfb3db087076450e98187e"
+    },
+    {
+      "path": ".claude/skills/speckit-constitution/SKILL.md",
+      "sha256": "e615aa60a046016de9e903330133fca24f2b21be9d2cd829b3a97438589f56a5"
+    },
+    {
+      "path": ".claude/skills/speckit-converge/SKILL.md",
+      "sha256": "ffcbb816e4a4e7716fee40e8059633f9919dc9763fcb2a66d16326ca730893d6"
+    },
+    {
+      "path": ".claude/skills/speckit-implement/SKILL.md",
+      "sha256": "11e1ffb9cc663ae9fe0d9d9573d26a11b457d769d0c9fdeac72e1e087e1ed5d5"
+    },
+    {
+      "path": ".claude/skills/speckit-plan/SKILL.md",
+      "sha256": "860f9d0e1ed0d0dc89a16511ea49274a51ed25e4225dcd160fd3fb402619e87f"
+    },
+    {
+      "path": ".claude/skills/speckit-specify/SKILL.md",
+      "sha256": "799522c02f163fd83060cafb60fc1f9526e577d50d485a6b75b33e9570f87a60"
+    },
+    {
+      "path": ".claude/skills/speckit-tasks/SKILL.md",
+      "sha256": "59c444b3b3a5f9af8ae83ed8297acf615cc9bea624151fee8a777f6970378f31"
+    },
+    {
+      "path": ".specify/.gitignore",
+      "sha256": "0a61c5378b0bb2e0f85babff99c8b166f2170a2c12378cd17d929aa19296ec88"
+    },
+    {
+      "path": ".specify/init-options.json",
+      "sha256": "7c2368e44dbd5ba1272bed8fee10c87ac7c5b167d118945cb0e22ef1e37d83ef"
+    },
+    {
+      "path": ".specify/integration.json",
+      "sha256": "d353c30fb1e987f952748da5224220df33fce65c8c8af0df06e0c0e09d2b2696"
+    },
+    {
+      "path": ".specify/integrations/claude.manifest.json",
+      "sha256": "9947ede325042420da642b4df0cb89633a60445ceb412642f5149acfc460e09a"
+    },
+    {
+      "path": ".specify/integrations/speckit.manifest.json",
+      "sha256": "8ec41c197cacf8517852b76553d54ba3ba24ecb8f2f3a90efb9fba830d9b3e5d"
+    },
+    {
+      "path": ".specify/memory/.constitution-template.json",
+      "sha256": "8fc4b39294bae0c10d59547ad7d415b6f0e890d656cbf7171dd567f4e9054711"
+    },
+    {
+      "path": ".specify/memory/constitution.md",
+      "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
+    },
+    {
+      "path": ".specify/scripts/bash/check-prerequisites.sh",
+      "sha256": "e127735bbc5ac42181e2a3c773a2d639979f865f18e74a1a977cdf53392a0a7d"
+    },
+    {
+      "path": ".specify/scripts/bash/common.sh",
+      "sha256": "53cb1c23e349db4586c272436ce35c6e2f36a9c0b5351a85e0b216d9887a26b7"
+    },
+    {
+      "path": ".specify/scripts/bash/create-new-feature.sh",
+      "sha256": "1e422acb000ab106b63ba1f9f9258bbcdc5b5c93f4e9f88588c0e671ad61b872"
+    },
+    {
+      "path": ".specify/scripts/bash/resolve-template.sh",
+      "sha256": "829e227096abc8bf0889889ec9f792f503ca5d395b7836a8a7eb739ee75214e7"
+    },
+    {
+      "path": ".specify/scripts/bash/setup-plan.sh",
+      "sha256": "d378ec66ba20d2da01c71dad8935062c1c27f0bba890be9a6d3dda52ea056a4e"
+    },
+    {
+      "path": ".specify/scripts/bash/setup-tasks.sh",
+      "sha256": "4a33dd1e6c32ddc7d570f4b538572c54069192573eed0ec654d9fb826e31a4fe"
+    },
+    {
+      "path": ".specify/templates/checklist-template.md",
+      "sha256": "856532b3cb66171c662cc16f16b31a5856e4655a8666aad1e545bbfc7f603ca1"
+    },
+    {
+      "path": ".specify/templates/constitution-template.md",
+      "sha256": "ce7549540fa45543cca797a150201d868e64495fdff39dc38246fb17bd4024b3"
+    },
+    {
+      "path": ".specify/templates/plan-template.md",
+      "sha256": "7e637502d41eccf0ca672496636365691fdca62ef37b27ec07fcb412dbfa90d4"
+    },
+    {
+      "path": ".specify/templates/spec-template.md",
+      "sha256": "3945437fc35cd30a5b2bf7beea680337c3516826d3efa5a6b92c4a7eca1ba28e"
+    },
+    {
+      "path": ".specify/templates/tasks-template.md",
+      "sha256": "fc29a233f6f5a27ca31f1aa46b596af6500c627441c6e62b2bc4a1d721525842"
+    },
+    {
+      "path": ".specify/workflows/speckit/workflow.yml",
+      "sha256": "dc0409237d62f267b2d496022cbafadb1fcebe2c1335127fead51dbcd5acbd84"
+    },
+    {
+      "path": ".specify/workflows/workflow-registry.json",
+      "sha256": "c15d0f059b1be504625791afe32bbefee9668f17715af4e7d35faa8afa731517"
+    }
+  ],
+  "skipped": []
+}
