@@ -5,7 +5,7 @@
 
 > **目前狀態**：部署工具（spec 001）已實作，Linux 上的測試通過；Windows 尚未經 CI 驗證。
 > `home/` 的實際內容（`CLAUDE.md` 與各個 skill）由後續的 spec 002 至 008 提供。
-> repo 的公開位址尚未設定，下方指令中的 `https://raw.githubusercontent.com/flysangel/claude-settings/main` 是佔位。
+> 在部署工具合併進 `main` 之前，下方的指令還無法使用。
 
 ## 安裝與更新
 
