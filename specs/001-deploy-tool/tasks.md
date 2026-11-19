@@ -24,10 +24,10 @@ description: "Task list for 001 部署工具"
 
 **Purpose**: 建立專案骨架與兩個平台一致的基礎
 
-- [ ] T001 建立目錄骨架 `home/skills/`、`tools/`、`tests/unit/`、`tests/e2e/`，並在 `home/skills/` 放 `.gitkeep`
-- [ ] T002 [P] 建立 `.gitattributes`，內容為 `* text=auto eol=lf`（research.md R7）
-- [ ] T003 [P] 建立 `.gitignore`，排除 `__pycache__/`、`.pytest_cache/`、`.venv/`
-- [ ] T004 [P] 建立 `.github/workflows/ci.yml`：矩陣 `ubuntu-latest` 與 `windows-latest`，安裝 uv 後執行 `uv run --with pytest pytest`（research.md R8）
+- [X] T001 建立目錄骨架 `home/skills/`、`tools/`、`tests/unit/`、`tests/e2e/`，並在 `home/skills/` 放 `.gitkeep`
+- [X] T002 [P] 建立 `.gitattributes`，內容為 `* text=auto eol=lf`（research.md R7）
+- [X] T003 [P] 建立 `.gitignore`，排除 `__pycache__/`、`.pytest_cache/`、`.venv/`
+- [X] T004 [P] 建立 `.github/workflows/ci.yml`：矩陣 `ubuntu-latest` 與 `windows-latest`，安裝 uv 後執行 `uv run --with pytest pytest`（research.md R8）
 
 ---
 
@@ -37,12 +37,12 @@ description: "Task list for 001 部署工具"
 
 **⚠️ CRITICAL**: 這個階段完成前不能開始任何 user story
 
-- [ ] T005 建立 `tools/deploy.py` 骨架：uv inline metadata（`requires-python = ">=3.11"`、無相依）、參數解析（預設、`--replace`、`remove`，未知參數結束碼 1）、結束碼常數 0/1/2/3（contracts/cli.md）
-- [ ] T006 在 `tools/deploy.py` 實作來源掃描與 SHA-256：列出 `home/` 下所有檔案的相對路徑（一律以 `/` 分隔），位元組原樣讀取（data-model.md「部署內容」）
-- [ ] T007 在 `tools/deploy.py` 實作 manifest 讀寫，欄位依 data-model.md 的 `Manifest.schema`、`Manifest.status`、`Manifest.repo_commit`、`Manifest.entries[].path`、`Manifest.entries[].sha256`、`Manifest.entries[].backup`、`Manifest.created_dirs`；寫入用暫存檔加 `os.replace`；無法解析時視為不存在
-- [ ] T008 在 `tools/deploy.py` 實作規劃函式：純讀取，依 data-model.md「動作計畫」的七種動作為每個路徑分類並回傳計畫
-- [ ] T009 在 `tools/deploy.py` 實作輸出格式：每行一筆的動作行與最後的摘要行，路徑一律用 `/`（contracts/cli.md「輸出」）
-- [ ] T010 [P] 建立 `tests/conftest.py`：暫存家目錄 fixture（同時設定 `HOME` 與 `USERPROFILE`）、暫存部署來源 fixture、以子程序執行 `uv run tools/deploy.py` 並回傳結束碼與輸出的輔助函式、比對目錄快照的輔助函式
+- [X] T005 建立 `tools/deploy.py` 骨架：uv inline metadata（`requires-python = ">=3.11"`、無相依）、參數解析（預設、`--replace`、`remove`，未知參數結束碼 1）、結束碼常數 0/1/2/3（contracts/cli.md）
+- [X] T006 在 `tools/deploy.py` 實作來源掃描與 SHA-256：列出 `home/` 下所有檔案的相對路徑（一律以 `/` 分隔），位元組原樣讀取（data-model.md「部署內容」）
+- [X] T007 在 `tools/deploy.py` 實作 manifest 讀寫，欄位依 data-model.md 的 `Manifest.schema`、`Manifest.status`、`Manifest.repo_commit`、`Manifest.entries[].path`、`Manifest.entries[].sha256`、`Manifest.entries[].backup`、`Manifest.created_dirs`；寫入用暫存檔加 `os.replace`；無法解析時視為不存在
+- [X] T008 在 `tools/deploy.py` 實作規劃函式：純讀取，依 data-model.md「動作計畫」的七種動作為每個路徑分類並回傳計畫
+- [X] T009 在 `tools/deploy.py` 實作輸出格式：每行一筆的動作行與最後的摘要行，路徑一律用 `/`（contracts/cli.md「輸出」）
+- [X] T010 [P] 建立 `tests/conftest.py`：暫存家目錄 fixture（同時設定 `HOME` 與 `USERPROFILE`）、暫存部署來源 fixture、以子程序執行 `uv run tools/deploy.py` 並回傳結束碼與輸出的輔助函式、比對目錄快照的輔助函式
 
 **Checkpoint**: 核心就緒，可以開始 user story
 
@@ -58,19 +58,19 @@ description: "Task list for 001 部署工具"
 
 > 先寫測試並確認失敗，再實作
 
-- [ ] T011 [P] [US1] 在 `tests/unit/test_deploy.py` 加入全新安裝的測試：所有檔案被建立、內容位元組相同、輸出每筆為 `created`、結束碼 0、manifest 的 `Manifest.status` 為 `complete`
-- [ ] T012 [P] [US1] 在 `tests/unit/test_deploy.py` 加入 `~/.claude` 不存在時直接建立並安裝的測試
-- [ ] T013 [P] [US1] 在 `tests/unit/test_deploy.py` 加入 manifest 不含絕對路徑、使用者名稱與家目錄字串的測試（FR-013，data-model.md `Manifest.entries[].path`）
-- [ ] T014 [P] [US1] 在 `tests/e2e/test_setup_sh.py`（非 Linux 時跳過）加入：以本機 bare repo 經 `CLAUDE_SETTINGS_REPO` 執行 `tools/setup.sh` 完成安裝；`PATH` 找不到 `uv` 或 `git` 時結束碼 3、一次列出全部 `missing`、沒有 clone 也沒有寫入
-- [ ] T015 [P] [US1] 在 `tests/e2e/test_setup_ps1.py`（非 Windows 時跳過）加入與 T014 相同情境的 `tools/setup.ps1` 測試
+- [X] T011 [P] [US1] 在 `tests/unit/test_deploy.py` 加入全新安裝的測試：所有檔案被建立、內容位元組相同、輸出每筆為 `created`、結束碼 0、manifest 的 `Manifest.status` 為 `complete`
+- [X] T012 [P] [US1] 在 `tests/unit/test_deploy.py` 加入 `~/.claude` 不存在時直接建立並安裝的測試
+- [X] T013 [P] [US1] 在 `tests/unit/test_deploy.py` 加入 manifest 不含絕對路徑、使用者名稱與家目錄字串的測試（FR-013，data-model.md `Manifest.entries[].path`）
+- [X] T014 [P] [US1] 在 `tests/e2e/test_setup_sh.py`（非 Linux 時跳過）加入：以本機 bare repo 經 `CLAUDE_SETTINGS_REPO` 執行 `tools/setup.sh` 完成安裝；`PATH` 找不到 `uv` 或 `git` 時結束碼 3、一次列出全部 `missing`、沒有 clone 也沒有寫入
+- [X] T015 [P] [US1] 在 `tests/e2e/test_setup_ps1.py`（非 Windows 時跳過）加入與 T014 相同情境的 `tools/setup.ps1` 測試
 
 ### Implementation for User Story 1
 
-- [ ] T016 [US1] 在 `tools/deploy.py` 實作執行階段的 `create` 動作：先寫入 `Manifest.status` 為 `applying` 的 manifest，以暫存檔加 `os.replace` 寫入檔案，記錄 `Manifest.created_dirs`，最後改為 `complete`（research.md R5）
-- [ ] T017 [US1] 在 `tools/deploy.py` 實作 `Manifest.repo_commit` 的取得（`git rev-parse HEAD`，取不到時為空字串）與安裝完成的摘要行
-- [ ] T018 [P] [US1] 實作 `tools/setup.sh`：檢查 `git` 與 `uv` 並一次列出全部缺少的指令（結束碼 3）、clone 或 `git pull --ff-only` 到 `~/.claude-settings`、以 `uv run` 執行 `tools/deploy.py` 並原樣轉交參數、回傳其結束碼；repo URL 為單一常數，可由 `CLAUDE_SETTINGS_REPO` 覆寫（research.md R2、R3）
-- [ ] T019 [P] [US1] 實作 `tools/setup.ps1`：行為與 T018 完全相同，支援 `irm | iex` 與 scriptblock 帶參數兩種呼叫方式
-- [ ] T020 [US1] 在 `tools/deploy.py` 與兩支開機腳本處理無法取得 repo 或寫入失敗：結束碼 1、錯誤訊息到 stderr、取得失敗時不寫入 `~/.claude`
+- [X] T016 [US1] 在 `tools/deploy.py` 實作執行階段的 `create` 動作：先寫入 `Manifest.status` 為 `applying` 的 manifest，以暫存檔加 `os.replace` 寫入檔案，記錄 `Manifest.created_dirs`，最後改為 `complete`（research.md R5）
+- [X] T017 [US1] 在 `tools/deploy.py` 實作 `Manifest.repo_commit` 的取得（`git rev-parse HEAD`，取不到時為空字串）與安裝完成的摘要行
+- [X] T018 [P] [US1] 實作 `tools/setup.sh`：檢查 `git` 與 `uv` 並一次列出全部缺少的指令（結束碼 3）、clone 或 `git pull --ff-only` 到 `~/.claude-settings`、以 `uv run` 執行 `tools/deploy.py` 並原樣轉交參數、回傳其結束碼；repo URL 為單一常數，可由 `CLAUDE_SETTINGS_REPO` 覆寫（research.md R2、R3）
+- [X] T019 [P] [US1] 實作 `tools/setup.ps1`：行為與 T018 完全相同，支援 `irm | iex` 與 scriptblock 帶參數兩種呼叫方式
+- [X] T020 [US1] 在 `tools/deploy.py` 與兩支開機腳本處理無法取得 repo 或寫入失敗：結束碼 1、錯誤訊息到 stderr、取得失敗時不寫入 `~/.claude`
 
 **Checkpoint**: 可以在兩個平台以開機腳本完成全新安裝
 
@@ -84,15 +84,15 @@ description: "Task list for 001 部署工具"
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T021 [P] [US2] 在 `tests/unit/test_deploy.py` 加入更新測試：來源檔案內容改變後輸出 `updated`，新增的檔案輸出 `created`，來源不再提供的檔案輸出 `deleted` 並從目標移除，manifest 同步
-- [ ] T022 [P] [US2] 在 `tests/unit/test_deploy.py` 加入冪等測試：沒有變更時連續執行 10 次，目錄快照（含修改時間）完全不變，輸出 `Already up to date.`（SC-004）
-- [ ] T023 [P] [US2] 在 `tests/unit/test_deploy.py` 加入中途失敗後收斂的測試：模擬寫到一半中斷而留下 `Manifest.status` 為 `applying`，再次執行後狀態一致且沒有歸屬不明的檔案
+- [X] T021 [P] [US2] 在 `tests/unit/test_deploy.py` 加入更新測試：來源檔案內容改變後輸出 `updated`，新增的檔案輸出 `created`，來源不再提供的檔案輸出 `deleted` 並從目標移除，manifest 同步
+- [X] T022 [P] [US2] 在 `tests/unit/test_deploy.py` 加入冪等測試：沒有變更時連續執行 10 次，目錄快照（含修改時間）完全不變，輸出 `Already up to date.`（SC-004）
+- [X] T023 [P] [US2] 在 `tests/unit/test_deploy.py` 加入中途失敗後收斂的測試：模擬寫到一半中斷而留下 `Manifest.status` 為 `applying`，再次執行後狀態一致且沒有歸屬不明的檔案
 
 ### Implementation for User Story 2
 
-- [ ] T024 [US2] 在 `tools/deploy.py` 實作 `keep`、`update`、`delete` 動作，以及刪除後清理 `Manifest.created_dirs` 中已變空的目錄
-- [ ] T025 [US2] 在 `tools/deploy.py` 實作無異動時的短路：計畫全為 `keep` 時不寫入任何檔案（包含 manifest）
-- [ ] T026 [US2] 在 `tools/deploy.py` 實作從 `applying` 狀態恢復：以 manifest 的目標狀態重新規劃並完成
+- [X] T024 [US2] 在 `tools/deploy.py` 實作 `keep`、`update`、`delete` 動作，以及刪除後清理 `Manifest.created_dirs` 中已變空的目錄
+- [X] T025 [US2] 在 `tools/deploy.py` 實作無異動時的短路：計畫全為 `keep` 時不寫入任何檔案（包含 manifest）
+- [X] T026 [US2] 在 `tools/deploy.py` 實作從 `applying` 狀態恢復：以 manifest 的目標狀態重新規劃並完成
 
 **Checkpoint**: 安裝與更新都可用，重複執行零異動
 
@@ -106,15 +106,15 @@ description: "Task list for 001 部署工具"
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T027 [P] [US3] 在 `tests/unit/test_deploy.py` 加入別人的同名檔案測試：結束碼 2、列出全部 `conflict ... (not installed by this tool)`、目錄快照完全不變，包含沒有衝突的其他檔案也沒有被寫入（FR-007）
-- [ ] T028 [P] [US3] 在 `tests/unit/test_deploy.py` 加入手動修改測試：已安裝的檔案被改後執行更新，結束碼 2、列出 `conflict ... (modified since install)`、零寫入（FR-008）
-- [ ] T029 [P] [US3] 在 `tests/unit/test_deploy.py` 加入 `--replace` 測試：別人的原檔出現在 `backups/` 且 `Manifest.entries[].backup` 為 true；被手動改過的版本出現在 `discarded/<時間戳>/`；輸出含 `backup` 行；同一路徑第二次取代不覆寫第一次的備份
-- [ ] T030 [P] [US3] 在 `tests/unit/test_deploy.py` 加入邊界測試：既有檔案內容與來源完全相同時輸出 `adopted`、不備份、不算衝突；manifest 遺失或損毀時既有檔案一律依「別人的」處理
+- [X] T027 [P] [US3] 在 `tests/unit/test_deploy.py` 加入別人的同名檔案測試：結束碼 2、列出全部 `conflict ... (not installed by this tool)`、目錄快照完全不變，包含沒有衝突的其他檔案也沒有被寫入（FR-007）
+- [X] T028 [P] [US3] 在 `tests/unit/test_deploy.py` 加入手動修改測試：已安裝的檔案被改後執行更新，結束碼 2、列出 `conflict ... (modified since install)`、零寫入（FR-008）
+- [X] T029 [P] [US3] 在 `tests/unit/test_deploy.py` 加入 `--replace` 測試：別人的原檔出現在 `backups/` 且 `Manifest.entries[].backup` 為 true；被手動改過的版本出現在 `discarded/<時間戳>/`；輸出含 `backup` 行；同一路徑第二次取代不覆寫第一次的備份
+- [X] T030 [P] [US3] 在 `tests/unit/test_deploy.py` 加入邊界測試：既有檔案內容與來源完全相同時輸出 `adopted`、不備份、不算衝突；manifest 遺失或損毀時既有檔案一律依「別人的」處理
 
 ### Implementation for User Story 3
 
-- [ ] T031 [US3] 在 `tools/deploy.py` 實作衝突閘門：計畫含任何 `conflict-foreign` 或 `conflict-modified` 且沒有 `--replace` 時，輸出全部衝突與摘要後以結束碼 2 結束，不進入執行階段
-- [ ] T032 [US3] 在 `tools/deploy.py` 實作 `adopt` 動作與 `--replace` 下的備份：`conflict-foreign` 備份到 `backups/<path>`（只保留第一次），`conflict-modified` 搬到 `discarded/<UTC 時間戳>/<path>`，再寫入新內容（data-model.md「備份」「捨棄的修改」）
+- [X] T031 [US3] 在 `tools/deploy.py` 實作衝突閘門：計畫含任何 `conflict-foreign` 或 `conflict-modified` 且沒有 `--replace` 時，輸出全部衝突與摘要後以結束碼 2 結束，不進入執行階段
+- [X] T032 [US3] 在 `tools/deploy.py` 實作 `adopt` 動作與 `--replace` 下的備份：`conflict-foreign` 備份到 `backups/<path>`（只保留第一次），`conflict-modified` 搬到 `discarded/<UTC 時間戳>/<path>`，再寫入新內容（data-model.md「備份」「捨棄的修改」）
 
 **Checkpoint**: 既有檔案在所有情境下都受到保護
 
@@ -128,12 +128,12 @@ description: "Task list for 001 部署工具"
 
 ### Tests for User Story 4 ⚠️
 
-- [ ] T033 [P] [US4] 在 `tests/unit/test_deploy.py` 加入往返測試：預先放置無關檔案與一個會被取代的同名檔案，執行 `--replace` 安裝再 `remove`，目錄快照與安裝前完全相同，`.claude-settings/` 不存在（SC-005）
-- [ ] T034 [P] [US4] 在 `tests/unit/test_deploy.py` 加入：從未安裝時 `remove` 結束碼 0、零異動；已安裝檔案被手動修改時 `remove` 結束碼 2、零刪除；`remove --replace` 把被改的版本搬到 `discarded/` 後完成移除並保留該目錄；manifest 內但目標已不存在的檔案不算衝突
+- [X] T033 [P] [US4] 在 `tests/unit/test_deploy.py` 加入往返測試：預先放置無關檔案與一個會被取代的同名檔案，執行 `--replace` 安裝再 `remove`，目錄快照與安裝前完全相同，`.claude-settings/` 不存在（SC-005）
+- [X] T034 [P] [US4] 在 `tests/unit/test_deploy.py` 加入：從未安裝時 `remove` 結束碼 0、零異動；已安裝檔案被手動修改時 `remove` 結束碼 2、零刪除；`remove --replace` 把被改的版本搬到 `discarded/` 後完成移除並保留該目錄；manifest 內但目標已不存在的檔案不算衝突
 
 ### Implementation for User Story 4
 
-- [ ] T035 [US4] 在 `tools/deploy.py` 實作 `remove`：規劃（比對 `Manifest.entries[].sha256`）→ 衝突閘門 → 刪除自己的檔案 → 依 `Manifest.entries[].backup` 把備份搬回原位並輸出 `restored` → 清理 `Manifest.created_dirs` 中變空的目錄 → 刪除狀態目錄（`discarded/` 有內容時保留並回報位置）
+- [X] T035 [US4] 在 `tools/deploy.py` 實作 `remove`：規劃（比對 `Manifest.entries[].sha256`）→ 衝突閘門 → 刪除自己的檔案 → 依 `Manifest.entries[].backup` 把備份搬回原位並輸出 `restored` → 清理 `Manifest.created_dirs` 中變空的目錄 → 刪除狀態目錄（`discarded/` 有內容時保留並回報位置）
 
 **Checkpoint**: 四個 user story 都可獨立運作
 
@@ -143,10 +143,10 @@ description: "Task list for 001 部署工具"
 
 **Purpose**: 跨 story 的收尾
 
-- [ ] T036 [P] 在 `tests/unit/test_deploy.py` 加入輸出一致性測試：相同輸入下，輸出的動作行與摘要行不含反斜線與平台相關字串（FR-012、SC-002）
-- [ ] T037 [P] 撰寫 `README.md`（繁體中文）：兩個平台的一行指令、`--replace` 與 `remove` 的用法、結束碼、備份位置；repo 位址以佔位標示，待建立 remote 後填入
-- [ ] T038 依 `specs/001-deploy-tool/quickstart.md` 的七個手動情境在暫存家目錄逐一驗證並修正差異
-- [ ] T039 推送後確認 `.github/workflows/ci.yml` 在 `ubuntu-latest` 與 `windows-latest` 都通過；本機無法驗證 Windows，這一項以 CI 結果為準
+- [X] T036 [P] 在 `tests/unit/test_deploy.py` 加入輸出一致性測試：相同輸入下，輸出的動作行與摘要行不含反斜線與平台相關字串（FR-012、SC-002）
+- [X] T037 [P] 撰寫 `README.md`（繁體中文）：兩個平台的一行指令、`--replace` 與 `remove` 的用法、結束碼、備份位置；repo 位址以佔位標示，待建立 remote 後填入
+- [X] T038 依 `specs/001-deploy-tool/quickstart.md` 的七個手動情境在暫存家目錄逐一驗證並修正差異
+- [X] T039 推送後確認 `.github/workflows/ci.yml` 在 `ubuntu-latest` 與 `windows-latest` 都通過；本機無法驗證 Windows，這一項以 CI 結果為準
 
 ---
 

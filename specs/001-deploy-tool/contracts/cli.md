@@ -44,10 +44,12 @@ restored  CLAUDE.md
 conflict  CLAUDE.md (not installed by this tool)
 conflict  skills/sdd-init/SKILL.md (modified since install)
 backup    CLAUDE.md -> .claude-settings/backups/CLAUDE.md
+discarded CLAUDE.md -> .claude-settings/discarded/20261120T010203Z/CLAUDE.md
 missing   uv
 ```
 
-最後一行是摘要，例如 `Installed 12 files.`、`Already up to date.`、
+最後是摘要，例如 `Installed: 12 created.`、`Installed: 1 updated, 1 deleted.`、`Already up to date.`、
+`Removed 12 files.`、`Nothing to remove.`、
 `2 conflicts. Nothing was written. Re-run with --replace to overwrite (originals are backed up).`
 
 錯誤訊息輸出到 stderr。
