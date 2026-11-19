@@ -86,8 +86,8 @@ description: "Task list for 002 全域 CLAUDE.md"
 
 **Purpose**: 收尾與驗證
 
-- [ ] T011 [P] 更新 `README.md`：在開頭的內容說明加入全域 CLAUDE.md，並註明其中引用的 skill 在 003 至 008 完成前尚未提供
-- [ ] T012 在暫存家目錄以 `uv run tools/deploy.py` 驗證 `home/CLAUDE.md` 被安裝且位元組與來源相同，並執行完整測試 `uv run --with pytest pytest`
+- [X] T011 [P] 更新 `README.md`：在開頭的內容說明加入全域 CLAUDE.md，並註明其中引用的 skill 在 003 至 008 完成前尚未提供
+- [X] T012 在暫存家目錄以 `uv run tools/deploy.py` 驗證 `home/CLAUDE.md` 被安裝且位元組與來源相同，並執行完整測試 `uv run --with pytest pytest`
 - [ ] T013 推送後確認 CI 在 `ubuntu-latest` 與 `windows-latest` 都通過；Windows 以 CI 結果為準
 - [ ] T014 由維護者依 `specs/002-global-claude-md/quickstart.md` 的 10 個情境人工驗收；這一項需要維護者在真實的 Claude Code session 進行，無法自動完成
 
