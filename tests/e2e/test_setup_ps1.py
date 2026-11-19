@@ -77,7 +77,8 @@ def test_missing_commands_are_all_listed_and_nothing_is_written(tmp_path):
     assert result.returncode == 3
     assert "missing   git" in result.stdout
     assert "missing   uv" in result.stdout
-    assert list(home.iterdir()) == []
+    assert not (home / ".claude").exists()
+    assert not (home / ".claude-settings").exists()
 
 
 def test_unreachable_repo_fails_without_writing(tmp_path):

@@ -28,6 +28,8 @@ def make_source_repo(root: Path) -> Path:
     """A git repository holding the real tools/ and a small home/."""
     repo = root / "source"
     shutil.copytree(REPO_ROOT / "tools", repo / "tools", ignore=shutil.ignore_patterns("__pycache__"))
+    # Same line-ending rules as the real repository, so a Windows clone keeps LF.
+    shutil.copy(REPO_ROOT / ".gitattributes", repo / ".gitattributes")
     for rel, content in HOME_FILES.items():
         path = repo / "home" / rel
         path.parent.mkdir(parents=True, exist_ok=True)

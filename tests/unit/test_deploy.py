@@ -119,8 +119,8 @@ def test_interrupted_run_converges(env):
         if entry["path"] in ("CLAUDE.md", "skills/sdd-init/SKILL.md"):
             entry["previous"] = entry["sha256"]
             entry["sha256"] = env.deploy.sha256_bytes((env.source / entry["path"]).read_bytes())
-    (env.state / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
-    (env.target / "CLAUDE.md").write_text("# v2\n", encoding="utf-8")
+    (env.state / "manifest.json").write_bytes(json.dumps(data).encode("utf-8"))
+    (env.target / "CLAUDE.md").write_bytes(b"# v2\n")
 
     code, out = env.run()
 
