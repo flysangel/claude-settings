@@ -71,12 +71,12 @@ description: "Task list for 002 全域 CLAUDE.md"
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T008 [US2] 在 `tests/unit/test_claude_md.py` 加入：文件中出現的所有 `sdd-<名稱>` 都屬於 `sdd-init`、`sdd-update`、`sdd-grill`、`sdd-export`、`sdd-rebuild`、`sdd-drive`，六個名稱都至少出現一次，且不出現 `sdd-derive`（FR-006、FR-007，contracts 約定 3、4）
-- [ ] T009 [US2] 在 `tests/unit/test_claude_md.py` 加入：文件引用的每個 skill 在 `home/skills/<名稱>/SKILL.md` 存在；6 個資料夾尚未到齊時以 skip 跳過並在原因中列出缺少的 skill（SC-002，research.md R3）
+- [X] T008 [US2] 在 `tests/unit/test_claude_md.py` 加入：文件中出現的所有 `sdd-<名稱>` 都屬於 `sdd-init`、`sdd-update`、`sdd-grill`、`sdd-export`、`sdd-rebuild`、`sdd-drive`，六個名稱都至少出現一次，且不出現 `sdd-derive`（FR-006、FR-007，contracts 約定 3、4）
+- [X] T009 [US2] 在 `tests/unit/test_claude_md.py` 加入：文件引用的每個 skill 在 `home/skills/<名稱>/SKILL.md` 存在；6 個資料夾尚未到齊時以 skip 跳過並在原因中列出缺少的 skill（SC-002，research.md R3）
 
 ### Implementation for User Story 2
 
-- [ ] T010 [US2] 在 `home/CLAUDE.md` 撰寫「規格驅動開發」段：前言說明新功能走 Spec Kit、不改變行為的小改動除外；依 research.md R2 的表格寫 5 條規則與預期（`/sdd-init`、`sdd-grill`、`/sdd-export` 與 `/sdd-rebuild`、`/sdd-drive`、`/sdd-update`）（FR-005、FR-006、FR-008）
+- [X] T010 [US2] 在 `home/CLAUDE.md` 撰寫「規格驅動開發」段：前言說明新功能走 Spec Kit、不改變行為的小改動除外；依 research.md R2 的表格寫 5 條規則與預期（`/sdd-init`、`sdd-grill`、`/sdd-export` 與 `/sdd-rebuild`、`/sdd-drive`、`/sdd-update`）（FR-005、FR-006、FR-008）
 
 **Checkpoint**: 三段都完成
 

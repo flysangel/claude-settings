@@ -98,3 +98,38 @@ def test_no_personal_information():
     assert "/home/" not in text
     assert "/Users/" not in text
     assert not re.search(r"\b[A-Za-z]:\\", text)
+
+
+# --------------------------------------------- US2: 規格驅動開發引用的 skill
+
+SDD_SKILLS = {"sdd-init", "sdd-update", "sdd-grill", "sdd-export", "sdd-rebuild", "sdd-drive"}
+
+
+def referenced_sdd_skills() -> set[str]:
+    return set(re.findall(r"sdd-[a-z0-9]+(?:-[a-z0-9]+)*", read_text()))
+
+
+def test_referenced_sdd_skills_are_exactly_the_six_provided():
+    referenced = referenced_sdd_skills()
+
+    assert "sdd-derive" not in referenced
+    assert referenced - SDD_SKILLS == set()
+    assert SDD_SKILLS - referenced == set()
+
+
+def test_sdd_section_has_a_preamble_and_five_rules():
+    lines = dict(parse_sections(read_text()))["規格驅動開發"]
+    first = next(l for l in lines if l.strip())
+
+    assert not first.startswith("- ")
+    assert len(parse_rules(lines)) == 5
+
+
+def test_referenced_skills_exist_in_home_skills():
+    referenced = sorted(referenced_sdd_skills())
+    missing = [name for name in sorted(SDD_SKILLS) if not (SKILLS_DIR / name).is_dir()]
+    if missing:
+        pytest.skip("home/skills 尚未提供：" + "、".join(missing))
+
+    for name in referenced:
+        assert (SKILLS_DIR / name / "SKILL.md").is_file(), name
