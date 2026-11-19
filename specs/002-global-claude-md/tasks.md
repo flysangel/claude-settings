@@ -24,7 +24,7 @@ description: "Task list for 002 全域 CLAUDE.md"
 
 **Purpose**: 確認 001 提供的基礎可用
 
-- [ ] T001 確認 `home/`、`tests/unit/` 與 `.github/workflows/ci.yml` 已存在，且 `uv run --with pytest pytest` 在目前的分支全部通過
+- [X] T001 確認 `home/`、`tests/unit/` 與 `.github/workflows/ci.yml` 已存在，且 `uv run --with pytest pytest` 在目前的分支全部通過
 
 ---
 
@@ -34,8 +34,8 @@ description: "Task list for 002 全域 CLAUDE.md"
 
 **⚠️ CRITICAL**: 這個階段完成前不能開始任何 user story
 
-- [ ] T002 建立 `home/CLAUDE.md` 骨架：一個一級標題與依序的三個二級標題「溝通」「Git」「規格驅動開發」，UTF-8、LF、結尾有換行（data-model.md「文件」）
-- [ ] T003 [P] 建立 `tests/unit/test_claude_md.py`：讀取 `home/CLAUDE.md` 的輔助函式（以位元組讀取後解碼）、把文件切成段落與規則的解析函式，以及文件層級的測試：恰好三個二級標題且順序正確、不含 CR、結尾有換行（contracts/claude-md-structure.md 約定 1、6）
+- [X] T002 建立 `home/CLAUDE.md` 骨架：一個一級標題與依序的三個二級標題「溝通」「Git」「規格驅動開發」，UTF-8、LF、結尾有換行（data-model.md「文件」）
+- [X] T003 [P] 建立 `tests/unit/test_claude_md.py`：讀取 `home/CLAUDE.md` 的輔助函式（以位元組讀取後解碼）、把文件切成段落與規則的解析函式，以及文件層級的測試：恰好三個二級標題且順序正確、不含 CR、結尾有換行（contracts/claude-md-structure.md 約定 1、6）
 
 **Checkpoint**: 骨架與解析就緒
 

@@ -1,0 +1,72 @@
+"""Structure tests for home/CLAUDE.md.
+
+The contract is specs/002-global-claude-md/contracts/claude-md-structure.md.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+CLAUDE_MD = REPO_ROOT / "home" / "CLAUDE.md"
+SKILLS_DIR = REPO_ROOT / "home" / "skills"
+
+SECTIONS = ["溝通", "Git", "規格驅動開發"]
+EXPECTATION_PREFIX = "  預期："
+
+
+def read_bytes() -> bytes:
+    return CLAUDE_MD.read_bytes()
+
+
+def read_text() -> str:
+    """Decode from bytes so that no newline translation hides a CR."""
+    return read_bytes().decode("utf-8")
+
+
+def parse_sections(text: str) -> list[tuple[str, list[str]]]:
+    """Split the document into (second-level heading, body lines), in order."""
+    sections: list[tuple[str, list[str]]] = []
+    for line in text.split("\n"):
+        if line.startswith("## "):
+            sections.append((line[3:].strip(), []))
+        elif sections:
+            sections[-1][1].append(line)
+    return sections
+
+
+def parse_rules(lines: list[str]) -> list[tuple[str, str | None]]:
+    """Return (requirement, following non-empty line) for every top-level list item."""
+    rules: list[tuple[str, str | None]] = []
+    for index, line in enumerate(lines):
+        if line.startswith("- "):
+            following = next((l for l in lines[index + 1 :] if l.strip()), None)
+            rules.append((line[2:], following))
+    return rules
+
+
+def section_rules(name: str) -> list[tuple[str, str | None]]:
+    return parse_rules(dict(parse_sections(read_text()))[name])
+
+
+# ------------------------------------------------------------ document level
+
+
+def test_document_is_utf8_with_one_top_level_heading():
+    lines = read_text().split("\n")
+
+    assert [l for l in lines if l.startswith("# ")] == [lines[0]]
+
+
+def test_exactly_three_sections_in_order():
+    assert [name for name, _ in parse_sections(read_text())] == SECTIONS
+
+
+def test_lf_line_endings_and_trailing_newline():
+    data = read_bytes()
+
+    assert b"\r" not in data
+    assert data.endswith(b"\n")
