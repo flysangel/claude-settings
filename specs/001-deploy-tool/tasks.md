@@ -146,7 +146,7 @@ description: "Task list for 001 部署工具"
 - [X] T036 [P] 在 `tests/unit/test_deploy.py` 加入輸出一致性測試：相同輸入下，輸出的動作行與摘要行不含反斜線與平台相關字串（FR-012、SC-002）
 - [X] T037 [P] 撰寫 `README.md`（繁體中文）：兩個平台的一行指令、`--replace` 與 `remove` 的用法、結束碼、備份位置；repo 位址以佔位標示，待建立 remote 後填入
 - [X] T038 依 `specs/001-deploy-tool/quickstart.md` 的七個手動情境在暫存家目錄逐一驗證並修正差異
-- [ ] T039 推送後確認 `.github/workflows/ci.yml` 在 `ubuntu-latest` 與 `windows-latest` 都通過；本機無法驗證 Windows，這一項以 CI 結果為準
+- [X] T039 推送後確認 `.github/workflows/ci.yml` 在 `ubuntu-latest` 與 `windows-latest` 都通過；本機無法驗證 Windows，這一項以 CI 結果為準
 
 ---
 
