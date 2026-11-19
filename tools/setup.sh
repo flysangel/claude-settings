@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Install or update claude-settings into ~/.claude.
 #
-#   curl -fsSL <RAW>/tools/setup.sh | bash
-#   curl -fsSL <RAW>/tools/setup.sh | bash -s -- --replace
-#   curl -fsSL <RAW>/tools/setup.sh | bash -s -- remove
+#   curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.sh | bash -s -- --replace
+#   curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.sh | bash -s -- remove
 #
 # Exit codes: those of tools/deploy.py, plus 3 when a required command is missing.
 set -eu
 
-# Set this once the public repository exists.
-DEFAULT_REPO_URL=""
+# The public repository this script installs from.
+DEFAULT_REPO_URL="https://github.com/flysangel/claude-settings.git"
 
 REPO_URL="${CLAUDE_SETTINGS_REPO:-$DEFAULT_REPO_URL}"
 CLONE_DIR="$HOME/.claude-settings"

@@ -5,7 +5,7 @@
 
 > **目前狀態**：部署工具（spec 001）已實作，Linux 上的測試通過；Windows 尚未經 CI 驗證。
 > `home/` 的實際內容（`CLAUDE.md` 與各個 skill）由後續的 spec 002 至 008 提供。
-> repo 的公開位址尚未設定，下方指令中的 `<RAW>` 是佔位。
+> repo 的公開位址尚未設定，下方指令中的 `https://raw.githubusercontent.com/flysangel/claude-settings/main` 是佔位。
 
 ## 安裝與更新
 
@@ -14,13 +14,13 @@
 Linux：
 
 ```text
-curl -fsSL <RAW>/tools/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.sh | bash
 ```
 
 Windows PowerShell：
 
 ```text
-irm <RAW>/tools/setup.ps1 | iex
+irm https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.ps1 | iex
 ```
 
 指令會把 repo 取得到 `~/.claude-settings`，再把 `home/` 的內容安裝到 `~/.claude`。
@@ -34,8 +34,8 @@ irm <RAW>/tools/setup.ps1 | iex
 確定要取代時加上 `--replace`，原檔會先備份：
 
 ```text
-curl -fsSL <RAW>/tools/setup.sh | bash -s -- --replace
-& ([scriptblock]::Create((irm <RAW>/tools/setup.ps1))) --replace
+curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.sh | bash -s -- --replace
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.ps1))) --replace
 ```
 
 | 被取代的內容 | 存放位置 | 移除時 |
@@ -46,8 +46,8 @@ curl -fsSL <RAW>/tools/setup.sh | bash -s -- --replace
 ## 移除
 
 ```text
-curl -fsSL <RAW>/tools/setup.sh | bash -s -- remove
-& ([scriptblock]::Create((irm <RAW>/tools/setup.ps1))) remove
+curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.sh | bash -s -- remove
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.ps1))) remove
 ```
 
 只刪除這個工具安裝的檔案，並還原備份的原檔；`~/.claude` 的其他內容不受影響。

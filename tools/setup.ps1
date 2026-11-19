@@ -1,13 +1,13 @@
 # Install or update claude-settings into ~/.claude.
 #
-#   irm <RAW>/tools/setup.ps1 | iex
-#   & ([scriptblock]::Create((irm <RAW>/tools/setup.ps1))) --replace
-#   & ([scriptblock]::Create((irm <RAW>/tools/setup.ps1))) remove
+#   irm https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.ps1 | iex
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.ps1))) --replace
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.ps1))) remove
 #
 # Exit codes: those of tools/deploy.py, plus 3 when a required command is missing.
 
-# Set this once the public repository exists.
-$DefaultRepoUrl = ''
+# The public repository this script installs from.
+$DefaultRepoUrl = 'https://github.com/flysangel/claude-settings.git'
 
 function Invoke-ClaudeSettingsSetup {
     param([string[]]$DeployArgs)
