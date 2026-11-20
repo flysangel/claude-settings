@@ -1375,3 +1375,120 @@ def test_clear_touches_nothing_outside_its_folder(sdd_grill, grill_project):
     run_grill(sdd_grill, root, "clear")
 
     assert snapshot(root) == before
+
+
+# ====================================================== an existing project
+
+EXISTING = {"001-deploy": "deploy\n", "002-claude-md": "claude md\n", "003-sdd-init": "sdd init\n"}
+
+
+def existing_project(grill_project, **options):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION, specs=dict(EXISTING), **options)
+    git_commit_all(root, "existing project")
+    return root
+
+
+def test_depends_on_an_existing_spec(sdd_grill, grill_project):
+    root = existing_project(grill_project)
+    (root / "specs/004-draft").mkdir()
+
+    ok = save(sdd_grill, root, minimal_progress(features=[feature("x", ["specs/003-sdd-init"], status="pending")]))
+    no_spec = save(sdd_grill, root, minimal_progress(features=[feature("x", ["specs/004-draft"], status="pending")]))
+    absent = save(sdd_grill, root, minimal_progress(features=[feature("x", ["specs/009-none"], status="pending")]))
+
+    assert ok.code == 0
+    assert no_spec.code == 1 and absent.code == 1
+    assert no_spec.out["error"].startswith("progress is invalid at features[0].depends_on[0]: ")
+
+
+def test_existing_project_baseline_holds_the_existing_specs(sdd_grill, grill_project):
+    root = existing_project(grill_project)
+
+    save(sdd_grill, root, confirmed_progress([feature("x", ["specs/003-sdd-init"])], action="keep"))
+
+    assert read_progress(root)["baseline"] == {
+        "constitution": sha(WRITTEN_CONSTITUTION),
+        "specs": {f"specs/{name}/spec.md": sha(content) for name, content in EXISTING.items()},
+    }
+
+
+def new_batch(sdd_grill, root, dirs=("specs/004-update", "specs/005-grill"), action="keep", constitution=None):
+    return generated(
+        sdd_grill,
+        root,
+        [feature("update", ["specs/003-sdd-init"]), feature("grill", ["update", "specs/001-deploy"])],
+        {"update": dirs[0], "grill": dirs[1]},
+        action=action,
+        constitution=constitution,
+    )
+
+
+def test_new_specs_after_existing_ones_pass(sdd_grill, grill_project):
+    root = existing_project(grill_project)
+    new_batch(sdd_grill, root)
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert result.code == 0, result.out
+    assert result.out["specs"] == [
+        {"feature": "update", "dir": "specs/004-update", "depends_on": ["specs/003-sdd-init"]},
+        {"feature": "grill", "dir": "specs/005-grill", "depends_on": ["specs/004-update", "specs/001-deploy"]},
+    ]
+    assert result.out["unexpected"] == []
+
+
+def test_existing_spec_edited_during_generation(sdd_grill, grill_project):
+    root = existing_project(grill_project)
+    new_batch(sdd_grill, root)
+    write_tree(root, {"specs/002-claude-md/spec.md": "rewritten\n"})
+
+    assert failures(run_grill(sdd_grill, root, "verify")) == ["existing-spec-changed"]
+
+
+def test_new_spec_not_after_the_existing_ones(sdd_grill, grill_project):
+    root = existing_project(grill_project)
+    new_batch(sdd_grill, root, dirs=("specs/003-update", "specs/004-grill"))
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    # 003-update is not after 003-sdd-init, which it also depends on.
+    assert failures(result) == ["order", "dependency-order"]
+    assert "specs/003-update" in result.out["failures"][0]["detail"]
+
+
+def test_amended_constitution_passes(sdd_grill, grill_project):
+    root = existing_project(grill_project)
+    new_batch(sdd_grill, root, action="amend", constitution=WRITTEN_CONSTITUTION + "- Amended.\n")
+
+    assert run_grill(sdd_grill, root, "verify").out["ok"] is True
+
+
+def test_focus_points_at_the_first_spec_of_this_batch(sdd_grill, grill_project):
+    root = existing_project(grill_project)
+    new_batch(sdd_grill, root)
+    write_tree(root, {FEATURE_JSON: feature_json("specs/005-grill")})
+
+    result = run_grill(sdd_grill, root, "focus")
+
+    assert result.out == {"feature_directory": "specs/004-update", "previous": "specs/005-grill", "changed": True}
+
+
+def test_timestamp_numbering_in_an_existing_project(sdd_grill, grill_project):
+    root = grill_project(
+        constitution=WRITTEN_CONSTITUTION,
+        init_options='{"feature_numbering": "timestamp"}',
+        specs={"001-old": "old\n", "20261101-090000-older": "older\n"},
+    )
+    good = ("specs/20261120-100000-update", "specs/20261120-100010-grill")
+    new_batch_dirs = {"update": good[0], "grill": good[1]}
+    features = [feature("update", ["specs/001-old"]), feature("grill", ["update", "specs/20261101-090000-older"])]
+    generated(sdd_grill, root, features, new_batch_dirs, action="keep")
+    assert run_grill(sdd_grill, root, "verify").out["ok"] is True
+
+    other = grill_project(
+        constitution=WRITTEN_CONSTITUTION,
+        init_options='{"feature_numbering": "timestamp"}',
+        specs={"20261201-090000-newer": "newer\n"},
+    )
+    generated(sdd_grill, other, [feature("update")], {"update": good[0]}, action="keep")
+    assert failures(run_grill(sdd_grill, other, "verify")) == ["order"]
