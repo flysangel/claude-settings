@@ -66,6 +66,8 @@ MUST NOT 有 `disable-model-invocation`（FR-001：Claude MAY 主動使用）。
 
 15. 依序：constitution 的原則 → 功能清單與相依關係 → 逐一討論每個功能的使用情境、範圍與邊界情況。順序：三段的先後。
     專案已有 constitution 時，原則這一段只處理新需求與既有原則的衝突或新增；`action` 依維護者的決定設為 `keep` 或 `amend`。
+    需求只涉及原則、拆不出功能時，`features` 可以是空的，跳過逐一討論直接進入摘要；constitution 也維持不變時沒有東西可產生，
+    告知維護者並詢問要新增功能或結束。
 16. 對話時使用的語言依維護者的全域設定；產生的文件依專案既有文件的語言，無法判斷時使用繁體中文，規範詞保留英文（FR-020）。
 
 ### 保存（FR-009）
@@ -110,6 +112,9 @@ MUST NOT 有 `disable-model-invocation`（FR-001：Claude MAY 主動使用）。
 30. 依 `verify` 的輸出列出每份 spec 的位置、相依關係與建議順序，並告訴維護者 `.specify/feature.json` 現在指向哪一份
     （`focus` 輸出的 `feature_directory`）；說明下一步是由維護者輸入 `/sdd-drive`，也可依序以原生的 `/speckit-plan` 處理，
     因為目前的功能已指向第一份；然後停止，MUST NOT 開始 plan、tasks 或實作（字樣：`/sdd-drive`）。
+    只修訂 constitution、沒有任何功能的一批（`focus` 的 `feature_directory` 為 `null`）時，改為回報沒有產生 spec、
+    `.specify/feature.json` 沒有更動、constitution 是建立或修訂；下一步是檢查既有 spec 是否需要依新原則調整，
+    有新需求時再執行 `/sdd-grill`，MUST NOT 建議 `/sdd-drive`（FR-017、SC-007；字樣：`null`）。
 31. MUST NOT push。
 
 內文 MUST NOT 含有中日韓文字、絕對路徑、信箱。

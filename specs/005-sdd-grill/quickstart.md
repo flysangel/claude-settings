@@ -78,12 +78,14 @@ Windows 的 PowerShell 以 `$env:USERPROFILE` 與 `$env:CLAUDE_CONFIG_DIR` 達�
 | 4 | 中斷後在專案 commit 一個檔案，再輸入 `/sdd-grill` | Claude 先說明專案在上次討論後有變更（指出改變的項目），由你決定是否沿用（US3-4；FR-010） |
 | 5 | 走到摘要；在確認前檢查 `git status` 與 constitution；要求修改摘要中的一項 | 摘要有已決定、已延後與原因、留給 plan、功能順序四部分；確認前 constitution 與 `specs/` 沒有任何變化；修改後再次請你確認，仍未寫入（US2-1、2、3；FR-011、FR-012；SC-002） |
 | 6 | 確認摘要（摘要有兩個以上的功能） | Claude 以 Skill 呼叫 `speckit-constitution` 與 `speckit-specify`（不是自己寫檔）；constitution 只有摘要中的原則；每個功能一份 spec，編號依相依順序；延後事項在對應 spec 的 Assumptions；文件語言符合 FR-020；`.specify/feature.json` 指向這一批編號最小的一份（不是最後一份）；結束時列出每份 spec 的位置、相依與建議順序，告訴你 `feature.json` 現在指向哪一份，說明下一步是 `/sdd-drive`（或依序以原生的 `/speckit-plan`），然後停止；`.specify/sdd-grill/` 已不存在（US2-4、5；FR-013 至 FR-018、FR-020；SC-003、SC-005、SC-007） |
-| 7 | 重做到確認摘要，在第二份 spec 產生途中中斷 session；開新 session 再輸入 `/sdd-grill` | 進度保留；`feature.json` 沒有被改成第一份（仍是 `speckit-specify` 最後寫入的、存在的資料夾）；Claude 回報已產生與未產生的文件，詢問是否從未產生的繼續，不重新討論、不補寫、不刪除已產生的文件（Edge Cases；FR-018） |
+| 7 | 重做到確認摘要，在第二份 spec 產生途中中斷 session；開新 session 再輸入 `/sdd-grill` | 進度保留；`feature.json` 沒有被改成第一份（仍是 `speckit-specify` 最後寫入的、存在的資料夾）；Claude 回報已產生與未產生的文件，以一題詢問繼續（建議）、重新開始或停止，不重新討論、不補寫、不刪除已產生的文件；選擇繼續時先把已寫入的 constitution 與摘要逐條比對，再產生未產生的 spec（Edge Cases；FR-010、FR-014、FR-018） |
 | 8 | 在已有 constitution 與 3 份 spec 的專案，以新需求輸入 `/sdd-grill`；途中提出與既有原則衝突的需求 | 不重問既有文件已記錄的決定；指出衝突並請你選擇修訂原則或調整需求；產生後既有 spec 未被修改，新 spec 編號接在 003 之後；你沒有同意修訂時 constitution 不變；`feature.json` 指向這一批的第一份（新編號最小的一份），不是 001（US4-1、2、3；FR-016） |
 | 9 | 在沒有導入 Spec Kit 的目錄輸入 `/sdd-grill` 加需求 | Claude 請你先執行 `/sdd-init`，沒有開始追問，目錄沒有任何新檔案（Edge Cases；FR-019） |
 | 10 | 不輸入指令，只說「我想開一個新專案，但還不確定要做成什麼樣子」；另外問一句「這個專案該用哪個資料庫？」 | 前者 Claude 主動使用 sdd-grill；後者不觸發 sdd-grill（FR-001；R5） |
 | 11 | 以 `--disallowedTools AskUserQuestion` 啟動 session 後輸入 `/sdd-grill` 加需求 | 改用文字提問，仍然一次一題並附建議（Edge Cases；FR-003） |
 | 12 | 在第 1 步的對話中提供一組假的 API 金鑰 | 進度與產生的文件中都沒有該值，Claude 說明它沒有被記錄（Edge Cases；FR-009） |
+| 13 | 在已有 spec 的專案重做到第 7 步的中斷；中斷後手動修改一份既有的 `spec.md`，再輸入 `/sdd-grill` | Claude 回報 `existing-spec-changed`，不繼續產生，詢問停止（還原後再執行）或重新開始。選擇停止：進度保留，以 git 還原該檔後再輸入 `/sdd-grill`，可以繼續產生。另做一次並選擇重新開始：`.specify/sdd-grill/` 被清除，已產生的 constitution 與 spec 都還在，接著開始新的討論（US3-3、4；FR-010、FR-018） |
+| 14 | 在已有 constitution 與 spec 的專案，輸入只涉及原則的需求，例如「所有文件改用英文撰寫」 | 沒有功能清單的討論，直接進入摘要；確認後只修訂 constitution，沒有產生 spec；`.specify/feature.json` 不變；結束時說明沒有產生 spec、`feature.json` 未更動，下一步是檢查既有 spec 是否需要依新原則調整，不建議 `/sdd-drive`（FR-017；SC-007） |
 
 情境 1 至 6 在 Linux 與 Windows 各做一次（FR-021）；其餘在任一平台做一次即可，因為平台差異只在腳本，已由兩個平台的 CI 涵蓋。
 

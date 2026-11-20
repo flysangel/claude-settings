@@ -329,6 +329,21 @@ def test_finishing():
     has_any(finish, "do not start", "never start")
 
 
+def test_finishing_without_any_new_spec():
+    finish = section(FINISH)
+    without = finish[finish.index("when `feature_directory` is `null`") :]
+
+    has_all(without, "no spec was generated", "left as it was", "created or amended", "/sdd-grill")
+    has_any(without, "do not suggest `/sdd-drive`", "not suggest `/sdd-drive`")
+    assert finish.index("when `feature_directory` is a folder") < finish.index("when `feature_directory` is `null`")
+
+
+def test_order_allows_a_batch_without_features():
+    order = section(ORDER)
+
+    has_all(order, "`features` stays empty", "skip stage 3", "nothing to generate")
+
+
 def test_summary_comes_before_generating_and_check_before_questions():
     content = body()
 

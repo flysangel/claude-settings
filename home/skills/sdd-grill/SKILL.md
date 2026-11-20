@@ -133,8 +133,9 @@ resuming is that the maintainer never has to answer a decided question twice.
    - **Start over**: run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" clear`. It removes only the saved
      progress. The constitution and the specs that were already generated, including any folder in `unexpected`,
      stay as they are: do not delete or undo them, and tell the maintainer they are theirs to keep, edit or remove.
-     Then continue as for a new discussion (step 5 of "Start"). Those documents now count as existing ones: their
-     decisions are already decided, and new specs are numbered after them.
+     Then continue as for a new discussion (step 5 of "Start"), using the requirement the maintainer gave this time,
+     if any. Those documents now count as existing ones: their decisions are already decided, and new specs are
+     numbered after them.
    - **Stop**: keep the progress and stop. Running `/sdd-grill` again comes back to this question.
 
    If a folder in `unexpected` looks like the interrupted spec of the next feature and the maintainer chose to
@@ -198,8 +199,12 @@ discussion knows where to continue.
    spec. Propose the split, then settle it with the maintainer question by question. Order the list so that every
    feature comes after the features it depends on; that order becomes the order of the spec numbers and the
    suggested order of work. If the maintainer postpones a whole feature, it is not part of this batch: remove it from
-   `features` and record it in `deferred` (with `feature` set to `null`). A feature may also depend on an existing spec, given as its folder (for example
-   `specs/003-sdd-init`, taken from `check`'s `specs`).
+   `features` and record it in `deferred` (with `feature` set to `null`). A feature may also depend on an existing
+   spec, given as its folder (for example `specs/003-sdd-init`, taken from `check`'s `specs`).
+   If the requirement only concerns the constitution and does not split into any feature, `features` stays empty:
+   skip stage 3 and go straight to the summary. That batch only creates or amends the constitution. If the
+   constitution is also kept as it is, there is nothing to generate: tell the maintainer so, ask whether they want to
+   add a feature or stop, and if they stop, run `clear` and stop.
 3. **Each feature in turn** (`"feature"`). Take one feature at a time, in list order, and settle its usage
    scenarios, its scope (what is in and what is out), and its edge cases. Set `current_feature` to the feature's id
    and its `status` to `"discussing"`; when it is settled, set `status` to `"decided"` and move to the next feature.
@@ -397,13 +402,24 @@ succeeded:
 3. `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" clear` removes the progress, which is no longer needed. If it
    fails, the documents are still complete; tell the maintainer that the progress could not be removed and why.
 
-Then report to the maintainer, using `verify`'s `specs` list:
+Then report to the maintainer. What you report depends on whether this batch produced any spec, which `focus`
+tells you: its `feature_directory` is the first new spec, or `null` when `features` was empty.
+
+When `feature_directory` is a folder, report, using `verify`'s `specs` list:
 
 - each spec's folder, what it depends on, and the suggested order of work (the order of the list);
 - whether the constitution was created, amended, or kept;
 - that `.specify/feature.json` now points at the `feature_directory` from `focus`;
 - the next step: the maintainer types `/sdd-drive` to have the specs planned and implemented, or uses Spec Kit's own
   `/speckit-plan` one spec at a time in the suggested order, starting with the one `.specify/feature.json` points at.
+
+When `feature_directory` is `null`, the batch only created or amended the constitution. Report:
+
+- whether the constitution was created or amended, and what changed in it;
+- that no spec was generated, and that `.specify/feature.json` was left as it was;
+- the next step: the maintainer checks whether the existing specs (from `check`'s `specs`) still follow the new
+  principles and adjusts them if needed, and runs `/sdd-grill` again when there is a new requirement to turn into
+  specs. Do not suggest `/sdd-drive` or `/speckit-plan`: there is no new spec for them to work on.
 
 Then stop. Do not start a plan, tasks, or any implementation; that is the maintainer's call. Commit the generated
 documents only if the maintainer's own instructions say to, and do not push.

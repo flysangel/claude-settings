@@ -34,6 +34,8 @@
    多出的規則移除或先問你。
 5. 執行 `verify` 檢查結果、`focus` 指向第一份新 spec、`clear` 清除進度，列出每份 spec 的位置、相依與建議順序。
    下一步是由你輸入 `/sdd-drive`，也可以依序用原生的 `/speckit-plan`。sdd-grill 在這裡停止。
+   需求只涉及原則、沒有任何功能時，只建立或修訂 constitution，不產生 spec，`.specify/feature.json` 不變；
+   下一步是檢查既有 spec 是否需要依新原則調整。
 
 ## 進度
 
