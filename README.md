@@ -4,9 +4,9 @@
 進行規格驅動開發的 skill。支援 Linux 與 Windows。
 
 > **目前狀態**：部署工具（spec 001）已合併進 `main`，Linux 與 Windows 的 CI 都通過，下方的指令已可使用。
-> `home/` 目前有全域 `CLAUDE.md`（spec 002）、`sdd-init` skill（spec 003）與 `sdd-update` skill（spec 004）。
-> `CLAUDE.md` 引用的其餘 4 個 skill（`sdd-grill`、`sdd-export`、`sdd-rebuild`、`sdd-drive`）
-> 由 spec 005 至 008 提供，完成前尚未安裝；此時 Claude 會回報 skill 不存在。
+> `home/` 目前有全域 `CLAUDE.md`（spec 002）、`sdd-init` skill（spec 003）、`sdd-update` skill（spec 004）與 `sdd-grill` skill（spec 005）。
+> `CLAUDE.md` 引用的其餘 3 個 skill（`sdd-export`、`sdd-rebuild`、`sdd-drive`）
+> 由 spec 006 至 008 提供，完成前尚未安裝；此時 Claude 會回報 skill 不存在。
 
 ## 安裝與更新
 
@@ -79,6 +79,16 @@ curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tool
 
 前置需求：專案已由 `/sdd-init` 導入；`uv`、`git`、`bash` 都在 `PATH` 上（Windows 的 `bash` 是 Git Bash）；
 可以連線到 PyPI。細節見 [home/skills/sdd-update/README.md](home/skills/sdd-update/README.md)。
+
+## 從需求追問出 constitution 與 spec
+
+| 指令 | 作用 |
+|---|---|
+| `/sdd-grill <需求描述>` | 一次一題追問到 constitution 的原則與每個功能都有結論；你確認摘要後由 Spec Kit 產生 constitution 與 spec，然後停止 |
+
+確認摘要之前不寫入 constitution 與 `specs/`；進度存在不入庫的 `.specify/sdd-grill/`，中斷後再執行會接續。
+產生完畢後 `.specify/feature.json` 指向這一批編號最小的 spec，下一步是 `/sdd-drive`。
+前置需求：專案已導入 Spec Kit（`/sdd-init`）、`uv`。細節見 [home/skills/sdd-grill/README.md](home/skills/sdd-grill/README.md)。
 
 ## 部署工具的結束碼
 
