@@ -266,10 +266,13 @@ resumed from the right place.
    skill with the Skill tool. As its argument, give the confirmed principles (title, rules, rationale) and governance
    rules in full, in the documents' language, and tell it to use only these and not to infer other principles from
    the repository. For `"amend"`, give only the additions and changes and say that everything else stays as it is.
-   When it finishes, read `.specify/memory/constitution.md` and compare it rule by rule with the summary. Remove any
-   rule the summary does not contain. If you think such a rule is worth keeping, ask the maintainer (one question per
-   rule) and keep it only if they agree. Then save again, unchanged, so the saved progress reflects the new
-   constitution. When the action is `keep`, do not invoke `speckit-constitution` at all.
+   When it finishes, read `.specify/memory/constitution.md` and compare it rule by rule with the summary. For
+   `"create"`, every principle and rule must come from the summary; for `"amend"`, the rules that were already there
+   stay as they were, and every new or changed rule must come from the summary. Remove any rule that has no such
+   basis. If you think such a rule is worth keeping, ask the maintainer (one question per rule) and keep it only if
+   they agree. Spec Kit's own bookkeeping (the version line, dates, the sync report comment) is not a rule; leave it.
+   Then save again, unchanged, so the saved progress reflects the new constitution. When the action is `keep`, do
+   not invoke `speckit-constitution` at all: the existing constitution is not changed.
 3. **The specs**, one at a time, in the order of `features`. For each feature, invoke the `speckit-specify` skill with
    the Skill tool. As its argument, describe that feature only, from the summary: its title, usage scenarios, scope
    and edge cases, what it depends on (by name, and by spec folder for features already generated or existing specs),
@@ -290,6 +293,9 @@ What you never do while generating:
   not produce its document, that is a failure (see below), not a gap for you to fill.
 - Never choose spec numbers or folder names. `speckit-specify` numbers each spec after the existing ones; calling it
   one feature at a time in dependency order is what makes the numbers follow the order of work.
+- Never change what existed before. Existing specs are never overwritten or edited: new requirements get new
+  specs, which `speckit-specify` numbers after the existing ones. The constitution only changes when the maintainer
+  agreed to create or amend it.
 - Never edit `.specify/feature.json` yourself. `speckit-specify` points it at each spec it creates, and the script's
   `focus` command points it at the first spec of this batch at the end.
 
