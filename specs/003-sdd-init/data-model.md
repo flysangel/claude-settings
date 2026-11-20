@@ -16,7 +16,7 @@
 | `entries` | array | 每個由 sdd-init 建立的檔案一筆，依 `path` 排序 |
 | `entries[].path` | string | 檔案的相對路徑 |
 | `entries[].sha256` | string | 建立時的內容雜湊（見「內容識別資訊」） |
-| `entries[].origin` | `"speckit"` \| `"sdd-init"` | 內容來自官方工具的產出，或是 sdd-init 自己的檔案 |
+| `entries[].origin` | `"speckit"` \| `"sdd-init"` \| `"sdd-update"` | 內容來自官方工具的產出、sdd-init 自己的檔案，或是 004 sdd-update 建立的比對副本 |
 | `entries[].staged_executable` | boolean | sdd-init 是否曾以 `git add --chmod=+x` 成功把它加入暫存區；false 的 `.sh` 在之後的導入可能被補登（見「導入的動作」） |
 | `created_dirs` | array of string | 由 sdd-init 建立的目錄，移除時若為空就刪除 |
 
@@ -27,6 +27,9 @@
 - `entries[].path` MUST 位於 `.specify/` 或 `.claude/skills/speckit-*/` 之下；不符合的紀錄視為無效。
 - 被略過的既有檔案 MUST NOT 出現在 `entries`。
 - `status` 為 `applying` 時，`entries` 是本次要達成的目標；再次執行時據此補齊。
+- `origin` 為 `sdd-update` 的項目（004 的比對副本），`path` MUST 位於 `.specify/sdd-update/` 之下且以 `.new` 結尾，
+  `staged_executable` MUST 為 false；其他 `origin` 的項目 MUST NOT 位於 `.specify/sdd-update/` 之下。不符合的紀錄視為無效
+  （與 `schema` 不認得相同）。見 [004 的 data-model.md](../004-sdd-update/data-model.md) 的「對 003 格式的變更」。
 - 檔案無法解析、`schema` 不是認得的值，或違反上面的路徑規則：導入時停止（結束碼 1），移除時不刪除任何檔案。
 - 以 UTF-8、LF 換行、鍵值順序固定的格式寫入，使兩個平台產生的檔案位元組相同。
 
@@ -92,6 +95,9 @@ status=applying 或缺少檔案 ──以紀錄內的版本重新規劃──▶
 status=complete 且檔案齊全，沒有待補登的 .sh ──▶ 不做任何事
 status=complete 且檔案齊全，有待補登的 .sh ──▶ 只補登執行權限（不連線、不執行官方工具、不複製檔案）──▶ status=complete
 ```
+
+「檔案齊全」指紀錄內 `origin` 不是 `sdd-update` 的檔案都存在：比對副本可以隨時被維護者刪除，
+不存在時不算缺少，也不會為它們重新執行官方工具。
 
 「待補登的 `.sh`」就是上面「補登執行權限」所列條件的檔案；專案不是 git repository 時沒有這種檔案。
 只補登時沒有規劃階段的動作：直接由紀錄判定，寫入的只有 index 與紀錄內的 `staged_executable`。
