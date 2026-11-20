@@ -2213,3 +2213,525 @@ def test_lessons_refuse_code_blocks(sdd_export, tmp_path):
     result = validate(sdd_export, root, draft(lessons=[lesson("x", text="原因：\n```\nrm -rf x\n```")]))
 
     assert [e["path"] for e in errors_for(result, "code-block")] == ["lessons[0].text"]
+
+
+# ================================================================ lineage
+
+
+def lineage_project(tmp_path: Path, record: dict | None = None, name: str = "my-tool", **kwargs) -> Path:
+    files = dict(kwargs.pop("files", {}) or {})
+    files[".sdd-rebuild/lineage.json"] = json.dumps(record if record is not None else lineage_record(), ensure_ascii=False, indent=2) + "\n"
+    specs = kwargs.pop("specs", {"001-deploy": SPEC_TEXT})
+    return project(tmp_path, name, files=files, specs=specs, **kwargs)
+
+
+def gen2_draft(**overrides) -> dict:
+    """A draft that follows lineage_record(): deploy and its requirement inherited, the lesson kept, the discard kept."""
+    deploy = feature("deploy", source="spec", spec="specs/001-deploy/spec.md",
+                     requirements=[requirement("deploy-one", source="spec", evidence=["specs/001-deploy/spec.md"])])
+    data = draft(
+        generation=2,
+        principles=[],
+        features=[deploy],
+        lessons=[lesson("atomic-write", kind="pitfall", evidence=[".sdd-rebuild/lineage.json"])],
+        discarded=[discarded("deploy-symlink", discarded_in=2)],
+    )
+    data.update(overrides)
+    return data
+
+
+def test_lineage_none(sdd_export, tmp_path):
+    out = run_export(sdd_export, project(tmp_path), "check").out
+
+    assert (out["lineage"], out["generation"], out["lineage_content"]) == ("none", 1, None)
+
+
+def test_lineage_present(sdd_export, tmp_path):
+    root = lineage_project(tmp_path, specs={"001-deploy": SPEC_TEXT, "002-new": SPEC_TEXT})
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 0, result.out
+    out = result.out
+    assert (out["lineage"], out["generation"]) == ("present", 2)
+    assert out["lineage_content"] == lineage_record()
+    assert out["specs"] == [
+        {"dir": "specs/001-deploy", "spec": "specs/001-deploy/spec.md", "in_lineage": True},
+        {"dir": "specs/002-new", "spec": "specs/002-new/spec.md", "in_lineage": False},
+    ]
+    assert out["lineage_missing_specs"] == []
+
+
+def test_lineage_missing_specs(sdd_export, tmp_path):
+    root = lineage_project(tmp_path, specs={})
+    out = run_export(sdd_export, root, "check").out
+
+    assert out["lineage_missing_specs"] == [{"id": "deploy", "spec_dir": "specs/001-deploy"}]
+
+
+def test_existing_generation_differs(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    write_tree(root, {"specs/001-deploy/spec.md": SPEC_TEXT,
+                      ".sdd-rebuild/lineage.json": json.dumps(lineage_record(), ensure_ascii=False)})
+    out = run_export(sdd_export, root, "check").out
+
+    assert (out["generation"], out["existing_generation"]) == (2, 1)
+
+
+@pytest.mark.parametrize(
+    "content, reason",
+    [
+        (b"\xff\xfe", "lineage-unreadable"),
+        (b"[]", "lineage-unreadable"),
+        (b"{broken", "lineage-unreadable"),
+        (json.dumps({**lineage_record(), "schema": 2}).encode(), "lineage-newer"),
+        (json.dumps({**lineage_record(), "tool": "sdd-export"}).encode(), "lineage-conflict"),
+        (json.dumps({k: v for k, v in lineage_record().items() if k != "tool"}).encode(), "lineage-conflict"),
+    ],
+)
+def test_lineage_cannot_be_used(sdd_export, tmp_path, content, reason):
+    root = project(tmp_path, files={".sdd-rebuild/lineage.json": content})
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 3
+    assert result.out["reason"] == reason
+    assert result.out["generation"] is None
+    assert result.out["lineage_content"] is None
+    assert result.out["error"] in result.err
+
+
+def broken_lineage(change) -> dict:
+    record = lineage_record()
+    change(record)
+    return record
+
+
+INVALID_LINEAGES = [
+    (lambda r: r.update(generation=3), "generation"),
+    (lambda r: r.update(generation=1, source={**r["source"], "generation": 0}), "generation"),
+    (lambda r: r["features"][0].update(origin=3), "features[0].origin"),
+    (lambda r: r["features"][0].update(revised=[1]), "features[0].revised"),
+    (lambda r: r["lessons"][0].update(id="deploy"), "lessons[0].id"),
+    (lambda r: r["features"].insert(0, {**r["features"][0], "id": "first", "depends_on": ["deploy"],
+                                          "spec_dir": "specs/000-first",
+                                          "requirements": [{**r["features"][0]["requirements"][0], "id": "first-one"}]}),
+     "features[0].depends_on[0]"),
+    (lambda r: r["features"][0].update(spec_dir="specs/001-deploy/sub"), "features[0].spec_dir"),
+    (lambda r: r["features"][0].update(spec_dir="other/001-deploy"), "features[0].spec_dir"),
+    (lambda r: r["features"][0]["requirements"][0].update(status="confirmed"), "features[0].requirements[0].status"),
+    (lambda r: r["lessons"][0].update(evidence=["README.md"]), "lessons[0].evidence"),
+    (lambda r: r.update(rebuilt_at="yesterday"), "rebuilt_at"),
+    (lambda r: r["discarded"][0].update(discarded_in=3), "discarded[0].discarded_in"),
+    (lambda r: r.pop("source"), "source"),
+]
+
+
+@pytest.mark.parametrize("change, path", INVALID_LINEAGES)
+def test_lineage_invalid(sdd_export, tmp_path, change, path):
+    root = lineage_project(tmp_path, broken_lineage(change))
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 3
+    assert result.out["reason"] == "lineage-invalid"
+    assert result.out["lineage"] == "invalid"
+    assert result.out["generation"] is None
+    assert path in [error["path"] for error in result.out["errors"]], result.out["errors"]
+
+
+def test_lineage_accepts_rebuild_as_a_source(sdd_export, tmp_path):
+    def change(record):
+        record["features"][0]["source"] = "rebuild"
+        record["features"][0]["spec"] = None
+        record["features"][0]["requirements"][0]["source"] = "rebuild"
+
+    root = lineage_project(tmp_path, broken_lineage(change))
+
+    assert run_export(sdd_export, root, "check").out["lineage"] == "present"
+
+
+def test_lineage_with_crlf_is_read(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    path = root / ".sdd-rebuild" / "lineage.json"
+    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    out = run_export(sdd_export, root, "check").out
+    assert (out["lineage"], out["generation"]) == ("present", 2)
+
+
+def test_only_lineage_json_is_opened_in_sdd_rebuild(sdd_export, tmp_path, monkeypatch):
+    root = lineage_project(tmp_path, files={".sdd-rebuild/notes.md": "x\n", ".sdd-rebuild/state.json": "{}\n"})
+    import builtins
+    import io as io_module
+
+    opened: list[str] = []
+    real_open = builtins.open
+
+    def spy(file, *args, **kwargs):
+        opened.append(str(file).replace("\\", "/"))
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", spy)
+    monkeypatch.setattr(io_module, "open", spy)
+    run_export(sdd_export, root, "check")
+    validate(sdd_export, root, gen2_draft())
+    monkeypatch.undo()
+
+    in_rebuild = sorted({path.split(".sdd-rebuild/")[1] for path in opened if ".sdd-rebuild/" in path})
+    assert in_rebuild == ["lineage.json"]
+
+
+def test_check_with_lineage_reads_only(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    before = tree_snapshot(root)
+
+    run_export(sdd_export, root, "check")
+
+    assert tree_snapshot(root) == before
+
+
+# ------------------------------------------------------- generation rules
+
+
+def rule_errors(sdd_export, root: Path, data: dict, check: str) -> list[dict]:
+    result = validate(sdd_export, root, data)
+    return [error for error in result.out["errors"] if error["check"] == check]
+
+
+def test_gen2_draft_follows_the_lineage(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    result = validate(sdd_export, root, gen2_draft())
+
+    assert result.code == 0, result.out["errors"]
+    assert result.out["counts"]["inherited"] == 3
+    assert result.out["counts"]["new"] == 0
+
+
+def test_rule_1_generation(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+
+    assert rule_errors(sdd_export, root, gen2_draft(), "generation") == []
+    data = gen2_draft(generation=3)
+    assert [e["path"] for e in rule_errors(sdd_export, root, data, "generation")] == ["generation"]
+    assert [e["path"] for e in rule_errors(sdd_export, project(tmp_path, "plain"), draft(generation=2), "generation")] == ["generation"]
+
+
+@pytest.mark.parametrize("section", ["principles", "features", "requirements", "lessons"])
+def test_rule_2_lineage_items_do_not_vanish(sdd_export, tmp_path, section):
+    record = lineage_record(principles=[{k: v for k, v in principle("keep-small").items() if k not in ("status", "evidence")}])
+    root = lineage_project(tmp_path, record)
+    base = gen2_draft(principles=[principle("keep-small")])
+    assert validate(sdd_export, root, base).code == 0
+
+    data = copy.deepcopy(base)
+    if section == "principles":
+        data["principles"] = []
+        gone = "keep-small"
+    elif section == "features":
+        data["features"] = [feature("other", origin=2, requirements=[requirement("deploy-one", source="spec",
+                                                                                  evidence=["specs/001-deploy/spec.md"])])]
+        gone = "deploy"
+    elif section == "requirements":
+        data["features"][0]["requirements"] = [requirement("deploy-two", origin=2)]
+        gone = "deploy-one"
+    else:
+        data["lessons"] = []
+        gone = "atomic-write"
+    errors = rule_errors(sdd_export, root, data, "lineage-item-missing")
+
+    assert len(errors) == 1 and gone in errors[0]["detail"]
+
+
+def test_rule_2_kept_discarded_or_derived(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    discarded_lesson = gen2_draft(lessons=[], discarded=[discarded("deploy-symlink", discarded_in=2),
+                                                          discarded("atomic-write", kind="lesson", discarded_in=2)])
+    derived = gen2_draft(lessons=[lesson("write-safely", origin=2, kind="pitfall", derived_from=["atomic-write"])])
+
+    assert validate(sdd_export, root, discarded_lesson).code == 0
+    assert validate(sdd_export, root, derived).code == 0
+
+
+def test_rule_3_origin_changed(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    data = gen2_draft()
+    data["lessons"][0]["origin"] = 2
+
+    assert [e["path"] for e in rule_errors(sdd_export, root, data, "origin-changed")] == ["lessons[0].origin"]
+
+
+def test_rule_3_against_existing_nutrients(sdd_export, tmp_path):
+    """An inherited item of the existing nutrients (origin below the generation) keeps its origin too."""
+    root = lineage_project(tmp_path)
+    earlier = gen2_draft(principles=[principle("hand-added", origin=1, evidence=["maintainer"])])
+    (root / ".sdd-export").mkdir()
+    (root / ".sdd-export" / "nutrients.json").write_bytes(sdd_export.serialize(nutrients_of(earlier), "nutrients"))
+    assert run_export(sdd_export, root, "check").out["export_dir"] == "ours"
+    data = gen2_draft(principles=[principle("hand-added", origin=2, evidence=["maintainer"])])
+
+    assert validate(sdd_export, root, earlier).code == 0
+    assert [e["path"] for e in rule_errors(sdd_export, root, data, "origin-changed")] == ["principles[0].origin"]
+
+
+def test_rule_4_origin_unknown(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    data = gen2_draft(principles=[principle("from-nowhere", origin=1)])
+
+    assert [e["path"] for e in rule_errors(sdd_export, root, data, "origin-unknown")] == ["principles[0].origin"]
+    plain = project(tmp_path, "plain")
+    assert [e["path"] for e in rule_errors(sdd_export, plain, draft(generation=1), "origin-unknown")] == []
+
+
+def test_rule_5_revision_unmarked(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    data = gen2_draft()
+    data["features"][0]["requirements"][0]["text"] = "改過的需求。"
+    data["features"][0]["summary"] = "改過的摘要。"
+    data["lessons"][0]["title"] = "改過的標題"
+
+    paths = [e["path"] for e in rule_errors(sdd_export, root, data, "revision-unmarked")]
+    assert paths == ["features[0].requirements[0].revised", "features[0].revised", "lessons[0].revised"]
+
+    for item in (data["features"][0]["requirements"][0], data["features"][0], data["lessons"][0]):
+        item["revised"] = [2]
+    assert validate(sdd_export, root, data).code == 0
+
+
+def test_rule_6_discard_lost(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    lost = gen2_draft(discarded=[])
+    changed = gen2_draft(discarded=[discarded("deploy-symlink", discarded_in=2, reason="另一個理由")])
+
+    assert [e["detail"] for e in rule_errors(sdd_export, root, lost, "discard-lost")][0].find("deploy-symlink") >= 0
+    assert len(rule_errors(sdd_export, root, changed, "discard-lost")) == 1
+
+
+def test_rule_6_against_existing_nutrients(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    earlier = gen2_draft(discarded=[discarded("deploy-symlink", discarded_in=2), discarded("old-doubt", kind="doubt",
+                                                                                          origin=1, discarded_in=1)])
+    path = root / ".sdd-export"
+    path.mkdir()
+    (path / "nutrients.json").write_bytes(sdd_export.serialize(nutrients_of(earlier), "nutrients"))
+    assert run_export(sdd_export, root, "check").out["export_dir"] == "ours"
+
+    assert len(rule_errors(sdd_export, root, gen2_draft(), "discard-lost")) == 1
+    assert rule_errors(sdd_export, root, earlier, "discard-lost") == []
+
+
+def test_rule_7_discarded_active(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft(discarded=[discarded("deploy", kind="feature")])
+
+    assert [e["path"] for e in rule_errors(sdd_export, root, data, "discarded-active")] == ["discarded[0].id"]
+
+
+def test_rule_8_derived_unknown(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    good = gen2_draft(principles=[principle("merged", origin=2, derived_from=["deploy-symlink"])])
+    bad = gen2_draft(principles=[principle("merged", origin=2, derived_from=["never-existed"])])
+
+    assert validate(sdd_export, root, good).code == 0
+    assert [e["path"] for e in rule_errors(sdd_export, root, bad, "derived-unknown")] == ["principles[0].derived_from[0]"]
+
+
+def test_rule_8_keeps_sources_recorded_by_earlier_generations(sdd_export, tmp_path):
+    record = lineage_record()
+    record["features"][0]["requirements"][0]["derived_from"] = ["older-one"]
+    root = lineage_project(tmp_path, record)
+    data = gen2_draft()
+    data["features"][0]["requirements"][0]["derived_from"] = ["older-one"]
+
+    assert validate(sdd_export, root, data).code == 0
+    data["features"][0]["derived_from"] = ["older-one"]
+    assert [e["path"] for e in rule_errors(sdd_export, root, data, "derived-unknown")] == ["features[0].derived_from[0]"]
+
+
+def test_rule_9_id_reused(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    data = gen2_draft(principles=[principle("deploy-symlink", origin=2)])
+
+    errors = rule_errors(sdd_export, root, data, "id-reused")
+    assert [e["path"] for e in errors] == ["principles[0].id"]
+
+
+def test_rules_are_quiet_without_lineage_or_nutrients(sdd_export, tmp_path):
+    root = project(tmp_path)
+    result = validate(sdd_export, root, draft(discarded=[discarded("old")]))
+
+    assert result.code == 0
+
+
+def test_every_rule_violation_at_once(sdd_export, tmp_path):
+    root = lineage_project(tmp_path)
+    data = gen2_draft(lessons=[], discarded=[])
+    data["features"][0]["origin"] = 2
+    result = validate(sdd_export, root, data)
+
+    assert {"lineage-item-missing", "origin-changed", "discard-lost"} <= set(checks(result))
+    assert result.out["reason"] == "invalid"
+
+
+# ---------------------------------------------------- three generations
+
+
+def fixture(name: str) -> dict:
+    return json.loads((FIXTURES / name).read_bytes().decode("utf-8"))
+
+
+def generation_project(tmp_path: Path, name: str, specs: list[str], lineage: str | None) -> Path:
+    files = {f"specs/{spec}/spec.md": SPEC_TEXT for spec in specs}
+    files[".specify/memory/constitution.md"] = "# Constitution\n"
+    if lineage:
+        files[".sdd-rebuild/lineage.json"] = (FIXTURES / lineage).read_bytes()
+    return make_old_project(tmp_path, name, files=files)
+
+
+def test_three_generations(sdd_export, tmp_path, fixed_day):
+    first = generation_project(tmp_path, "gen1", ["001-deploy", "002-status"], None)
+    assert run_export(sdd_export, first, "check").out["generation"] == 1
+    write_ok(sdd_export, first, fixture("gen1-draft.json"), expect="none")
+
+    second = generation_project(tmp_path, "gen2", ["001-deploy", "002-status", "003-report", "004-audit"], "lineage-gen2.json")
+    check = run_export(sdd_export, second, "check").out
+    assert (check["lineage"], check["generation"]) == ("present", 2)
+    assert [s["in_lineage"] for s in check["specs"]] == [True, True, True, False]
+    result = write_ok(sdd_export, second, fixture("gen2-draft.json"), expect="none")
+    assert result.out["counts"]["new"] == 5  # report, report-diff, audit, audit-log, spec-first
+
+    third = generation_project(tmp_path, "gen3", ["001-deploy", "002-overview"], "lineage-gen3.json")
+    assert run_export(sdd_export, third, "check").out["generation"] == 3
+    write_ok(sdd_export, third, fixture("gen3-draft.json"), expect="none")
+
+    final = json.loads(read_export(third, "nutrients.json"))
+    active = {item["id"]: item for section, _, item, _ in sdd_export.walk_items(final) if section != "discarded"}
+    gone = {item["id"]: item for item in final["discarded"]}
+    derived = {source for item in active.values() for source in item["derived_from"]}
+    for item in fixture("gen1-draft.json")["features"]:
+        for entry in item["requirements"]:
+            rid = entry["id"]
+            if rid in active:
+                assert active[rid]["origin"] == 1, rid
+            elif rid in gone:
+                assert gone[rid]["origin"] == 1 and gone[rid]["discarded_in"] >= 2, rid
+            else:
+                assert rid in derived, rid
+    assert active["deploy-no-overwrite"]["origin"] == 1
+    assert gone["deploy-symlink"]["discarded_in"] == 2
+    assert "status-list" in derived
+
+
+def test_three_generations_refuse_a_broken_link(sdd_export, tmp_path):
+    third = generation_project(tmp_path, "gen3", ["001-deploy", "002-overview"], "lineage-gen3.json")
+    data = fixture("gen3-draft.json")
+    data["features"][0]["requirements"][0]["origin"] = 3
+    data["discarded"] = [entry for entry in data["discarded"] if entry["id"] != "deploy-symlink"]
+
+    result = validate(sdd_export, third, data)
+
+    assert {"origin-changed", "discard-lost"} <= set(checks(result))
+
+
+# ============================================================== re-export
+
+
+def test_second_write_replaces_the_same_file(sdd_export, tmp_path):
+    root = project(tmp_path)
+    first = write_ok(sdd_export, root, draft())
+    write_ok(sdd_export, root, draft(project="renamed"), expect=first.out["state"])
+
+    assert sorted(p.name for p in (root / ".sdd-export").iterdir()) == [".gitattributes", "README.md", "nutrients.json"]
+    assert json.loads(read_export(root, "nutrients.json"))["project"] == "renamed"
+    assert run_export(sdd_export, root, "check").out["existing"]["project"] == "renamed"
+
+
+def test_hand_edit_shows_in_check_and_diff(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    edit_nutrients(root, lambda d: d["features"][0]["requirements"][0].update(text="維護者改過的文字。"))
+
+    out = run_export(sdd_export, root, "check").out
+    assert (out["nutrients"], out["view"]) == ("edited", "stale")
+    diff = validate(sdd_export, root, draft()).out["diff"]
+    assert diff["changed"] == [{"section": "requirements", "id": "deploy-one", "fields": [
+        {"field": "text", "from": "維護者改過的文字。", "to": "需求 deploy-one 的可驗收行為。"}]}]
+
+
+def test_broken_nutrients_stop_and_recover(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    path = root / ".sdd-export" / "nutrients.json"
+    good = path.read_bytes()
+    path.write_bytes(b"{ not json")
+    assert run_export(sdd_export, root, "check").out["reason"] == "nutrients-unreadable"
+
+    path.write_bytes(good)
+    assert run_export(sdd_export, root, "check").code == 0
+
+
+def test_hand_edited_readme_is_regenerated(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    readme = root / ".sdd-export" / "README.md"
+    readme.write_text(readme.read_text("utf-8") + "\n維護者的筆記\n", "utf-8")
+    check = run_export(sdd_export, root, "check").out
+    assert check["view"] == "edited"
+
+    write_ok(sdd_export, root, draft(), expect=check["state"])
+
+    assert "維護者的筆記" not in readme.read_text("utf-8")
+    assert run_export(sdd_export, root, "check").out["view"] == "current"
+
+
+def test_missing_readme(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    (root / ".sdd-export" / "README.md").unlink()
+
+    out = run_export(sdd_export, root, "check").out
+    assert (out["view"], out["nutrients"]) == ("missing", "unknown")
+
+
+def test_old_state_is_refused(sdd_export, tmp_path):
+    root = project(tmp_path)
+    first = write_ok(sdd_export, root, draft())
+    edit_nutrients(root, lambda d: d.update(project="by-hand"))
+    before = tree_snapshot(root)
+
+    result = run_export(sdd_export, root, "write", "--expect", first.out["state"], stdin=dump(draft()))
+
+    assert result.out["reason"] == "changed"
+    assert tree_snapshot(root) == before
+
+
+def test_export_in_two_batches(sdd_export, tmp_path):
+    root = project(tmp_path, files={"api/routes.py": "r\n", "web/app.js": "a\n"})
+    first = draft(scope={"coverage": "partial", "included": ["api"]},
+                  features=[feature("api", requirements=[requirement("api-one", evidence=["api/routes.py"])])])
+    written = write_ok(sdd_export, root, first)
+    second = copy.deepcopy(first)
+    second["scope"] = {"coverage": "full", "included": []}
+    second["features"].append(feature("web", requirements=[requirement("web-one", evidence=["web/app.js"])]))
+
+    diff = validate(sdd_export, root, second).out["diff"]
+
+    assert diff["scope"] == {"from": {"coverage": "partial", "included": ["api"]}, "to": {"coverage": "full", "included": []}}
+    assert [(a["section"], a["id"]) for a in diff["added"]] == [("features", "web"), ("requirements", "web-one")]
+    assert diff["removed"] == [] and diff["changed"] == [] and diff["order_changed"] is False
+    write_ok(sdd_export, root, second, expect=written.out["state"])
+
+
+def test_reordered_features(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft(features=[feature("a"), feature("b", requirements=[requirement("b-one")])])
+    write_ok(sdd_export, root, data)
+    data["features"].reverse()
+
+    assert validate(sdd_export, root, data).out["diff"]["order_changed"] is True
+
+
+def test_unchanged_export_has_an_empty_diff(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, full_draft())
+    diff = validate(sdd_export, root, full_draft()).out["diff"]
+
+    assert (diff["added"], diff["removed"], diff["changed"], diff["generation"], diff["scope"]) == ([], [], [], None, None)

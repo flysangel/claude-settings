@@ -1,0 +1,184 @@
+{
+  "generation": 2,
+  "project": "my-tool",
+  "language": "zh-Hant",
+  "scope": {
+    "coverage": "full",
+    "included": []
+  },
+  "principles": [
+    {
+      "id": "cross-platform",
+      "origin": 1,
+      "title": "Windows 與 Linux 完全對等",
+      "text": "每個功能在 Windows 與 Linux MUST 有相同的行為。",
+      "revised": [],
+      "derived_from": [],
+      "source": "constitution",
+      "status": "confirmed",
+      "evidence": [
+        ".specify/memory/constitution.md"
+      ]
+    }
+  ],
+  "features": [
+    {
+      "id": "deploy",
+      "origin": 1,
+      "title": "一行部署",
+      "summary": "維護者以一行指令把設定安裝到家目錄。",
+      "revised": [],
+      "derived_from": [],
+      "source": "spec",
+      "spec": "specs/001-deploy/spec.md",
+      "depends_on": [],
+      "requirements": [
+        {
+          "id": "deploy-no-overwrite",
+          "origin": 1,
+          "kind": "functional",
+          "text": "目標已有不是本工具建立的檔案時，MUST 停止並列出衝突，不覆蓋。",
+          "revised": [
+            2
+          ],
+          "derived_from": [],
+          "source": "spec",
+          "status": "confirmed",
+          "evidence": [
+            "specs/001-deploy/spec.md"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "status",
+      "origin": 1,
+      "title": "部署狀態",
+      "summary": "維護者可以查看哪些檔案已部署。",
+      "revised": [],
+      "derived_from": [],
+      "source": "spec",
+      "spec": "specs/002-status/spec.md",
+      "depends_on": [
+        "deploy"
+      ],
+      "requirements": [
+        {
+          "id": "status-list",
+          "origin": 1,
+          "kind": "functional",
+          "text": "列出已部署的檔案。",
+          "revised": [],
+          "derived_from": [],
+          "source": "spec",
+          "status": "confirmed",
+          "evidence": [
+            "specs/002-status/spec.md"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "report",
+      "origin": 2,
+      "title": "差異報告",
+      "summary": "維護者可以看到哪些已部署檔案與來源不同。",
+      "revised": [],
+      "derived_from": [],
+      "source": "spec",
+      "spec": "specs/003-report/spec.md",
+      "depends_on": [
+        "deploy"
+      ],
+      "requirements": [
+        {
+          "id": "report-diff",
+          "origin": 2,
+          "kind": "functional",
+          "text": "列出與來源內容不同的已部署檔案。",
+          "revised": [],
+          "derived_from": [],
+          "source": "spec",
+          "status": "confirmed",
+          "evidence": [
+            "specs/003-report/spec.md"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit",
+      "origin": 2,
+      "title": "部署紀錄",
+      "summary": "維護者可以查看過去每次部署做了什麼。",
+      "revised": [],
+      "derived_from": [],
+      "source": "spec",
+      "spec": "specs/004-audit/spec.md",
+      "depends_on": [
+        "deploy"
+      ],
+      "requirements": [
+        {
+          "id": "audit-log",
+          "origin": 2,
+          "kind": "functional",
+          "text": "每次部署都記錄時間與變更的檔案。",
+          "revised": [],
+          "derived_from": [],
+          "source": "spec",
+          "status": "confirmed",
+          "evidence": [
+            "specs/004-audit/spec.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "lessons": [
+    {
+      "id": "atomic-write",
+      "origin": 1,
+      "kind": "pitfall",
+      "title": "寫入中斷留下半份檔案",
+      "text": "直接覆寫設定檔時中斷會留下半份內容；改為寫暫存檔再取代。",
+      "revised": [],
+      "derived_from": [],
+      "status": "confirmed",
+      "evidence": [
+        "maintainer"
+      ]
+    },
+    {
+      "id": "spec-first",
+      "origin": 2,
+      "kind": "decision",
+      "title": "先寫 spec 再實作",
+      "text": "重建後先補 spec 再實作，因為需求比較不會漂移。",
+      "revised": [],
+      "derived_from": [],
+      "status": "confirmed",
+      "evidence": [
+        ".sdd-rebuild/lineage.json"
+      ]
+    }
+  ],
+  "discarded": [
+    {
+      "id": "deploy-symlink",
+      "kind": "requirement",
+      "origin": 1,
+      "discarded_in": 2,
+      "text": "以符號連結部署。",
+      "reason": "Windows 需要管理員權限，重建時捨棄。"
+    },
+    {
+      "id": "json-format",
+      "kind": "lesson",
+      "origin": 1,
+      "discarded_in": 2,
+      "text": "因為標準函式庫可以解析，設定使用 JSON。",
+      "reason": "維護者決定捨棄"
+    }
+  ]
+}
