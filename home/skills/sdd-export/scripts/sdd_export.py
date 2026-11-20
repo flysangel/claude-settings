@@ -778,8 +778,9 @@ def generation_problems(draft: dict, lineage: dict | None, existing: dict | None
         if origin < generation and item_id not in in_lineage and item_id not in in_existing:
             problems.append(Problem("origin-unknown", join(path, "origin"), f"'{item_id}' says it comes from generation "
                                     f"{origin}, but neither the lineage nor the existing nutrients hold it"))
-        # Rule 5: a changed inherited text marks this generation in revised.
-        if item_id in in_lineage:
+        # Rule 5: a changed inherited text marks this generation in revised. Items created in this generation
+        # (origin equal to it) are not checked: their text is this generation's version.
+        if item_id in in_lineage and origin < generation:
             before = in_lineage[item_id][2]
             changed = any(key in item and key in before and item[key] != before[key] for key in TEXT_FIELDS)
             revised = item.get("revised") if isinstance(item.get("revised"), list) else []

@@ -354,7 +354,7 @@
 | 2 | `lineage-item-missing` | L 中每個有效項目的 `id`，在草稿中仍是有效項目、在草稿的 `discarded` 中，或出現在草稿某個項目的 `derived_from` |
 | 3 | `origin-changed` | 與前代項目同 `id` 的有效項目，`origin` 相同 |
 | 4 | `origin-unknown` | `origin` 小於 `generation` 的項目，`id` 能在 L 或 N 中找到 |
-| 5 | `revision-unmarked` | 與 L 中同 `id` 的項目相比，`title`、`text` 或 `summary` 不同時，`revised` 包含 `generation` |
+| 5 | `revision-unmarked` | 與 L 中同 `id` 的項目相比，`title`、`text` 或 `summary` 不同時，`revised` 包含 `generation`。只適用於 `origin` 小於 `generation` 的項目（繼承的項目）；`origin` 等於 `generation` 的項目是這一代建立的，不檢查，`revised` 也不允許包含這一代（範圍規則已保證 `revised` 的每個值大於 `origin`） |
 | 6 | `discard-lost` | L 的 `discarded`，以及 N 中 `discarded_in` 小於 `generation` 的捨棄紀錄，都原樣出現在草稿的 `discarded` |
 | 7 | `discarded-active` | `discarded` 中的 `id` 不是有效項目 |
 | 8 | `derived-unknown` | `derived_from` 中的每個 `id` 出現在 L 或 N（含其 `discarded`），或已出現在 L、N 中同一項目的 `derived_from`（沿用前代記下的來源，那些 `id` 屬於更早的世代，不在 L 中） |

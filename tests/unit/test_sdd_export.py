@@ -2792,3 +2792,29 @@ def test_rule_9_real_reuse_is_refused(sdd_export, tmp_path, case):
     errors = rule_errors(sdd_export, root, data, "id-reused")
 
     assert [e["path"] for e in errors] == [path]
+
+
+def test_rule_5_items_created_in_this_generation_may_change(sdd_export, tmp_path):
+    root = lineage_project(tmp_path, rebuilt_lineage(), specs={"001-deploy": SPEC_TEXT, "002-report": SPEC_TEXT})
+    changed = gen2_draft()
+    changed["features"].append(report_feature(summary="重建後改過的摘要。"))
+    changed["features"][1]["requirements"][0]["text"] = "重建後改過的需求。"
+
+    assert validate(sdd_export, root, changed).code == 0
+
+
+def test_rule_5_inherited_items_still_need_the_mark(sdd_export, tmp_path):
+    root = lineage_project(tmp_path, rebuilt_lineage(), specs={"001-deploy": SPEC_TEXT, "002-report": SPEC_TEXT})
+    data = gen2_draft()
+    data["features"].append(report_feature())
+    data["features"][0]["summary"] = "改過的繼承摘要。"
+
+    assert [e["path"] for e in rule_errors(sdd_export, root, data, "revision-unmarked")] == ["features[0].revised"]
+
+
+def test_rule_5_items_created_in_this_generation_cannot_mark_it(sdd_export, tmp_path):
+    root = lineage_project(tmp_path, rebuilt_lineage(), specs={"001-deploy": SPEC_TEXT, "002-report": SPEC_TEXT})
+    data = gen2_draft()
+    data["features"].append(report_feature(summary="重建後改過的摘要。", revised=[2]))
+
+    assert [e["path"] for e in rule_errors(sdd_export, root, data, "range")] == ["features[1].revised"]
