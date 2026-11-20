@@ -45,8 +45,14 @@ git add -A && git commit -m "spec kit"
    預期輸出 `"baseline": true`。手動建立 `specs/001-a/spec.md` 與 `specs/002-b/spec.md`（只為了測試腳本；實際流程由 `speckit-specify` 產生），
    把兩個 `spec_dir` 填入並 `save`，再執行 `<grill> verify`：預期 `ok` 為 `true`。
    把兩個 `spec_dir` 對調後再 `save` 與 `verify`：預期結束碼 1，`failures` 有 `order` 與 `dependency-order`。
-6. **清除**：執行 `<grill> clear`。預期 `.specify/sdd-grill/` 不存在；再執行一次，輸出 `{"cleared": false}`、結束碼 0。
-7. **衝突**：建立 `.specify/sdd-grill/notes.txt` 後執行 `save` 與 `clear`。預期兩者都是結束碼 1，`notes.txt` 仍在。
+6. **指向第一份**：先把 `.specify/feature.json` 寫成 `{"feature_directory": "specs/002-b"}`（模擬 `speckit-specify` 最後寫入的結果），
+   執行 `<grill> focus`。預期結束碼 0、輸出 `feature_directory` 為 `specs/001-a`、`previous` 為 `specs/002-b`、`changed` 為 `true`，
+   檔案內容是 `{"feature_directory": "specs/001-a"}`，`git status --porcelain` 仍沒有輸出（不入庫）；再執行一次，`changed` 為 `false`。
+   刪除該檔案後執行，預期建立並 `previous` 為 `null`；把內容改成 `not json` 後執行，預期改寫並 `previous` 為 `null`。
+   把兩個 `spec_dir` 對調後執行，預期結束碼 1、`feature.json` 沒有改變。先在專案放一份 `specs/000-old/spec.md` 並重做第 5 步（讓它在 `baseline` 中），
+   預期目標仍是這一批的第一份。
+7. **清除**：執行 `<grill> clear`。預期 `.specify/sdd-grill/` 不存在；再執行一次，輸出 `{"cleared": false}`、結束碼 0。
+8. **衝突**：建立 `.specify/sdd-grill/notes.txt` 後執行 `save` 與 `clear`。預期兩者都是結束碼 1，`notes.txt` 仍在。
 
 以上情境都由 `tests/unit/test_sdd_grill.py` 自動涵蓋；手動執行是為了在實作完成時確認真實的檔案與 git 行為。
 
@@ -71,9 +77,9 @@ Windows 的 PowerShell 以 `$env:USERPROFILE` 與 `$env:CLAUDE_CONFIG_DIR` 達�
 | 3 | 回答幾題後說「先到這裡」；開新的 session 再輸入 `/sdd-grill` | 結束時呈現目前摘要並停止；`git status` 乾淨；新 session 先列出已決定的事項並詢問接續或重新開始；接續後沒有重問任何已決定的事項；選擇重新開始時 `.specify/sdd-grill/` 被清除（US3-1、2、3；FR-009、FR-010；SC-004） |
 | 4 | 中斷後在專案 commit 一個檔案，再輸入 `/sdd-grill` | Claude 先說明專案在上次討論後有變更（指出改變的項目），由你決定是否沿用（US3-4；FR-010） |
 | 5 | 走到摘要；在確認前檢查 `git status` 與 constitution；要求修改摘要中的一項 | 摘要有已決定、已延後與原因、留給 plan、功能順序四部分；確認前 constitution 與 `specs/` 沒有任何變化；修改後再次請你確認，仍未寫入（US2-1、2、3；FR-011、FR-012；SC-002） |
-| 6 | 確認摘要 | Claude 以 Skill 呼叫 `speckit-constitution` 與 `speckit-specify`（不是自己寫檔）；constitution 只有摘要中的原則；每個功能一份 spec，編號依相依順序；延後事項在對應 spec 的 Assumptions；文件語言符合 FR-020；結束時列出每份 spec 的位置、相依與建議順序，說明下一步是 `/sdd-drive`，然後停止；`.specify/sdd-grill/` 已不存在（US2-4、5；FR-013 至 FR-018、FR-020；SC-003、SC-005、SC-007） |
-| 7 | 重做到確認摘要，在第二份 spec 產生途中中斷 session；開新 session 再輸入 `/sdd-grill` | 進度保留；Claude 回報已產生與未產生的文件，詢問是否從未產生的繼續，不重新討論、不補寫、不刪除已產生的文件（Edge Cases；FR-018） |
-| 8 | 在已有 constitution 與 3 份 spec 的專案，以新需求輸入 `/sdd-grill`；途中提出與既有原則衝突的需求 | 不重問既有文件已記錄的決定；指出衝突並請你選擇修訂原則或調整需求；產生後既有 spec 未被修改，新 spec 編號接在 003 之後；你沒有同意修訂時 constitution 不變（US4-1、2、3；FR-016） |
+| 6 | 確認摘要（摘要有兩個以上的功能） | Claude 以 Skill 呼叫 `speckit-constitution` 與 `speckit-specify`（不是自己寫檔）；constitution 只有摘要中的原則；每個功能一份 spec，編號依相依順序；延後事項在對應 spec 的 Assumptions；文件語言符合 FR-020；`.specify/feature.json` 指向這一批編號最小的一份（不是最後一份）；結束時列出每份 spec 的位置、相依與建議順序，告訴你 `feature.json` 現在指向哪一份，說明下一步是 `/sdd-drive`（或依序以原生的 `/speckit-plan`），然後停止；`.specify/sdd-grill/` 已不存在（US2-4、5；FR-013 至 FR-018、FR-020；SC-003、SC-005、SC-007） |
+| 7 | 重做到確認摘要，在第二份 spec 產生途中中斷 session；開新 session 再輸入 `/sdd-grill` | 進度保留；`feature.json` 沒有被改成第一份（仍是 `speckit-specify` 最後寫入的、存在的資料夾）；Claude 回報已產生與未產生的文件，詢問是否從未產生的繼續，不重新討論、不補寫、不刪除已產生的文件（Edge Cases；FR-018） |
+| 8 | 在已有 constitution 與 3 份 spec 的專案，以新需求輸入 `/sdd-grill`；途中提出與既有原則衝突的需求 | 不重問既有文件已記錄的決定；指出衝突並請你選擇修訂原則或調整需求；產生後既有 spec 未被修改，新 spec 編號接在 003 之後；你沒有同意修訂時 constitution 不變；`feature.json` 指向這一批的第一份（新編號最小的一份），不是 001（US4-1、2、3；FR-016） |
 | 9 | 在沒有導入 Spec Kit 的目錄輸入 `/sdd-grill` 加需求 | Claude 請你先執行 `/sdd-init`，沒有開始追問，目錄沒有任何新檔案（Edge Cases；FR-019） |
 | 10 | 不輸入指令，只說「我想開一個新專案，但還不確定要做成什麼樣子」；另外問一句「這個專案該用哪個資料庫？」 | 前者 Claude 主動使用 sdd-grill；後者不觸發 sdd-grill（FR-001；R5） |
 | 11 | 以 `--disallowedTools AskUserQuestion` 啟動 session 後輸入 `/sdd-grill` 加需求 | 改用文字提問，仍然一次一題並附建議（Edge Cases；FR-003） |

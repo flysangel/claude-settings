@@ -40,7 +40,7 @@ sdd-grill 的主要產出是**對話**：找出未決事項、一次一題、追
   | 偵測「專案在上次討論後有變更」（FR-010） | 腳本 `check` | 以指紋比對可決定（R2） |
   | 列出已決定事項、讓維護者選擇接續或重新開始（FR-010） | SKILL.md；重新開始時呼叫腳本 `clear` | 呈現與詢問是對話；清除是檔案操作 |
   | 呈現決策摘要、依修改再次確認（FR-011、US2-3） | SKILL.md | 摘要的內容來自對話 |
-  | 確認前不寫入 constitution 與 spec（FR-012） | SKILL.md；腳本的每個指令都只寫 `.specify/sdd-grill/` | Claude 的寫入只能靠指示約束；腳本本身可證明不寫其他地方 |
+  | 確認前不寫入 constitution 與 spec（FR-012） | SKILL.md；腳本除 `focus` 之外的每個指令都只寫 `.specify/sdd-grill/`；`focus` 只在確認後的收尾執行，且只多寫 `.specify/feature.json` | Claude 的寫入只能靠指示約束；腳本本身可證明不寫其他地方 |
   | 確認時記下既有文件的基準（constitution 與每份 spec.md 的雜湊） | 腳本 `save`（`phase` 變為 `confirmed` 時） | 可決定；是 `verify` 的依據 |
   | 呼叫 `speckit-constitution` 與 `speckit-specify` 產生文件（FR-013） | SKILL.md | 只有 Claude 能呼叫 skill |
   | constitution 不多出未確認的規則（FR-014） | SKILL.md | 判斷某條規則是否「確認過」是語意比對 |
@@ -49,7 +49,7 @@ sdd-grill 的主要產出是**對話**：找出未決事項、一次一題、追
   | 結束時的報告與下一步 `/sdd-drive`、停止（FR-017） | SKILL.md；`verify` 輸出每份新 spec 的位置與相依 | 報告是對話；清單由腳本給出可避免漏列 |
   | 成功後清除、失敗或中途結束時保留（FR-018） | SKILL.md 決定時機；腳本 `clear` 只刪自己的檔案 | 「是否成功」由 `verify` 決定；刪除範圍必須可證明 |
   | 產生文件的語言（FR-020） | SKILL.md | 判斷既有文件的語言是語意判斷 |
-  | 設定目前的功能目錄（`.specify/feature.json`） | 都不做（R4） | 由 `speckit-specify` 自己寫；sdd-grill 不動 Spec Kit 的狀態檔 |
+  | 把目前的功能目錄（`.specify/feature.json`）指向這一批新 spec 中編號最小的一份 | 腳本 `focus`（R4） | 「哪一份最小」與「檔案內容」都可決定，能被單元測試；`verify` 通過才執行，所以不會指向不存在的目錄 |
 
 - **Rationale**：每一項都問兩件事：「錯了會不會在檔案上留下難以發現的後果」與「判斷是否需要理解語意」。
   前者是、後者否的放腳本；需要語意的放 SKILL.md。兩者都有的（機密、順序、不覆蓋）由 SKILL.md 執行、腳本檢查結果。
@@ -129,7 +129,7 @@ constitution 原則 II 要求每個功能 MUST 有自動測試並在兩個平台
 
   | 類別 | 測試檔 | 涵蓋內容 |
   |---|---|---|
-  | 腳本的單元測試 | `tests/unit/test_sdd_grill.py` | 前置檢查、專案現況、進度的驗證與寫入、不入庫（以真實的 `git` 驗證 `git status` 與 `git add -A`）、機密攔截、變更偵測、基準、`verify`、`clear` 的刪除範圍、衝突、每個指令都不寫入 `.specify/sdd-grill/` 以外的地方、換行與路徑在兩個平台一致 |
+  | 腳本的單元測試 | `tests/unit/test_sdd_grill.py` | 前置檢查、專案現況、進度的驗證與寫入、不入庫（以真實的 `git` 驗證 `git status` 與 `git add -A`）、機密攔截、變更偵測、基準、`verify`、`clear` 的刪除範圍、衝突、除 `focus` 之外的指令都不寫入 `.specify/sdd-grill/` 以外的地方、`focus` 只寫 `.specify/feature.json`（含檔案不存在、無法解析、已指向目標、`verify` 不通過時不寫入）、換行與路徑在兩個平台一致 |
   | skill 的結構與內容檢查 | `tests/unit/test_sdd_grill_skill.py` | 資料夾只有三個檔案、frontmatter、SKILL.md 是英文且沒有絕對路徑與信箱、必要指示的關鍵句都存在（逐條對應 FR，見 [contracts/skill.md](./contracts/skill.md)）、指示的順序（前置檢查在提問之前、摘要確認在產生文件之前、`verify` 在 `clear` 之前）、README 是繁體中文且涵蓋必要內容、腳本只用標準函式庫且訊息是英文 |
   | 人工驗收 | [quickstart.md](./quickstart.md) 的「人工驗收」 | 實際對話：提問形式、追問、矛盾、技術選型、摘要、確認前不寫入、產生文件的內容與編號、中斷接續、既有專案加需求 |
 
@@ -148,7 +148,7 @@ constitution 原則 II 要求每個功能 MUST 有自動測試並在兩個平台
   | FR-009 保存、不入庫、無機密 | 位置、原子寫入、`.gitignore`、`git status` 乾淨、機密被拒 | 指示：每個決定後保存、不記錄機密 | 情境 3 |
   | FR-010 接續與變更提示 | `check` 回報進度與改變的項目 | 指示：先列出、選擇接續或重新開始、有變更先提示 | 情境 3、4 |
   | FR-011 決策摘要 | 進度有四類欄位 | 指示：摘要的四個部分 | 情境 5 |
-  | FR-012 確認前不寫入 | 腳本只寫自己的資料夾 | 指示存在，且在產生文件的步驟之前 | 情境 5 |
+  | FR-012 確認前不寫入 | 確認前腳本只寫自己的資料夾（`focus` 在確認、產生與 `verify` 之後才會執行） | 指示存在，且在產生文件的步驟之前 | 情境 5 |
   | FR-013 透過 Spec Kit 產生 | | 指示：以 Skill 呼叫兩個 `speckit-*` skill、不手寫 | 情境 6 |
   | FR-014 constitution 不多出規則 | | 指示存在 | 情境 6 |
   | FR-015 依相依順序編號 | `verify` 檢查編號遞增、相依在前 | 指示：依順序逐一呼叫 | 情境 6 |
@@ -190,16 +190,51 @@ constitution 原則 II 要求每個功能 MUST 有自動測試並在兩個平台
   4. **驗證**：執行 `verify`。它檢查 `baseline` 中的每份 spec.md 仍存在且內容未變；`action` 為 `keep` 時 constitution 未變；
      每個功能都有 `spec_dir` 且其 `spec.md` 存在、不在 `baseline` 中；`spec_dir` 的編號依功能順序遞增，
      且全部大於 `baseline` 中最大的編號；每個功能依賴的功能編號都比它小。通過時輸出每份新 spec 的位置與相依。
-  5. **收尾**：`verify` 通過才執行 `clear`，然後依 `verify` 的輸出報告每份 spec 的位置、相依與建議順序，
-     說明下一步是由維護者輸入 `/sdd-drive`，並停止（FR-017、FR-018）。
+  5. **指向第一份**：`verify` 通過後執行 `focus`，把 `.specify/feature.json` 指向這一批新 spec 中編號最小的一份（見下「目前的功能目錄」）。
+  6. **收尾**：`focus` 成功才執行 `clear`，然後依 `verify` 的輸出報告每份 spec 的位置、相依與建議順序，
+     並說明 `.specify/feature.json` 現在指向哪一份；下一步是由維護者輸入 `/sdd-drive`（或依序以原生的 `/speckit-plan` 處理），並停止（FR-017、FR-018）。
 - **編號（FR-015、FR-016）**：`speckit-specify` 自己決定編號：`sequential`（預設）時取 `specs/` 中下一個可用的三位數，
   `timestamp` 時取當下時間。所以「依相依順序、一次一個地呼叫」就同時保證兩件事：編號等於施工順序，且接在既有之後、
   不覆蓋既有資料夾。sdd-grill 不自行計算或指定編號，也不建立資料夾；`verify` 事後確認結果（時間戳記同樣依呼叫順序遞增）。
-- **目前的功能目錄**：`speckit-specify` 每次都把 `.specify/feature.json` 改成它剛建立的資料夾，結束時會指向最後一份 spec。
-  sdd-grill **不修改**它：這個檔案是 Spec Kit 指令維護的狀態，由別的工具改寫等於替 Spec Kit 管理它的狀態（原則 I 的精神）；
-  而選擇下一個要處理的功能是 `/sdd-drive`（008）的工作，結束報告已列出建議順序。
+- **目前的功能目錄**（維護者決定，取代原本「不修改 `feature.json`」的決定）：`speckit-specify` 每次都把
+  `.specify/feature.json` 改成它剛建立的資料夾，所以一批 spec 產生完畢時它會指向最後一份。維護者決定 sdd-grill 在
+  產生多份 spec 之後，把 `feature_directory` 指向**這一批新 spec 中編號最小的一份**，讓維護者改用原生的
+  `/speckit-plan` 時依施工順序從第一份開始（導入後可以用 sdd-grill，也可以用原生 Spec Kit 指令，原生這條路要順）。
+  - **查到的事實**（Spec Kit 1.4.2，讀取本 repo 的檔案）：(a) `speckit-specify` 建立資料夾與 `spec.md` 後把
+    `{"feature_directory": "<資料夾>"}` 寫入 `.specify/feature.json`，目的是讓 `/speckit-plan`、`/speckit-tasks` 等後續指令
+    不靠 git 分支名稱就能找到功能目錄；`create-new-feature.sh` 與 `common.sh` 的 `_persist_feature_json` 也以同樣內容寫入
+    （只有檔案不存在或值不同時才寫）。(b) Spec Kit 自己產生的 `.specify/.gitignore` 把 `feature.json` 列為不入庫的本機狀態，
+    註解寫明「每次切換功能就改寫，是每個 checkout 自己的狀態，不是要分享的東西」。(c) `common.sh` 的
+    `read_feature_json_feature_directory` 讀它的 `feature_directory`（依序用 `jq`、`python3`、`grep`／`sed`；無法解析時不是有效值），
+    `check-prerequisites.sh` 等腳本由此取得功能目錄；環境變數 `SPECIFY_FEATURE_DIRECTORY` 的優先順序比它高。
+  - **與原則 I 的關係**：原則 I 禁止的是「手寫或修改 Spec Kit 產生的檔案的內容」，理由是專案要能持續更新 Spec Kit、
+    不修改上游檔案才不會在更新時衝突或遺失修改。`feature.json` 是 Spec Kit 用來記錄「目前處理哪個功能」的本機狀態：
+    不入庫（所以不會有更新衝突，也不會有 git 內容被改）、Spec Kit 每次切換功能都自己改寫它、切換功能的方式就是改這個值。
+    `focus` 寫入的內容與格式與 `speckit-specify` 寫的相同，改的是它設計成會被改的那個值，所以屬於使用 Spec Kit 提供的切換機制，
+    不是修改它的產出。這個判斷的範圍僅限這個檔案的這個鍵；其他 Spec Kit 檔案（含 `.specify/.gitignore`）仍一律不改。
+    （原則 I 的條文沒有為這類狀態檔另列例外；這個判斷建立在上述理由上，維護者若希望條文寫明可另行修訂 constitution，不在本功能範圍。）
+  - **由誰寫入**：腳本新增第五個指令 `focus`，不放在 SKILL.md 讓 Claude 修改。理由：「找出最小編號的一份」與「寫出固定格式的檔案」
+    都是可決定的事，錯了會在檔案上留下難以發現的後果（指到不存在或錯的目錄），符合 R1 的分工準則，也能單元測試。
+    不併入 `verify` 是因為 `verify` 的契約是只讀；不併入 `clear` 是因為 `clear` 的契約是只刪自己的檔案。
+    因此「腳本只寫 `.specify/sdd-grill/`」這條保證改為「除 `focus` 之外的指令只寫 `.specify/sdd-grill/`；`focus` 只多寫
+    `.specify/feature.json`，不寫其他地方」。
+  - **`focus` 的行為**：先執行與 `verify` 相同的全部檢查，任何一項失敗就不寫入；通過後目標是 `features` 第一個功能的 `spec_dir`
+    （`verify` 的 `order` 檢查保證它就是這一批編號最小的一份，也大於專案原有的所有 spec，所以不是整個專案的第一份）。
+    只產生一份 spec：目標就是那一份，已指向時不寫入。`feature.json` 不存在：建立。內容無法解析（不是 JSON、不是物件、
+    沒有字串型的 `feature_directory`）：視為沒有有效值，改寫成 `{"feature_directory": "<目標>"}`；這與 Spec Kit 自己的寫入相同，
+    該檔案只有這一個鍵且可由 Spec Kit 隨時重建。若 `.specify/feature.json` 存在但不是一般檔案，不寫入並回報失敗。
+    產生中途失敗時 `verify` 不通過，`focus` 不會執行，檔案保持 `speckit-specify` 最後寫入的值（指向它建立的、存在的資料夾），
+    補完之後再執行 `/sdd-grill` 繼續時才會被指向第一份。
+  - **Alternatives considered**：
+    - 不修改，只在結束報告說明（原決定）：維護者跳過 `/sdd-drive` 直接 `/speckit-plan` 時會先處理最後一份，
+      這與「原生指令這條路要順」的決定衝突，只能靠維護者看報告自己切換。
+    - 指向最後一份（保持 `speckit-specify` 的結果）：同上，順序倒過來。
+    - 由 SKILL.md 指示 Claude 修改該檔案：Claude 手寫 JSON 的格式與路徑可能出錯，也無法單元測試；
+      且與原則 I 的「手寫」字樣更接近。
+    - 指向專案中編號最小的 spec：專案已有先前的 spec 時，會指向與這一批無關的舊功能。
+    - 用環境變數 `SPECIFY_FEATURE_DIRECTORY`：只在單一 process 內有效，維護者之後開的 session 不會帶著它。
 - **中途失敗**（Edge Cases）：任何一步失敗（Skill 呼叫失敗、產生的檔案不存在、`verify` 不通過）時，
-  Claude 依進度與 `verify` 的輸出回報已產生與未產生的文件，保留進度，停止；MUST NOT 自行手寫或補寫文件，
+  Claude 依進度與 `verify` 的輸出回報已產生與未產生的文件，保留進度，不執行 `focus`，停止；MUST NOT 自行手寫或補寫文件，
   也 MUST NOT 刪除已產生的文件。再次執行 `/sdd-grill` 時，`check` 回報 `phase: "confirmed"` 與尚未產生的功能，
   Claude 詢問維護者是否從尚未產生的功能繼續（不重新討論）。`verify` 若發現 `baseline` 之外、又沒有記在任何功能的
   新 spec 資料夾（例如 `speckit-specify` 中途失敗留下的），列為 `unexpected` 由維護者處理，sdd-grill 不刪除。
@@ -214,8 +249,7 @@ constitution 原則 II 要求每個功能 MUST 有自動測試並在兩個平台
   - 由 sdd-grill 先計算編號並以 `SPECIFY_FEATURE_DIRECTORY` 指定給 `speckit-specify`：多一份與 Spec Kit 重複的編號邏輯，
     `timestamp` 模式也要另外處理；依序呼叫已能得到相同結果。
   - 一次把所有功能交給 `speckit-specify`：它明確規定一次只建立一個功能。
-  - 產生完畢後把 `feature.json` 改回第一份新 spec，讓維護者直接 `/speckit-plan` 時順序正確：見上；
-    這是維護者核可時可以推翻的取捨（plan.md 的「需要維護者注意的取捨」）。
+  - 產生完畢後不動 `feature.json`（原決定）：已被維護者的決定取代，見上「目前的功能目錄」。
   - 失敗時自動刪除已產生的文件再重來：違反原則 III（那些檔案由 Spec Kit 產生，不是 sdd-grill 自己建立的），
     也會丟掉可用的結果。
 
@@ -279,7 +313,7 @@ constitution 原則 II 要求每個功能 MUST 有自動測試並在兩個平台
 
 ## R9 結束碼
 
-- **Decision**：0 成功；1 用法錯誤、輸入的進度無效、機密被拒、`verify` 不通過、自己的資料夾有衝突；
+- **Decision**：0 成功；1 用法錯誤、輸入的進度無效、機密被拒、`verify` 或 `focus` 的檢查不通過、`feature.json` 不是一般檔案、自己的資料夾有衝突；
   3 Spec Kit 未導入或缺少產生文件所需的檔案。2 保留不用（與 001 的「衝突」區隔，與 003 相同）；
   不使用 4（本功能沒有網路操作）。
 - **Rationale**：沿用 003、004 的編號意義，讓 SKILL.md 的處理方式一致：3 表示「前置條件不成立，請維護者處理」。

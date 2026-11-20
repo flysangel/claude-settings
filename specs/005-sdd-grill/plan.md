@@ -37,8 +37,8 @@
 
 **Constraints**:
 
-- 維護者確認摘要之前，constitution 與 spec 零異動；腳本的寫入與刪除只發生在 `.specify/sdd-grill/`
-- 不修改任何 Spec Kit 產生的檔案（包含 `.specify/.gitignore`）；不修改 `.specify/feature.json`
+- 維護者確認摘要之前，constitution 與 spec 零異動；腳本的寫入與刪除只發生在 `.specify/sdd-grill/`，唯一的例外是收尾時 `focus` 寫入 `.specify/feature.json`
+- 不修改任何 Spec Kit 產生的檔案（包含 `.specify/.gitignore`）；`.specify/feature.json` 是 Spec Kit 的本機狀態，只由 `focus` 在產生完畢後改成這一批新 spec 中編號最小的一份（見 Constitution Check 原則 I）
 - constitution 與 spec 只由 Spec Kit 的 skill 產生；不手寫、不自行指定編號
 - 進度不入庫、不含機密值
 - 不 push；不自動開始 plan、tasks 或實作
@@ -54,9 +54,9 @@
 
 | 原則 | 判定 | 說明 |
 |---|---|---|
-| I. 只包裝、不修改 Spec Kit | 通過 | constitution 與 spec 由 Claude 以 Skill 工具呼叫 `speckit-constitution`、`speckit-specify` 產生；sdd-grill 不手寫、不自行指定編號、不改 `.specify/feature.json`。本功能在 `.specify/` 內新增自己的檔案：`.specify/sdd-grill/progress.json` 與 `.specify/sdd-grill/.gitignore`。依 v1.0.1「MUST 記錄哪些檔案是自己建立的」，以專用資料夾為紀錄：sdd-grill 只在這裡寫檔、這裡只有上述兩個檔案，`.gitignore` 的註解與 `progress.json` 的 `tool` 欄位標明來源，README 與 contracts 寫明這個約定（R2）。不修改 Spec Kit 產生的 `.specify/.gitignore`。 |
+| I. 只包裝、不修改 Spec Kit | 通過 | constitution 與 spec 由 Claude 以 Skill 工具呼叫 `speckit-constitution`、`speckit-specify` 產生；sdd-grill 不手寫、不自行指定編號。本功能在 `.specify/` 內新增自己的檔案：`.specify/sdd-grill/progress.json` 與 `.specify/sdd-grill/.gitignore`。依 v1.0.1「MUST 記錄哪些檔案是自己建立的」，以專用資料夾為紀錄：sdd-grill 只在這裡寫檔、這裡只有上述兩個檔案，`.gitignore` 的註解與 `progress.json` 的 `tool` 欄位標明來源，README 與 contracts 寫明這個約定（R2）。不修改 Spec Kit 產生的 `.specify/.gitignore`。**`.specify/feature.json`**：產生多份 spec 後，腳本 `focus` 把它的 `feature_directory` 指向這一批新 spec 中編號最小的一份。判斷：原則 I 禁止的是手寫或修改 Spec Kit 產出的內容，理由是不修改上游檔案才不會在更新 Spec Kit 時衝突或遺失修改；`feature.json` 是 Spec Kit 記錄「目前處理哪個功能」的本機狀態，Spec Kit 自己的 `.specify/.gitignore` 列為不入庫，`speckit-specify` 與 `common.sh` 每次切換功能都改寫它，切換功能的方式就是改這個值。`focus` 寫的內容與格式與 Spec Kit 相同，是使用它提供的切換機制，不是修改它的產出，也不會造成更新衝突；範圍僅限這個檔案的這個鍵（R4）。原則 I 的條文沒有為狀態檔另列例外，此為本計畫的判斷，列入下方取捨第 4 點請維護者核可。 |
 | II. Windows 與 Linux 完全對等 | 通過 | 兩個平台執行同一支腳本與同一份 SKILL.md；雜湊先正規化換行，輸出的路徑以 `/` 分隔、順序固定。腳本的單元測試與 skill 的結構檢查在既有 `test` job 的兩個平台執行。進度不入庫、不在平台間交換，所以不需要新的跨平台 job。對話行為無法在 CI 驗證（R3），以人工驗收補足，核心情境在兩個平台各做一次。 |
-| III. 保護既有檔案 | 通過 | 腳本只寫、只刪 `.specify/sdd-grill/` 內自己的兩個檔案；資料夾內有其他檔案或 `.gitignore` 不是自己寫的時視為衝突，停止並回報。既有 spec 由 Spec Kit 依序編號而不會被覆蓋，`verify` 以確認時記下的基準證明它們沒有被動到；constitution 只在維護者同意修訂時更動。產生失敗時不刪除已產生的文件。`check`、`verify` 只讀，重複執行結果相同；`save` 以相同輸入重複執行得到相同內容（`saved_at` 除外），`clear` 重複執行為零異動。 |
+| III. 保護既有檔案 | 通過 | 腳本只寫、只刪 `.specify/sdd-grill/` 內自己的兩個檔案（`focus` 另外只改寫不入庫的 `.specify/feature.json`，而且只在 `verify` 的全部檢查通過後，所以不會指向不存在的目錄）；資料夾內有其他檔案或 `.gitignore` 不是自己寫的時視為衝突，停止並回報。既有 spec 由 Spec Kit 依序編號而不會被覆蓋，`verify` 以確認時記下的基準證明它們沒有被動到；constitution 只在維護者同意修訂時更動。產生失敗時不刪除已產生的文件。`check`、`verify` 只讀，重複執行結果相同；`save` 以相同輸入重複執行得到相同內容（`saved_at` 除外），`clear` 重複執行為零異動。 |
 | IV. 先確認再寫入 | 通過 | 這是本功能的核心：確認摘要前不寫入 constitution 與 spec（FR-012），確認後才產生；產生的內容逐條比對摘要，多出的規則移除或先問維護者（FR-014），spec 中沒有依據的內容移除或標為待確認。進度檔是 spec 明訂的例外。 |
 | V. 個人使用、repo 公開 | 通過 | 沒有可調選項。進度只在目標專案本機、不入庫；腳本攔截常見的機密樣式（R8），SKILL.md 指示不記錄機密。skill 的檔案不含絕對路徑與信箱（結構測試檢查）。 |
 | VI. 文件語言 | 通過 | SKILL.md 與腳本訊息為英文；skill 資料夾有繁體中文 README；本功能的 plan 文件為繁體中文，規範詞保留英文。產生的 constitution 與 spec 依 FR-020 使用專案既有文件的語言，無法判斷時繁體中文。 |
@@ -112,7 +112,7 @@ CI 維持 `test`、`cross-platform-produce`、`cross-platform` 三個 job，不�
 - **只能寫在 SKILL.md**：讀取專案並推導問題、一次一題附建議、追問含糊的回答、指出矛盾與原則衝突、辨認技術選型、
   決定何時保存、呈現摘要與確認、呼叫 `speckit-constitution` 與 `speckit-specify`、比對產生的內容與摘要、決定文件語言、
   結束報告與停止。
-- **由腳本決定性完成**：Spec Kit 是否可用與缺少什麼、constitution 是否仍是空白範本、既有 spec 與編號方式、
+- **由腳本決定性完成**：Spec Kit 是否可用與缺少什麼、這一批 spec 中編號最小的一份與 `.specify/feature.json` 的寫入（`focus`）、constitution 是否仍是空白範本、既有 spec 與編號方式、
   進度的位置、結構驗證、原子寫入與不入庫、機密樣式攔截、專案變更偵測、確認時的基準、產生結果的順序與不覆蓋檢查、
   清除的範圍。
 - **兩邊都做**：機密（指示 + 攔截）、順序與不覆蓋（Claude 依序呼叫 + `verify` 檢查）、清除時機（Claude 決定 + `verify` 把關）。
@@ -127,8 +127,11 @@ CI 維持 `test`、`cross-platform-produce`、`cross-platform` 三個 job，不�
 2. **本 repo 自己的 `.specify/.gitignore` 有一行 `sdd-grill-progress.md`**（以及 `sdd-drive-state.json`），是 v1.0.1 之前手動加的；
    本設計不使用這個檔名，也不處理那一行。是否移除由維護者決定，不在本功能範圍。
 3. **「專案有變更」只看 constitution、每份 spec.md 與 git 的 HEAD**（R2）。未 commit 的程式碼變更不會被提示。
-4. **sdd-grill 不修改 `.specify/feature.json`**（R4）。產生完畢後它指向最後一份新 spec；
-   維護者若跳過 `/sdd-drive` 直接 `/speckit-plan`，會先處理最後一份而不是第一份。
+4. **產生多份 spec 後，sdd-grill 把 `.specify/feature.json` 指向這一批新 spec 中編號最小的一份**（R4，維護者決定），
+   由腳本新增的第五個指令 `focus` 在 `verify` 通過後寫入，結束報告會告訴維護者它指向哪一份。這樣維護者跳過 `/sdd-drive`、
+   直接用原生的 `/speckit-plan` 時會依施工順序從第一份開始。代價是 sdd-grill 會寫入一個 Spec Kit 的檔案：
+   我們判斷它是不入庫的本機狀態、改寫它就是 Spec Kit 的切換機制，因此不違反原則 I，但原則 I 的條文沒有明寫這類例外，
+   請核可時一併確認；腳本「只寫 `.specify/sdd-grill/`」的保證也因此改為「除 `focus` 之外」。
 5. **spec 中沒有依據的內容**：`speckit-specify` 會補上合理的推斷（例如 Success Criteria）。constitution 依 FR-014 移除多出的規則；
    spec 則是「移除或標為待確認」（原則 IV），不是一律移除，因為範本的必要段落需要填寫。
 6. **確認後 `speckit-specify` 若要求澄清而摘要沒有答案**，Claude 會再問一題並把答案補進進度，視為對已確認摘要的修訂，不重新確認整份摘要（R4）。

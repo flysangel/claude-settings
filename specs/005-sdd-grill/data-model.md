@@ -12,7 +12,8 @@
 
 規則：
 
-- sdd-grill 只在這個資料夾寫檔，這個資料夾也只放上表兩個檔案。
+- sdd-grill 只在這個資料夾寫檔，這個資料夾也只放上表兩個檔案。唯一的例外是 `focus`：它另外寫入 Spec Kit 的
+  `.specify/feature.json`（見下「目前的功能目錄」），那個檔案不是 sdd-grill 建立的，也不放進這個資料夾。
 - **衝突**：資料夾存在，且 (a) `.gitignore` 存在但內容（換行正規化後）不是上面的固定內容，或
   (b) 有上表以外的檔案或子資料夾。此時 `save` 與 `clear` 都不寫入、不刪除，以結束碼 1 回報；
   `check` 回報 `progress: "conflict"`。
@@ -133,6 +134,18 @@ Claude 送來的值會被忽略。
 
 編號比較：`sequential` 取整數比較，`timestamp` 取字串比較；無法取得編號的 `spec_dir` 記為 `order` 失敗。
 
+## 目前的功能目錄（`focus`）
+
+不是 sdd-grill 的資料，而是 Spec Kit 的本機狀態 `.specify/feature.json`（Spec Kit 的 `.specify/.gitignore` 已列為不入庫）。
+格式是 Spec Kit 定義的：`{"feature_directory": "<相對於專案根目錄、以 / 分隔的 spec 資料夾>"}`，只有這一個鍵。
+
+| 項目 | 規則 |
+|---|---|
+| 目標 | `features` 第一個功能的 `spec_dir`；`verify` 的 `order` 檢查保證它是這一批新 spec 中編號最小的，且大於 `baseline` 中最大的編號 |
+| 有效值 | 檔案是 JSON 物件、有字串型的 `feature_directory`；其他情況（不存在、無法解析、型別不符）都是「沒有有效值」 |
+| 寫入條件 | `verify` 的全部檢查通過，且有效值不等於目標；內容整份取代，原子寫入 |
+| 不寫入 | 任何 `verify` 檢查失敗、進度不是 `confirmed`、檔案存在但不是一般檔案 |
+
 ## 狀態轉移
 
 ```text
@@ -149,7 +162,10 @@ confirmed ──save──▶ confirmed            每產生一份文件就填�
    │  └─save（phase: discussing）         只在還沒有任何 spec_dir 時允許（確認後又要改摘要）
    │ verify 通過
    ▼
+focus（寫 .specify/feature.json；失敗時停在 confirmed）
+   │
+   ▼
 clear ──▶（沒有進度）
 ```
 
-中途結束、產生失敗、`verify` 不通過：停在目前的狀態，進度保留（FR-018）。
+中途結束、產生失敗、`verify` 或 `focus` 不通過：停在目前的狀態，進度保留（FR-018）。

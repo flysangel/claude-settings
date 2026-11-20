@@ -4,19 +4,20 @@
 uv run <skill>/scripts/sdd_grill.py check     前置檢查、專案現況、既有進度與變更
 uv run <skill>/scripts/sdd_grill.py save      從 stdin 讀入完整的進度並保存
 uv run <skill>/scripts/sdd_grill.py verify    檢查產生的 constitution 與 spec
+uv run <skill>/scripts/sdd_grill.py focus     把 .specify/feature.json 指向這一批新 spec 中編號最小的一份
 uv run <skill>/scripts/sdd_grill.py clear     清除進度
 ```
 
 `<skill>` 是 skill 的資料夾，SKILL.md 以 `${CLAUDE_SKILL_DIR}` 表示。一律在目標專案的根目錄執行，
 專案根目錄就是目前目錄。沒有其他參數與選項；沒有子指令、子指令不認得或多出參數時，以結束碼 1 結束並在 stderr 顯示用法。
 
-資料格式與判定規則見 [data-model.md](../data-model.md)；決定與理由見 [research.md](../research.md) 的 R2、R4、R7 至 R9。
+資料格式與判定規則見 [data-model.md](../data-model.md)；決定與理由見 [research.md](../research.md) 的 R2、R4（含「目前的功能目錄」）、R7 至 R9。
 
 ## 共通
 
 - stdout 只有一份 JSON 物件（UTF-8、LF、縮排 2、結尾換行），鍵的順序固定；所有路徑都是相對於專案根目錄、以 `/` 分隔。
 - 失敗時 JSON 有 `"error": "<一句英文>"`，同一句也寫到 stderr。
-- 只讀寫目前目錄之下的檔案；**寫入與刪除只發生在 `.specify/sdd-grill/` 之內**。唯一的外部指令是 `git`
+- 只讀寫目前目錄之下的檔案；**寫入與刪除只發生在 `.specify/sdd-grill/` 之內，唯一的例外是 `focus` 另外寫入 `.specify/feature.json`**。唯一的外部指令是 `git`
   （`rev-parse`，只讀），`git` 不存在時視為不是 git repository。
 - Windows 與 Linux 的輸出逐位元組相同（`saved_at` 與 `head` 這類取決於當下的值除外）。
 
@@ -24,8 +25,8 @@ uv run <skill>/scripts/sdd_grill.py clear     清除進度
 
 | 結束碼 | 意義 |
 |---|---|
-| 0 | 成功（`check` 能完成檢查、`save` 已寫入、`verify` 全部通過、`clear` 已清除或本來就沒有） |
-| 1 | 用法錯誤；`save` 的輸入無效或含機密；`verify` 有失敗的項目；自己的資料夾有衝突 |
+| 0 | 成功（`check` 能完成檢查、`save` 已寫入、`verify` 全部通過、`focus` 已指向或本來就指向目標、`clear` 已清除或本來就沒有） |
+| 1 | 用法錯誤；`save` 的輸入無效或含機密；`verify` 或 `focus` 有失敗的項目；`.specify/feature.json` 不是一般檔案；自己的資料夾有衝突 |
 | 3 | Spec Kit 未導入或缺少產生文件所需的檔案（只有 `check` 會回傳） |
 
 2 保留不用（與 001 部署工具的「衝突」區隔）；4 不使用（沒有網路操作）。
@@ -113,6 +114,53 @@ uv run <skill>/scripts/sdd_grill.py clear     清除進度
 | `unexpected` | 不在基準、也不屬於任何功能的新 spec 資料夾 |
 
 `ok` 為 `false` 時結束碼 1，`error` 為 `the generated documents do not match the confirmed summary`。
+
+## focus
+
+把 `.specify/feature.json` 的 `feature_directory` 指向這一批新 spec 中編號最小的一份，讓維護者用原生的 `/speckit-plan`
+時從第一份開始（理由與對原則 I 的判斷見 [research.md](../research.md) R4「目前的功能目錄」）。在 `verify` 通過之後、`clear` 之前執行。
+前提是進度存在且 `phase` 為 `"confirmed"`，否則結束碼 1，`error` 為 `there is no confirmed summary to point at`。
+
+步驟：
+
+1. 執行與 `verify` 相同的全部檢查；任何一項失敗就結束碼 1、不寫入，`error` 為
+   `the generated documents do not match the confirmed summary; .specify/feature.json was not changed`，`failures` 同 `verify`。
+2. 目標是 `features` 第一個功能的 `spec_dir`（`verify` 的 `order` 檢查保證它是這一批編號最小的一份，也大於專案原有的所有 spec）。
+3. 讀取 `.specify/feature.json` 的 `feature_directory`：檔案不存在、不是 JSON、不是物件、或沒有字串型的 `feature_directory`
+   都視為沒有有效值（`previous` 為 `null`）。路徑存在但不是一般檔案時，結束碼 1、不寫入，`error` 為
+   `.specify/feature.json is not a regular file; nothing was written`。
+4. 值等於目標時不寫入（`changed` 為 `false`）；否則寫入 `{"feature_directory": "<目標>"}`（UTF-8、LF、縮排 2、結尾換行，
+   只有這一個鍵，與 `speckit-specify` 寫的內容相同），先寫到同資料夾的暫存檔再取代。
+
+輸出：
+
+```json
+{
+  "feature_directory": "specs/004-deploy",
+  "previous": "specs/006-status",
+  "changed": true
+}
+```
+
+| 欄位 | 值 |
+|---|---|
+| `feature_directory` | 目標 |
+| `previous` | 執行前的有效值；沒有有效值時是 `null` |
+| `changed` | 是否寫入 |
+
+情況：
+
+| 情況 | 結果 |
+|---|---|
+| 只產生一份 spec | 目標就是那一份；原本就指向它時 `changed` 為 `false` |
+| 產生多份 spec | 指向編號最小的一份；執行前通常指向最後一份（`speckit-specify` 最後寫入的） |
+| `feature.json` 不存在 | 建立；`previous` 為 `null` |
+| 內容無法解析 | 改寫；`previous` 為 `null`（該檔案只有這一個鍵，Spec Kit 自己的寫入也是整份取代） |
+| 產生文件中途失敗 | `verify` 不通過，`focus` 不寫入；檔案保持 `speckit-specify` 最後寫入的值，指向它建立的、存在的資料夾 |
+| 專案已有先前的 spec | 目標是這一批的第一份，不是整個專案的第一份 |
+| `verify` 不通過、進度不是 `confirmed` | 結束碼 1，不寫入 |
+
+`focus` 不讀也不寫 `.specify/` 內的其他 Spec Kit 檔案；重複執行的結果相同（第二次起 `changed` 為 `false`）。
 
 ## clear
 

@@ -83,7 +83,7 @@ MUST NOT 有 `disable-model-invocation`（FR-001：Claude MAY 主動使用）。
 24. 依功能順序，一次一個以 Skill 工具呼叫 `speckit-specify`，傳入該功能確認過的內容，延後事項要求寫在 Assumptions；
     每完成一個就把回報的資料夾寫入 `spec_dir` 並保存（字樣：`speckit-specify`、`spec_dir`、`Assumptions`）。
     `speckit-specify` 要澄清時，依摘要回答；摘要沒有答案時以一題詢問維護者並補進進度。
-25. MUST NOT 自己手寫 constitution 或 spec；MUST NOT 自行指定編號或修改 `.specify/feature.json`。
+25. MUST NOT 自己手寫 constitution 或 spec；MUST NOT 自行指定編號，也 MUST NOT 自己修改 `.specify/feature.json`（它只由腳本的 `focus` 寫入，見第 28 項）。
 
 ### 失敗（Edge Cases、FR-018）
 
@@ -92,10 +92,13 @@ MUST NOT 有 `disable-model-invocation`（FR-001：Claude MAY 主動使用）。
 ### 收尾（FR-017、FR-018）
 
 27. 執行 `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" verify`；失敗時依第 26 項處理。
-28. 通過後執行 `clear`。順序：`verify` 在 `clear` 之前。
-29. 依 `verify` 的輸出列出每份 spec 的位置、相依關係與建議順序；說明下一步是由維護者輸入 `/sdd-drive`；
-    然後停止，MUST NOT 開始 plan、tasks 或實作（字樣：`/sdd-drive`）。
-30. MUST NOT push。
+28. `verify` 通過後執行 `focus`，把 `.specify/feature.json` 指向這一批新 spec 中編號最小的一份（字樣：`focus`、`feature.json`）；
+    失敗時依第 26 項處理。順序：`verify` 在 `focus` 之前。
+29. `focus` 成功後執行 `clear`。順序：`focus` 在 `clear` 之前。
+30. 依 `verify` 的輸出列出每份 spec 的位置、相依關係與建議順序，並告訴維護者 `.specify/feature.json` 現在指向哪一份
+    （`focus` 輸出的 `feature_directory`）；說明下一步是由維護者輸入 `/sdd-drive`，也可依序以原生的 `/speckit-plan` 處理，
+    因為目前的功能已指向第一份；然後停止，MUST NOT 開始 plan、tasks 或實作（字樣：`/sdd-drive`）。
+31. MUST NOT push。
 
 內文 MUST NOT 含有中日韓文字、絕對路徑、信箱。
 
@@ -108,7 +111,8 @@ MUST 以繁體中文撰寫，並包含：
 - 流程：先原則、再功能清單、再逐一功能；確認摘要之前不寫入任何文件；確認後由 Spec Kit 產生；結束後下一步是 `/sdd-drive`。
 - 進度：位置 `.specify/sdd-grill/`、不入庫的方式（資料夾內自己的 `.gitignore`）、成功後清除、中途結束或失敗時保留、
   不記錄機密、「專案有變更」的偵測範圍與限制（未 commit 的程式碼變更不會被偵測）。
-- 不做的事：不覆蓋既有 spec、constitution 只在同意修訂時更動、不修改 `.specify/feature.json`、不開始 plan 或實作。
+- 收尾：產生完畢後把 `.specify/feature.json` 指向這一批新 spec 中編號最小的一份（這是它對 Spec Kit 檔案唯一的寫入）。
+- 不做的事：不覆蓋既有 spec、constitution 只在同意修訂時更動、不修改 `.specify/feature.json` 以外的 Spec Kit 檔案、不開始 plan 或實作。
 
 ## scripts/sdd_grill.py
 
