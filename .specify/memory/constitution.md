@@ -7,8 +7,11 @@ claude-settings 是個人化的 Claude Code 設定：全域 CLAUDE.md、一行�
 
 ### I. 只包裝、不修改 Spec Kit
 
-`.specify/` 與 `speckit-*` skill 一律由 Spec Kit 官方工具產生與更新。本專案的 skill 只呼叫它們，
-MUST NOT 手寫或修改這些檔案。
+- Spec Kit 的檔案（`.specify/` 內由它產生的檔案與 `speckit-*` skill）一律由 Spec Kit 官方工具產生與更新。
+  本專案的 skill 只呼叫它們，MUST NOT 手寫或修改這些檔案的內容。
+- 把官方工具產生的檔案原樣複製到專案，以及只在 git 的 index 記錄檔案模式而不改變檔案內容，不算修改。
+- 本專案的工具可以在 `.specify/` 內新增自己的檔案（例如導入紀錄）。這些檔案不是 Spec Kit 產生的，
+  不受上述限制；工具 MUST 記錄哪些檔案是自己建立的，讓它們與 Spec Kit 產生的檔案分得清楚。
 
 理由：專案要能持續更新 Spec Kit，不修改上游檔案才不會在更新時產生衝突或遺失修改。
 
@@ -50,4 +53,4 @@ MUST NOT 手寫或修改這些檔案。
 - 本 constitution 優先於其他開發慣例。
 - 修訂 MUST 經維護者確認，並更新版本號。
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-19
+**Version**: 1.0.1 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-20

@@ -162,6 +162,9 @@ Git: nothing was added to the index. <k> paths are uncommitted.
 Git: not a git repository, and none was created. Executable bits cannot be recorded until the files are added with: git add --chmod=+x .specify/scripts/bash/*.sh
 ```
 
+「已完整導入」指紀錄為 `complete`，且紀錄內 `origin` 不是 `sdd-update` 的檔案都存在；`origin` 為 `sdd-update` 的項目是
+004 sdd-update 建立的比對副本，維護者可以隨時刪除，不存在時不算缺少。
+
 已完整導入時只輸出摘要的第一行，不輸出 `Git:` 與下一步建議。
 「已完整導入，只補登執行權限」時輸出完整的四行摘要，見「補登執行權限」。
 
@@ -192,8 +195,8 @@ Git: not a git repository, and none was created. Executable bits cannot be recor
 
 | 情況 | 條件 | 行為 |
 |---|---|---|
-| (1) 補齊 | 紀錄為 `applying`，或紀錄內有檔案不存在 | 照常補齊；除了這次新建的 `.sh`，待補登的 `.sh` 也加入暫存區 |
-| (2) 只補登 | 紀錄為 `complete`、紀錄內的檔案都存在，且有待補登的 `.sh` | 只做補登：MUST NOT 連線、MUST NOT 執行官方工具、MUST NOT 建立或修改紀錄以外的任何檔案；MUST NOT 只回報 `is already initialized. Nothing changed.` |
+| (1) 補齊 | 紀錄為 `applying`，或紀錄內有檔案不存在（`origin` 為 `sdd-update` 的比對副本不算） | 照常補齊；除了這次新建的 `.sh`，待補登的 `.sh` 也加入暫存區 |
+| (2) 只補登 | 紀錄為 `complete`、紀錄內的檔案都存在（`origin` 為 `sdd-update` 的比對副本不要求存在），且有待補登的 `.sh` | 只做補登：MUST NOT 連線、MUST NOT 執行官方工具、MUST NOT 建立或修改紀錄以外的任何檔案；MUST NOT 只回報 `is already initialized. Nothing changed.` |
 
 情況 (1) 的輸出與摘要沿用「新導入或補齊」：`<n> created` 只算這次新建的檔案，補登的 `.sh` 不算；
 `Git:` 一行的 `<n> files were added to the index` 是這次實際加入暫存區的檔案數，包含新建與補登的 `.sh`。

@@ -4,9 +4,9 @@
 進行規格驅動開發的 skill。支援 Linux 與 Windows。
 
 > **目前狀態**：部署工具（spec 001）已合併進 `main`，Linux 與 Windows 的 CI 都通過，下方的指令已可使用。
-> `home/` 目前有全域 `CLAUDE.md`（spec 002）與 `sdd-init` skill（spec 003）。
-> `CLAUDE.md` 引用的其餘 5 個 skill（`sdd-update`、`sdd-grill`、`sdd-export`、`sdd-rebuild`、`sdd-drive`）
-> 由 spec 004 至 008 提供，完成前尚未安裝；此時 Claude 會回報 skill 不存在。
+> `home/` 目前有全域 `CLAUDE.md`（spec 002）、`sdd-init` skill（spec 003）與 `sdd-update` skill（spec 004）。
+> `CLAUDE.md` 引用的其餘 4 個 skill（`sdd-grill`、`sdd-export`、`sdd-rebuild`、`sdd-drive`）
+> 由 spec 005 至 008 提供，完成前尚未安裝；此時 Claude 會回報 skill 不存在。
 
 ## 安裝與更新
 
@@ -66,6 +66,19 @@ curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tool
 前置需求是 `uv`、`git`、`bash` 都在 `PATH` 上，並且可以連線到 PyPI。Windows 的 `bash` 是隨 Git for Windows 安裝的 Git Bash。
 在任一平台導入並提交的專案，在另一個平台 clone 後不需要重新導入。細節見
 [home/skills/sdd-init/README.md](home/skills/sdd-init/README.md)。
+
+## 更新專案的 Spec Kit
+
+| 指令 | 作用 |
+|---|---|
+| `/sdd-update` | 把 `/sdd-init` 導入的 Spec Kit 更新到當下最新的穩定版；沒有參數，不能指定版本或降版 |
+
+沒有被修改的 Spec Kit 檔案會換成新版，新版新增的檔案會被建立，不再提供的會被移除；
+你改過的檔案保留不動，新版內容另存在 `.specify/sdd-update/<原路徑>.new` 供比對。
+`.specify/memory/`（constitution）與 `specs/` 永遠不動。已是最新穩定版時不產生任何異動。
+
+前置需求：專案已由 `/sdd-init` 導入；`uv`、`git`、`bash` 都在 `PATH` 上（Windows 的 `bash` 是 Git Bash）；
+可以連線到 PyPI。細節見 [home/skills/sdd-update/README.md](home/skills/sdd-update/README.md)。
 
 ## 部署工具的結束碼
 
