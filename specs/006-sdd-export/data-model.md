@@ -358,7 +358,7 @@
 | 6 | `discard-lost` | L 的 `discarded`，以及 N 中 `discarded_in` 小於 `generation` 的捨棄紀錄，都原樣出現在草稿的 `discarded` |
 | 7 | `discarded-active` | `discarded` 中的 `id` 不是有效項目 |
 | 8 | `derived-unknown` | `derived_from` 中的每個 `id` 出現在 L 或 N（含其 `discarded`），或已出現在 L、N 中同一項目的 `derived_from`（沿用前代記下的來源，那些 `id` 屬於更早的世代，不在 L 中） |
-| 9 | `id-reused` | `origin` 等於 `generation` 的項目，`id` 不與 L 中任何項目（含 `discarded`）相同 |
+| 9 | `id-reused` | `origin` 等於 `generation` 的項目，`id` 不與 L 中任何項目（含 `discarded`）相同。L 中同 `id`、同種類、`origin` 也等於這一代的有效項目（重建時新增、合併或拆分而建立的項目）視為沿用，不算重用；違反的情況是 `id` 與 L 的 `discarded` 相同，或與 L 中 `origin` 不等於這一代（或種類不同）的有效項目相同 |
 
 ## 驗證規則（`validate`）
 

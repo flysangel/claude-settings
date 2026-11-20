@@ -2736,3 +2736,59 @@ def test_unchanged_export_has_an_empty_diff(sdd_export, tmp_path):
     diff = validate(sdd_export, root, full_draft()).out["diff"]
 
     assert (diff["added"], diff["removed"], diff["changed"], diff["generation"], diff["scope"]) == ([], [], [], None, None)
+
+
+def rebuilt_lineage() -> dict:
+    """lineage_record() plus a feature the rebuild itself added: origin 2, the lineage's own generation."""
+    record = lineage_record()
+    record["features"].append({
+        "id": "report", "origin": 2, "title": "差異報告", "summary": "維護者可以看到差異。", "revised": [],
+        "derived_from": [], "source": "rebuild", "spec_dir": "specs/002-report", "spec": None, "depends_on": ["deploy"],
+        "requirements": [{"id": "report-diff", "origin": 2, "kind": "functional", "text": "列出差異。", "revised": [],
+                          "derived_from": [], "source": "rebuild"}],
+    })
+    return record
+
+
+def report_feature(**extra) -> dict:
+    item = feature("report", origin=2, source="spec", spec="specs/002-report/spec.md", depends_on=["deploy"],
+                   title="差異報告", summary="維護者可以看到差異。",
+                   requirements=[requirement("report-diff", origin=2, text="列出差異。", source="spec",
+                                             evidence=["specs/002-report/spec.md"])])
+    item.update(extra)
+    return item
+
+
+def test_rule_9_items_the_rebuild_created_are_kept_not_reused(sdd_export, tmp_path):
+    root = lineage_project(tmp_path, rebuilt_lineage(), specs={"001-deploy": SPEC_TEXT, "002-report": SPEC_TEXT})
+    data = gen2_draft()
+    data["features"].append(report_feature())
+    result = validate(sdd_export, root, data)
+
+    assert result.code == 0, result.out["errors"]
+    assert result.out["counts"]["new"] == 2
+
+
+@pytest.mark.parametrize("case", ["discarded", "earlier-generation", "other-kind"])
+def test_rule_9_real_reuse_is_refused(sdd_export, tmp_path, case):
+    root = lineage_project(tmp_path, rebuilt_lineage(), specs={"001-deploy": SPEC_TEXT, "002-report": SPEC_TEXT})
+    data = gen2_draft()
+    data["features"].append(report_feature())
+    if case == "discarded":
+        data["principles"] = [principle("deploy-symlink", origin=2)]
+        path = "principles[0].id"
+    elif case == "earlier-generation":
+        # deploy-one is a generation-1 requirement of the lineage; a new item may not take its id
+        data["features"][0]["requirements"] = [requirement("deploy-one", origin=2, source="spec",
+                                                           evidence=["specs/001-deploy/spec.md"])]
+        path = "features[0].requirements[0].id"
+    else:
+        # report is a feature of the lineage; a new lesson may not take its id
+        data["features"] = data["features"][:1]
+        data["lessons"].append(lesson("report", origin=2))
+        data["discarded"].append(discarded("report-diff", kind="requirement", origin=2, discarded_in=2))
+        path = "lessons[1].id"
+
+    errors = rule_errors(sdd_export, root, data, "id-reused")
+
+    assert [e["path"] for e in errors] == [path]
