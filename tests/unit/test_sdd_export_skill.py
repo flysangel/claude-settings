@@ -913,7 +913,8 @@ def test_readme_usage_and_prerequisites():
 def test_readme_flow():
     readme = text(README_MD)
 
-    order = [readme.index(word) for word in ("只讀", "草稿", "逐項", "確認", "寫入")]
+    flow = readme[readme.index("## 流程"):]
+    order = [flow.index(word) for word in ("只讀", "**草稿", "**逐項", "**確認", "**寫入")]
     assert order == sorted(order), order
     assert "中途" in readme and "不會留下" in readme
 
