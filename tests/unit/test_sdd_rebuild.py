@@ -937,11 +937,13 @@ def test_check_same_or_nested_projects(sdd_rebuild, tmp_path, sdd_export):
     assert same.out["export_dir"] is None  # the old project is not read at all
 
 
-@pytest.mark.skipif(not hasattr(os, "symlink") or sys.platform == "win32", reason="symbolic links")
 def test_check_same_project_through_a_symbolic_link(sdd_rebuild, tmp_path):
     new = make_rebuild_new(tmp_path)
     link = tmp_path / "link"
-    link.symlink_to(new, target_is_directory=True)
+    try:
+        link.symlink_to(new, target_is_directory=True)
+    except (OSError, NotImplementedError) as error:  # Windows without the right to create links
+        pytest.skip(f"cannot create a symbolic link here: {error}")
     result = check(sdd_rebuild, new, link)
 
     assert result.out["reason"] == "same-project"
@@ -955,8 +957,16 @@ def test_check_same_project_written_differently(sdd_rebuild, tmp_path):
     assert result.out["reason"] == "same-project"
 
 
-def test_paths_compare_without_case_on_windows(sdd_rebuild, tmp_path, monkeypatch):
-    # A stand-in for Windows: two folders whose names differ only in case are the same folder there.
+def folders_ignore_case(root: Path) -> bool:
+    """Whether the file system under root treats Proj and proj as one folder (Windows, usually macOS)."""
+    (root / "CaseProbe").mkdir()
+    return (root / "caseprobe").exists()
+
+
+def test_paths_compare_without_case_when_told_to(sdd_rebuild, tmp_path, monkeypatch):
+    # A stand-in for Windows on a file system that tells the two folders apart.
+    if folders_ignore_case(tmp_path):
+        pytest.skip("this file system ignores case; test_paths_compare_without_case_on_a_real_windows_folder covers it")
     upper, lower = tmp_path / "Proj", tmp_path / "proj"
     upper.mkdir()
     lower.mkdir()
@@ -967,6 +977,27 @@ def test_paths_compare_without_case_on_windows(sdd_rebuild, tmp_path, monkeypatc
     assert sdd_rebuild.relation(lower, tmp_path / "PROJ" / "sub") == "old-inside-new"
     monkeypatch.setattr(sdd_rebuild, "fold_case", lambda: False)
     assert sdd_rebuild.relation(lower, upper) == "ok"
+
+
+def test_paths_compare_without_case_on_a_real_windows_folder(sdd_rebuild, tmp_path):
+    # No stand-in: one real folder written with different case, only where the product folds case (Windows).
+    if not (sdd_rebuild.fold_case() and folders_ignore_case(tmp_path)):
+        pytest.skip("needs Windows and a case-insensitive file system")
+    real = tmp_path / "Proj"
+    (real / "Sub").mkdir(parents=True)
+    other = tmp_path / "other"
+    other.mkdir()
+    shouted = Path(str(real).upper())
+    quiet = Path(str(real).lower())
+
+    assert sdd_rebuild.relation(real, shouted) == "same"
+    assert sdd_rebuild.relation(quiet, shouted) == "same"
+    assert sdd_rebuild.relation(Path(str(real) + os.sep), quiet) == "same"
+    assert sdd_rebuild.relation(real / ".." / "Proj", quiet) == "same"
+    assert sdd_rebuild.relation(quiet, shouted / "SUB") == "old-inside-new"
+    assert sdd_rebuild.relation(shouted / "SUB", quiet) == "new-inside-old"
+    assert sdd_rebuild.relation(quiet, other) == "ok"
+    assert sdd_rebuild.path_key(shouted) == sdd_rebuild.path_key(quiet)
 
 
 def test_check_accepts_a_relative_old_path(sdd_rebuild, tmp_path, sdd_export):
