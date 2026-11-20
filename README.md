@@ -3,9 +3,10 @@
 個人化的 Claude Code 設定：一份全域 `CLAUDE.md`，加上以 [Spec Kit](https://github.com/github/spec-kit)
 進行規格驅動開發的 skill。支援 Linux 與 Windows。
 
-> **目前狀態**：部署工具（spec 001）已實作，Linux 與 Windows 的 CI 都通過。
-> `home/` 的實際內容（`CLAUDE.md` 與各個 skill）由後續的 spec 002 至 008 提供。
-> 在部署工具合併進 `main` 之前，下方的指令還無法使用。
+> **目前狀態**：部署工具（spec 001）已合併進 `main`，Linux 與 Windows 的 CI 都通過，下方的指令已可使用。
+> `home/` 目前只有全域 `CLAUDE.md`（spec 002），內容是溝通、Git 與規格驅動開發三段偏好。
+> 其中引用的 6 個 skill（`sdd-init`、`sdd-update`、`sdd-grill`、`sdd-export`、`sdd-rebuild`、`sdd-drive`）
+> 由 spec 003 至 008 提供，完成前尚未安裝；此時 Claude 會回報 skill 不存在。
 
 ## 安裝與更新
 
