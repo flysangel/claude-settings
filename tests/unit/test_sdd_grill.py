@@ -1492,3 +1492,26 @@ def test_timestamp_numbering_in_an_existing_project(sdd_grill, grill_project):
     )
     generated(sdd_grill, other, [feature("update")], {"update": good[0]}, action="keep")
     assert failures(run_grill(sdd_grill, other, "verify")) == ["order"]
+
+
+# ======================================================== the real process
+
+
+def test_real_run_writes_utf8_lf_json(grill_project, tmp_path):
+    from conftest import real_run_env, run_grill_real
+
+    root = grill_project()
+    env = real_run_env(tmp_path / "fake-home")
+    progress = json.dumps(minimal_progress(requirement="記帳工具，要簡單"), ensure_ascii=False)
+
+    saved = run_grill_real(root, env, "save", stdin=progress)
+    checked = run_grill_real(root, env, "check")
+    usage = run_grill_real(root, env)
+
+    assert saved.returncode == 0, saved.stderr
+    assert checked.returncode == 0, checked.stderr
+    for raw in (saved.stdout, checked.stdout):
+        assert b"\r" not in raw and raw.endswith(b"}\n")
+    assert json.loads(checked.stdout.decode("utf-8"))["saved"]["requirement"] == "記帳工具，要簡單"
+    assert "記帳工具".encode("utf-8") in checked.stdout
+    assert usage.returncode == 1 and b"usage" in usage.stderr
