@@ -647,6 +647,8 @@ def test_missing_tools_are_all_listed_and_nothing_is_written(runner, sdd_init, m
     root = make_project(git=False)
     write_tree(root, {"keep.txt": "x"})
     before = snap(root, with_mtime=True)
+    # Pinned to the non-Windows wording; the Windows wording is covered further down.
+    monkeypatch.setattr(sdd_init, "is_windows", lambda: False)
     monkeypatch.setattr(sdd_init, "find_tool", lambda name: None if name in missing else f"/bin/{name}")
 
     code, out, err = runner.run(root, "init")
@@ -1052,3 +1054,282 @@ def test_remove_refuses_records_with_paths_outside_spec_kit(runner, sdd_init, ma
     assert ".specify/sdd-init.json" in err
     assert snap(root, with_mtime=True) == before
     assert (root.parent / "x").read_bytes() == b"keep\n"
+
+
+# ============================================ Windows: only Git Bash counts
+#
+# Simulated on any platform: is_windows() is forced to True, PATH points at
+# made-up installations under tmp_path, and ask_git() answers from a table
+# instead of running the made-up git. No bash.exe is ever executed.
+
+MISSING_SUMMARY = "Missing required tools. Nothing was created. Install them and run /sdd-init again."
+MISSING_GIT_BASH = line("missing", "bash (Git Bash, included with Git for Windows)")
+GFW_VERSION = "git version 2.47.1.windows.2"
+PLAIN_VERSION = "git version 2.47.1"
+
+
+def tool_file(directory: Path, name: str) -> Path:
+    """Create something shutil.which() accepts as the command `name` on this platform."""
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (name + ".exe" if os.name == "nt" else name)
+    path.write_bytes(b"")
+    path.chmod(0o755)
+    return path
+
+
+def bash_exe(directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "bash.exe"
+    path.write_bytes(b"")
+    path.chmod(0o755)
+    return path
+
+
+class Machine:
+    """A made-up Windows machine: directories on PATH and what each git answers."""
+
+    def __init__(self, base: Path, module, monkeypatch):
+        self.base = base
+        self.module = module
+        self.monkeypatch = monkeypatch
+        self.path: list[Path] = []
+        self.answers: dict[str, dict[str, str]] = {}
+        self.asked: list[tuple[str, str]] = []
+        monkeypatch.setattr(module, "is_windows", lambda: True)
+        monkeypatch.setattr(module, "ask_git", self.ask)
+
+    def ask(self, git_path, argument):
+        self.asked.append((str(git_path), argument))
+        return self.answers.get(os.path.normcase(str(git_path)), {}).get(argument)
+
+    def apply(self) -> None:
+        self.monkeypatch.setenv("PATH", os.pathsep.join(str(p) for p in self.path))
+
+    def add_uv(self) -> None:
+        tool_file(self.base / "uv-bin", "uv")
+        self.path.append(self.base / "uv-bin")
+        self.apply()
+
+    def add_wsl_launcher(self) -> Path:
+        """C:\\Windows\\System32\\bash.exe: on PATH, but not Git Bash."""
+        launcher = bash_exe(self.base / "Windows" / "System32")
+        self.path.append(launcher.parent)
+        self.apply()
+        return launcher
+
+    def add_git_for_windows(self, where: str = "Program Files/Git", bash: str | None = "bin") -> Path:
+        """A Git for Windows layout at any location; returns its root."""
+        root = self.base / where
+        exec_path = root / "mingw64" / "libexec" / "git-core"
+        exec_path.mkdir(parents=True)
+        if bash is not None:
+            bash_exe(root / bash)
+        git = tool_file(root / "cmd", "git")
+        self.answers[os.path.normcase(str(git))] = {"--version": GFW_VERSION, "--exec-path": exec_path.as_posix()}
+        self.path.append(git.parent)
+        self.apply()
+        return root
+
+    def add_other_git(self, where: str = "msys64") -> Path:
+        """A git that is not Git for Windows, with its own bash next to it."""
+        root = self.base / where
+        (root / "usr" / "lib" / "git-core").mkdir(parents=True)
+        bash_exe(root / "usr" / "bin")
+        git = tool_file(root / "usr" / "bin", "git")
+        self.answers[os.path.normcase(str(git))] = {
+            "--version": PLAIN_VERSION,
+            "--exec-path": (root / "usr" / "lib" / "git-core").as_posix(),
+        }
+        self.path.append(git.parent)
+        self.apply()
+        return root
+
+
+@pytest.fixture
+def machine(sdd_init, tmp_path, monkeypatch):
+    base = tmp_path / "machine"
+    base.mkdir()
+    return Machine(base, sdd_init, monkeypatch)  # PATH is replaced by the first add_*()
+
+
+def same_file(found, expected: Path) -> bool:
+    return found is not None and os.path.samefile(found, expected)
+
+
+def test_windows_git_bash_alone_is_found(sdd_init, machine):
+    root = machine.add_git_for_windows()
+
+    assert same_file(sdd_init.find_tool("bash"), root / "bin" / "bash.exe")
+
+
+def test_windows_wsl_launcher_ahead_on_path_does_not_hide_git_bash(sdd_init, machine):
+    launcher = machine.add_wsl_launcher()
+    root = machine.add_git_for_windows()
+
+    found = sdd_init.find_tool("bash")
+
+    assert same_file(found, root / "bin" / "bash.exe")
+    assert not os.path.samefile(found, launcher)
+
+
+def test_windows_wsl_launcher_behind_on_path_changes_nothing(sdd_init, machine):
+    root = machine.add_git_for_windows()
+    machine.add_wsl_launcher()
+
+    assert same_file(sdd_init.find_tool("bash"), root / "bin" / "bash.exe")
+
+
+@pytest.mark.parametrize("where", ["scoop/apps/git/current", "D/tools/PortableGit", "odd place/with spaces/G"])
+def test_windows_git_bash_is_found_wherever_git_is_installed(sdd_init, machine, where):
+    machine.add_wsl_launcher()
+    root = machine.add_git_for_windows(where=where)
+
+    assert same_file(sdd_init.find_tool("bash"), root / "bin" / "bash.exe")
+
+
+def test_windows_git_bash_under_usr_bin_is_accepted(sdd_init, machine):
+    root = machine.add_git_for_windows(bash="usr/bin")
+
+    assert same_file(sdd_init.find_tool("bash"), root / "usr" / "bin" / "bash.exe")
+
+
+def test_windows_a_later_git_for_windows_is_used_when_the_first_git_is_another_one(sdd_init, machine):
+    machine.add_other_git()
+    root = machine.add_git_for_windows()
+
+    assert same_file(sdd_init.find_tool("bash"), root / "bin" / "bash.exe")
+
+
+def test_windows_wsl_launcher_alone_is_not_bash(sdd_init, machine):
+    machine.add_wsl_launcher()
+
+    assert sdd_init.find_tool("bash") is None
+    assert machine.asked == [], "there is no git to ask"
+
+
+def test_windows_bash_of_a_git_that_is_not_git_for_windows_is_not_accepted(sdd_init, machine):
+    machine.add_wsl_launcher()
+    machine.add_other_git()
+
+    assert sdd_init.find_tool("bash") is None
+    assert [argument for _git, argument in machine.asked] == ["--version"]
+
+
+def test_windows_git_for_windows_without_bash_is_not_accepted(sdd_init, machine):
+    machine.add_wsl_launcher()
+    machine.add_git_for_windows(bash=None)
+
+    assert sdd_init.find_tool("bash") is None
+
+
+def test_windows_git_that_does_not_answer_is_not_accepted(sdd_init, machine):
+    root = machine.add_git_for_windows()
+    machine.answers.clear()
+
+    assert sdd_init.find_tool("bash") is None
+    assert (root / "bin" / "bash.exe").is_file()
+
+
+def test_windows_other_tools_are_still_looked_up_on_path(sdd_init, machine):
+    machine.add_uv()
+
+    assert sdd_init.find_tool("uv") is not None
+    assert sdd_init.find_tool("git") is None
+
+
+def test_ask_git_ignores_git_exec_path_from_the_environment(sdd_init, monkeypatch, tmp_path):
+    import shutil
+
+    real = shutil.which("git")
+    expected = subprocess.run([real, "--exec-path"], capture_output=True, text=True, check=True).stdout.strip()
+    monkeypatch.setenv("GIT_EXEC_PATH", str(tmp_path / "elsewhere"))
+
+    assert sdd_init.ask_git(real, "--exec-path") == expected
+    assert sdd_init.ask_git(real, "--version").startswith("git version ")
+    assert sdd_init.ask_git(str(tmp_path / "no-such-git"), "--version") is None
+
+
+def test_non_windows_bash_is_whatever_is_on_path(sdd_init, monkeypatch, tmp_path):
+    monkeypatch.setattr(sdd_init, "is_windows", lambda: False)
+    monkeypatch.setattr(sdd_init, "ask_git", lambda *a: pytest.fail("git must not be asked outside Windows"))
+    here = tool_file(tmp_path / "bin", "bash")
+    monkeypatch.setenv("PATH", str(here.parent))
+
+    assert same_file(sdd_init.find_tool("bash"), here)
+
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    assert sdd_init.find_tool("bash") is None
+
+
+WINDOWS_WITHOUT_GIT_BASH = {
+    "wsl launcher only, no git": (["wsl"], ["bash", "git"]),
+    "wsl launcher and a git that is not Git for Windows": (["wsl", "other"], ["bash"]),
+    "Git for Windows without bash, wsl launcher ahead": (["wsl", "gfw-no-bash"], ["bash"]),
+    "neither": ([], ["bash", "git"]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(WINDOWS_WITHOUT_GIT_BASH))
+def test_windows_without_git_bash_exits_3_and_writes_nothing(runner, machine, make_project, name):
+    parts, missing = WINDOWS_WITHOUT_GIT_BASH[name]
+    root = make_project(git=False)
+    write_tree(root, {"keep.txt": "x"})
+    before = snap(root, with_mtime=True)
+    machine.add_uv()
+    for part in parts:
+        if part == "wsl":
+            machine.add_wsl_launcher()
+        elif part == "other":
+            machine.add_other_git()
+        else:
+            machine.add_git_for_windows(bash=None)
+
+    code, out, err = runner.run(root, "init")
+
+    assert code == 3
+    expected = {"bash": MISSING_GIT_BASH, "git": line("missing", "git")}
+    assert out == [expected[tool] for tool in missing] + [MISSING_SUMMARY]
+    assert f"error: required tools are missing: {', '.join(missing)}" in err
+    assert "Git for Windows" in err and "WSL" in err
+    assert "install" in err.lower()
+    assert snap(root, with_mtime=True) == before
+    assert runner.version_calls == 0 and runner.official_versions == []
+
+
+def test_windows_missing_uv_only_keeps_the_plain_wording(runner, machine, make_project):
+    root = make_project(git=False)
+    machine.add_wsl_launcher()
+    machine.add_git_for_windows()
+
+    code, out, err = runner.run(root, "init")
+
+    assert code == 3
+    assert out == [line("missing", "uv"), MISSING_SUMMARY]
+    assert "WSL" not in err
+    assert snap(root) == {}
+
+
+def test_windows_with_git_bash_behind_the_wsl_launcher_initializes(runner, sdd_init, machine, make_project, monkeypatch):
+    """Whole run: the real git and uv stay in use, only the questions to git are answered by the table."""
+    import shutil
+
+    root = make_project(git=True)
+    real_path = os.environ["PATH"]
+    install = machine.base / "Git"
+    (install / "mingw64" / "libexec" / "git-core").mkdir(parents=True)
+    bash_exe(install / "bin")
+    launcher = machine.add_wsl_launcher()
+    monkeypatch.setenv("PATH", os.pathsep.join([str(launcher.parent), real_path]))
+    real_git = shutil.which("git")
+    assert real_git, "the test machine needs git"
+    machine.answers[os.path.normcase(real_git)] = {
+        "--version": GFW_VERSION,
+        "--exec-path": (install / "mingw64" / "libexec" / "git-core").as_posix(),
+    }
+    assert same_file(sdd_init.find_tool("bash"), install / "bin" / "bash.exe")
+
+    code, out, _err = runner.run(root, "init")
+
+    assert code == 0
+    assert of(out, "missing") == []
+    assert out[-4] == f"Spec Kit {FAKE_VERSION} initialized: {len(ALL_CREATED)} created, 0 skipped."

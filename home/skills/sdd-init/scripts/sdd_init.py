@@ -35,6 +35,11 @@ EXIT_UNAVAILABLE = 4
 USAGE = "usage: sdd_init.py {init|remove}"
 
 REQUIRED_TOOLS = ("bash", "git", "uv")
+GIT_BASH_NOTE = "Git Bash, included with Git for Windows"
+GIT_BASH_HELP = (
+    "No Git Bash was found: install Git for Windows and make sure its git is on PATH. "
+    "The bash.exe that starts WSL is not accepted, and neither is the bash of any other git."
+)
 PYPI_URL = "https://pypi.org/pypi/specify-cli/json"
 PACKAGE = "specify-cli"
 INIT_OPTIONS = {"integration": "claude", "script": "sh"}
@@ -99,8 +104,63 @@ def error(*lines: str) -> None:
 # ------------------------------------------------------- project root, git
 
 
+def is_windows() -> bool:
+    return os.name == "nt"
+
+
 def find_tool(name: str) -> str | None:
+    """Where a required tool is, or None. On Windows, bash means Git Bash only."""
+    if name == "bash" and is_windows():
+        return find_git_bash()
     return shutil.which(name)
+
+
+def tools_on_path(name: str) -> list[str]:
+    """Every executable called name on PATH, in PATH order, not just the first."""
+    found, seen = [], set()
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        hit = shutil.which(name, path=directory) if directory else None
+        if hit and os.path.normcase(hit) not in seen:
+            seen.add(os.path.normcase(hit))
+            found.append(hit)
+    return found
+
+
+def ask_git(git_path: str, argument: str) -> str | None:
+    """The one-line answer of `<git_path> <argument>`, or None when it gives none."""
+    env = dict(os.environ)
+    env.pop("GIT_EXEC_PATH", None)  # it would replace the answer to --exec-path
+    try:
+        done = subprocess.run(
+            [git_path, argument], env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return _text(done.stdout).strip() or None
+
+
+def find_git_bash() -> str | None:
+    """The bash.exe that ships with a Git for Windows whose git is on PATH, or None.
+
+    A bash.exe on PATH proves nothing: it may be the WSL launcher. So PATH is
+    only used to find git; a git whose version says ".windows." is Git for
+    Windows, and its bash.exe sits above the directory git reports as its
+    exec path. No bash.exe is run.
+    """
+    for git_path in tools_on_path("git"):
+        if ".windows." not in (ask_git(git_path, "--version") or ""):
+            continue
+        exec_path = ask_git(git_path, "--exec-path")
+        if not exec_path:
+            continue
+        for parent in Path(exec_path).parents:
+            for relative in ("bin", "usr/bin"):
+                candidate = parent / relative / "bash.exe"
+                if candidate.is_file():
+                    return str(candidate)
+    return None
 
 
 def git(cwd: Path, *args: str) -> subprocess.CompletedProcess | None:
@@ -448,13 +508,15 @@ def _blocked_parent(root: Path, path: str) -> str | None:
 def cmd_init(resolve_version, run_official) -> int:
     missing = sorted(name for name in REQUIRED_TOOLS if find_tool(name) is None)
     if missing:
+        git_bash_missing = "bash" in missing and is_windows()
         for name in missing:
-            emit("missing", name)
+            emit("missing", f"{name} ({GIT_BASH_NOTE})" if name == "bash" and git_bash_missing else name)
         print("Missing required tools. Nothing was created. Install them and run /sdd-init again.")
         error(
             f"error: required tools are missing: {', '.join(missing)}",
             "Install them, make sure they are on PATH, then run /sdd-init again. "
             "On Windows, bash is Git Bash, which comes with Git for Windows.",
+            GIT_BASH_HELP if git_bash_missing else "",
         )
         return EXIT_MISSING_TOOLS
 
