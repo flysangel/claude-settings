@@ -137,7 +137,8 @@ stdout 只有一行摘要（缺少工具時前面另有 `missing` 行）；原�
 | 找不到相鄰的 sdd-init | 1 | `Spec Kit was not updated: the sdd-init skill is not installed next to sdd-update. Nothing was changed.` |
 
 「紀錄無法使用」涵蓋無法解析、`schema` 不認得、欄位不合規則與路徑違反規則；stderr 的第一行寫出具體原因，
-文字沿用 003 的 init（`error: .specify/sdd-init.json is not a record this version of … can use: <原因>.`）。
+文字沿用 003 的 init，名稱寫 `sdd-update`（實作時定案）：
+`error: .specify/sdd-init.json is not a record this version of sdd-update can use: <原因>.`
 
 「比對副本的路徑有衝突」的 `<路徑>` 是第一個（依路徑排序）擋住寫入的路徑：要寫入比對副本的位置上有不在紀錄內的檔案，
 或要建立的檔案的某個上層路徑存在但不是目錄。

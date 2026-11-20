@@ -1504,3 +1504,42 @@ def test_output_and_record_do_not_depend_on_the_directory(runner, old_project, g
     assert (first / RECORD).read_bytes() == (second / RECORD).read_bytes()
     assert "\\" not in "\n".join(out_first)
     assert b"\\" not in (first / RECORD).read_bytes()
+
+
+# ============= plan.md trade-off 10: a new release between an interrupted update and the next run
+
+
+def test_files_replaced_before_an_interruption_are_kept_if_a_newer_release_appears(runner, sdd_update, old_project, monkeypatch):
+    root = old_project(git=False)
+    real = sdd_update.replace_file
+    calls = {"n": 0}
+
+    def failing(source, target):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk full")
+        return real(source, target)
+
+    monkeypatch.setattr(sdd_update, "replace_file", failing)
+    assert runner.run(root)[0] == 1
+    replaced = [p for p in UPDATED if (root / p).read_bytes() == NEW[p].encode()]
+    assert len(replaced) == 1
+    monkeypatch.setattr(sdd_update, "replace_file", real)
+
+    # 1.2.0 changes every file again.
+    def official_120(version, dest):
+        write_versioned_official_output(Path(dest), version)
+        for path in UPDATED:
+            if path != ".specify/init-options.json":
+                (Path(dest) / path).write_bytes(NEW[path].encode() + b"# 1.2.0\n")
+
+    monkeypatch.setattr(runner, "official", official_120)
+    runner.latest = "1.2.0"
+
+    code, out, _ = runner.run(root)
+
+    # Safe, but the file replaced by the interrupted run now needs a manual comparison.
+    assert code == 0
+    assert of(out, "kept") == [kept_modified(p) for p in replaced]
+    assert (root / replaced[0]).read_bytes() == NEW[replaced[0]].encode()
+    assert out[0].startswith("updated ") and out[-1] == NEXT

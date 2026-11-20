@@ -161,9 +161,9 @@ plan.md「需要維護者注意的取捨」的 10 項已由維護者全部核可
 **Purpose**: 文件、實跑驗證與 CI
 
 - [X] T043 [P] 更新 `README.md`（繁體中文）：「目前狀態」加入 `sdd-update` 已提供，並加入 `/sdd-update` 的簡短說明與前置需求（`uv`、`git`、`bash`，Windows 的 `bash` 是 Git Bash；專案已由 `/sdd-init` 導入）；只改與本功能有關的敘述
-- [ ] T044 依 `specs/004-sdd-update/quickstart.md`「手動情境（腳本）」的 9 個情境，在 `mktemp -d` 建立的暫存目錄逐一實跑 `uv run <repo>/home/skills/sdd-update/scripts/sdd_update.py`，並修正與預期不符之處；每個情境用新的暫存目錄，「以舊版導入」依 quickstart 的方式以 `sdd_init.main(['init'], resolve_version=lambda: '1.2.6')` 準備；MUST NOT 在這個 repo 的目錄或真正的 `~/.claude` 執行，MUST NOT 在這個 repo 自己的 `.specify/` 執行 sdd-init 或 sdd-update。情境 8（無法取得版本）只在能夠只對該次執行隔離網路時實跑（例如 Linux 的 `unshare -rn`），MUST NOT 中斷整台機器的網路，也 MUST NOT 為此在腳本加入環境變數或隱藏選項；無法隔離時在回報中註明未實跑，該行為由 T015 的測試涵蓋
-- [ ] T045 執行完整測試 `uv run --with pytest pytest`（含 `network`）與 `uv run --with pytest pytest -m "not network"`，兩者全部通過；`tests/e2e/test_cross_platform.py` 與 `tests/e2e/test_cross_platform_update.py` 在本機跳過是預期的；確認 003 的既有測試（T001 記下的數量）沒有失敗或被刪除，`git status` 中這個 repo 既有的 `.specify/` 檔案都沒有被這次的工作更動
-- [ ] T046 確認 plan.md「需要維護者注意的取捨」的 10 項在實作與測試中都有對應：逐項列出對應的任務或測試（例如第 1、2 項對應 T033，第 3 項對應 T003 至 T007，第 4 項對應 T032，第 5 至 8 項對應 T031，第 9 項對應 T020，第 10 項對應 T018 的說明），缺漏的補上測試；不改動 plan.md
+- [X] T044 依 `specs/004-sdd-update/quickstart.md`「手動情境（腳本）」的 9 個情境，在 `mktemp -d` 建立的暫存目錄逐一實跑 `uv run <repo>/home/skills/sdd-update/scripts/sdd_update.py`，並修正與預期不符之處；每個情境用新的暫存目錄，「以舊版導入」依 quickstart 的方式以 `sdd_init.main(['init'], resolve_version=lambda: '1.2.6')` 準備；MUST NOT 在這個 repo 的目錄或真正的 `~/.claude` 執行，MUST NOT 在這個 repo 自己的 `.specify/` 執行 sdd-init 或 sdd-update。情境 8（無法取得版本）只在能夠只對該次執行隔離網路時實跑（例如 Linux 的 `unshare -rn`），MUST NOT 中斷整台機器的網路，也 MUST NOT 為此在腳本加入環境變數或隱藏選項；無法隔離時在回報中註明未實跑，該行為由 T015 的測試涵蓋
+- [X] T045 執行完整測試 `uv run --with pytest pytest`（含 `network`）與 `uv run --with pytest pytest -m "not network"`，兩者全部通過；`tests/e2e/test_cross_platform.py` 與 `tests/e2e/test_cross_platform_update.py` 在本機跳過是預期的；確認 003 的既有測試（T001 記下的數量）沒有失敗或被刪除，`git status` 中這個 repo 既有的 `.specify/` 檔案都沒有被這次的工作更動
+- [X] T046 確認 plan.md「需要維護者注意的取捨」的 10 項在實作與測試中都有對應：逐項列出對應的任務或測試（例如第 1、2 項對應 T033，第 3 項對應 T003 至 T007，第 4 項對應 T032，第 5 至 8 項對應 T031，第 9 項對應 T020，第 10 項對應 T018 的說明），缺漏的補上測試；不改動 plan.md
 - [ ] T047 **由主代理在推送後處理，實作的 worker 不執行這一項、不 push**：推送分支後確認 `.github/workflows/ci.yml` 的 `test`、`cross-platform-produce`、`cross-platform` 三個 job 在 `ubuntu-latest` 與 `windows-latest` 都通過（共六個結果）；Windows 與跨平台的行為以 CI 結果為準，失敗時依紀錄修正後再確認
 
 ---
