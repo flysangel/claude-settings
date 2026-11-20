@@ -443,3 +443,131 @@ def run_grill_real(root: Path, env: dict[str, str], *argv: str, stdin: str | Non
         input=(stdin or "").encode("utf-8"),
         capture_output=True,
     )
+
+
+# -------------------------------------------------------------- sdd-export
+
+SDD_EXPORT_PY = REPO_ROOT / "home" / "skills" / "sdd-export" / "scripts" / "sdd_export.py"
+
+
+def _load_sdd_export():
+    spec = importlib.util.spec_from_file_location("sdd_export", SDD_EXPORT_PY)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["sdd_export"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="session")
+def sdd_export():
+    return _load_sdd_export()
+
+
+@pytest.fixture
+def export_env(tmp_path, monkeypatch):
+    """HOME and USERPROFILE point at a temporary folder; global and system git settings are ignored.
+
+    Not autouse for the whole suite (that would change the other features' tests); the sdd-export
+    test modules turn it on for every test they hold.
+    """
+    home = tmp_path / "fake-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    empty = home / "empty-gitconfig"
+    empty.write_bytes(b"")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    for variable in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        monkeypatch.delenv(variable, raising=False)
+    return home
+
+
+def make_old_project(
+    parent: Path,
+    name: str = "my-tool",
+    *,
+    git: bool = False,
+    constitution: str | None = None,
+    specs: dict[str, str] | None = None,
+    files: dict[str, str | bytes] | None = None,
+) -> Path:
+    """A fake old project: optionally a git repository, a constitution, specs/<name>/spec.md and any files."""
+    root = parent / name
+    root.mkdir(parents=True)
+    tree: dict[str, str | bytes] = dict(files or {})
+    if constitution is not None:
+        tree[".specify/memory/constitution.md"] = constitution
+    for folder, content in (specs or {}).items():
+        tree[f"specs/{folder}/spec.md"] = content
+    write_tree(root, tree)
+    if git:
+        git_run(root, "init", "--quiet")
+        git_run(root, "config", "user.name", "test")
+        git_run(root, "config", "user.email", "test@example.invalid")
+    return root
+
+
+def tree_snapshot(root: Path) -> dict[str, tuple]:
+    """Relative path -> (type, sha256 of the content, mode); directories and symlinks included."""
+    import hashlib
+    import os
+    import stat as stat_module
+
+    result: dict[str, tuple] = {}
+    if not root.exists():
+        return result
+    for current, dirs, names in os.walk(root, followlinks=False):
+        for name in sorted(dirs + names):
+            path = Path(current) / name
+            rel = path.relative_to(root).as_posix()
+            info = path.lstat()
+            if stat_module.S_ISLNK(info.st_mode):
+                result[rel] = ("link", os.readlink(path), None)
+            elif stat_module.S_ISDIR(info.st_mode):
+                result[rel] = ("dir", None, None)
+            else:
+                result[rel] = ("file", hashlib.sha256(path.read_bytes()).hexdigest(), stat_module.S_IMODE(info.st_mode))
+    return result
+
+
+def tree_changes(before: dict[str, tuple], after: dict[str, tuple]) -> dict[str, list[str]]:
+    return {
+        "added": sorted(set(after) - set(before)),
+        "removed": sorted(set(before) - set(after)),
+        "changed": sorted(rel for rel in set(before) & set(after) if before[rel] != after[rel]),
+    }
+
+
+class ExportResult:
+    def __init__(self, code: int, stdout: bytes, stderr: bytes):
+        import json
+
+        self.code = code
+        self.raw = stdout
+        self.err = stderr.decode("utf-8")
+        self.out = json.loads(stdout.decode("utf-8")) if stdout.strip() else None
+
+
+def run_export(module, root: Path, *argv: str, stdin: str | bytes | None = None) -> ExportResult:
+    """Call sdd_export.main the way `uv run sdd_export.py <argv>` would, with root as the current directory."""
+    import io
+
+    if isinstance(stdin, str):
+        stdin = stdin.encode("utf-8")
+    out, err = io.BytesIO(), io.BytesIO()
+    code = module.main(list(argv), root=root, stdin=io.BytesIO(stdin or b""), stdout=out, stderr=err)
+    return ExportResult(code, out.getvalue(), err.getvalue())
+
+
+def run_export_real(root: Path, env: dict[str, str], *argv: str, stdin: str | None = None, script: Path | None = None):
+    """Run the real script through uv in root."""
+    import subprocess
+
+    return subprocess.run(
+        ["uv", "run", str(script or SDD_EXPORT_PY), *argv],
+        cwd=root,
+        env=env,
+        input=(stdin or "").encode("utf-8"),
+        capture_output=True,
+    )
