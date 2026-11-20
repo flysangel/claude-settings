@@ -98,12 +98,21 @@ uv run <skill>/scripts/sdd_export.py write    [--project <dir>] --expect <state>
 | `constitution` | `.specify/memory/constitution.md` 存在時是該路徑，否則 `null`（不檢查其他 Spec Kit 檔案） |
 | `specs` | `specs/*/spec.md` 存在的資料夾，依名稱排序；`in_lineage` 表示世代紀錄中有功能的 `spec_dir` 指向它 |
 | `lineage_missing_specs` | 世代紀錄中 `spec_dir` 已不存在的功能：`[{"id": ..., "spec_dir": ...}]` |
-| `inventory` | 見 data-model「讀取範圍」；不列出個別的可讀檔案 |
+| `inventory` | 見 data-model「讀取範圍」；不列出個別的可讀檔案。`ignore_source` 是 `"git"`（以 `git ls-files` 取得清單）或 `"none"`（不是 git repository 或沒有 `git`，走訪目錄樹） |
 | `existing`、`lineage_content` | 見上 |
 
 狀態不能匯出時（結束碼 3），仍輸出上述欄位中已能判定的部分，不能判定的為 `null`；另外有 `error`、`reason`，
 `export_dir` 為 `"invalid"` 或 `lineage` 為 `"invalid"` 時另有 `errors`（同 `validate` 的格式）。
 `error` 的例子：`.sdd-export/ holds files sdd-export did not create; nothing was read or written`。
+
+`reason` 為 `conflict` 時另有 `conflicts`：不是本功能產生的路徑（相對於專案根目錄），讓 SKILL.md 能列給維護者看——
+路徑本身是檔案時是 `[".sdd-export"]`；目錄內有表外的項目時是那些項目；沒有 `nutrients.json` 卻有其他檔案時是那些檔案；
+`nutrients.json` 的 `tool` 不符時是 `[".sdd-export/nutrients.json"]`。衝突時不讀取專案，`lineage` 以後的欄位都是 `null`；
+既有養分無法使用（`nutrients-*`）或世代紀錄無法使用（`lineage-*`）時 `inventory` 為 `null`（不掃描專案）。
+`files`、`validate`、`write` 在結束碼 3 時輸出 `error`、`reason`，以及同樣條件下的 `conflicts` 或 `errors`。
+
+既有養分（`export_dir`）的驗證只看內容本身（欄位、`id`、範圍、程式碼區塊、相依、`confirmed` 要有依據、依據與路徑的格式），
+不檢查依據的檔案是否仍存在、也不做機密掃描：匯出之後專案的檔案本來就會變動，這些在下一次 `validate` 時才對照目前的專案檢查。
 
 ## files
 
@@ -165,7 +174,7 @@ uv run <skill>/scripts/sdd_export.py write    [--project <dir>] --expect <state>
 | `ok` | `errors` 為空時 `true` |
 | `errors` | `check` 名稱見 data-model；`path` 是欄位路徑；`detail` 是一句英文，**不含**被判為機密的值 |
 | `counts` | 各區段的數量；`pending` 是待確認的項目數；`inherited` 是 `origin` 小於 `generation` 的有效項目數，`new` 是等於的 |
-| `diff` | 見 data-model「差異」；草稿無法解析或欄位錯誤到無法比對時為 `null` |
+| `diff` | 見 data-model「差異」；草稿無法解析、有 `field` 錯誤，或有 `secret` 錯誤（差異會重複草稿的文字）時為 `null` |
 
 `ok` 為 `false` 時結束碼 1，`reason` 為 `invalid` 或 `secret`，`error` 為 `the draft is not valid nutrients`
 （或 `the draft looks like it contains a secret; describe what is needed instead of recording the value`）。
@@ -179,9 +188,11 @@ uv run <skill>/scripts/sdd_export.py write    [--project <dir>] --expect <state>
    `error`：`.sdd-export/ changed since it was checked; check again and confirm the differences before writing`。
 3. 執行 `validate` 的全部檢查；不通過時同 `validate` 的失敗，不寫入。
 4. 填入 `tool`、`schema`、`exported_at`，依 data-model 的順序序列化成 `nutrients.json`，並從它產生 `README.md`（含標記）。
-5. `.sdd-export/` 不存在時建立（記下「本次建立」）；`.gitattributes` 不存在時寫入固定內容，存在時不動。
+5. `.sdd-export/` 不存在時建立（記下「本次建立」）。
 6. 兩個檔案各自先寫到同目錄的暫存檔（`.nutrients.json.tmp-<隨機>`、`.README.md.tmp-<隨機>`），全部寫好後依序以
-   `os.replace` 取代 `nutrients.json`，再取代 `README.md`。
+   `os.replace` 取代 `nutrients.json`，再取代 `README.md`。最後，`.gitattributes` 不存在時同樣以暫存檔寫入固定內容，存在時不動。
+   `.gitattributes` 放在最後，是為了讓前面任何一步失敗時，本次建立的目錄裡不會留下檔案而能被移除（腳本不刪除自己以外的檔案，
+   也不刪除已寫好的 `.gitattributes`）。
 7. 任何一步發生 OS 錯誤：刪除自己建立的暫存檔；`.sdd-export/` 是本次建立且仍是空的時移除它；結束碼 1、`reason: "os-error"`，
    `error` 為 `could not write .sdd-export/: <原因>`。已完成的 `os.replace` 不回復（`nutrients.json` 是完整的新內容，
    `check` 之後會回報 `view: "stale"`）。

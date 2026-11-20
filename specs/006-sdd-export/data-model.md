@@ -410,7 +410,12 @@
 | `large` | 大於 1 MiB |
 
 比對以路徑的各段名稱進行，Windows 上同樣以 `/` 分隔、區分大小寫的規則比對小寫化後的名稱。
-符號連結：指向專案外的一律略過（計入 `ignored`）；不跟隨目錄的符號連結。
+符號連結：指向專案外的一律略過（計入 `ignored`）；不跟隨目錄的符號連結（也計入 `ignored`）。
+
+`skipped` 的計數：以目錄排除的類別（`dependency`、`build`、`tooling`）每個被排除的目錄算一次（不走進去逐檔計算，
+`node_modules/` 這類目錄可能有數萬個檔案）；其餘類別每個檔案算一次。`ignored` 在 git repository 中是
+`git ls-files --others --ignored --exclude-standard --directory` 列出的項目數（被忽略的整個目錄算一次），加上略過的符號連結。
+兩個平台、有沒有 git（沒有 `.gitignore` 時）的計數都相同。
 
 **過大**（`too_large`）：可讀檔案數 > 1500，或可讀檔案總大小 > 10 MiB，或有兩個以上的區塊在其頂層含有套件描述檔
 （`package.json`、`pyproject.toml`、`setup.py`、`go.mod`、`Cargo.toml`、`pom.xml`、`build.gradle`、`build.gradle.kts`、
