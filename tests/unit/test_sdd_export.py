@@ -2818,3 +2818,352 @@ def test_rule_5_items_created_in_this_generation_cannot_mark_it(sdd_export, tmp_
     data["features"].append(report_feature(summary="重建後改過的摘要。", revised=[2]))
 
     assert [e["path"] for e in rule_errors(sdd_export, root, data, "range")] == ["features[1].revised"]
+
+
+# ============================================ contract locks for 007 sdd-rebuild
+
+DATA_MODEL = REPO_ROOT / "specs" / "006-sdd-export" / "data-model.md"
+
+
+def example_project(tmp_path: Path, name: str = "my-tool") -> Path:
+    """The project the data-model example presupposes: a generation-2 project with spec 001 and a constitution."""
+    return make_old_project(tmp_path, name, files={
+        "specs/001-deploy/spec.md": SPEC_TEXT,
+        ".specify/memory/constitution.md": "# Constitution\n",
+        ".sdd-rebuild/lineage.json": (FIXTURES / "lineage-example.json").read_bytes(),
+    })
+
+
+def test_fixtures_have_no_carriage_returns():
+    for path in FIXTURES.iterdir():
+        assert b"\r" not in path.read_bytes(), path.name
+
+
+def test_written_bytes_equal_the_fixtures(sdd_export, tmp_path, fixed_day):
+    """Both platforms run this test, so both write the very same bytes (FR-019, SC-007)."""
+    root = example_project(tmp_path)
+    draft_text = (FIXTURES / "draft.json").read_bytes().decode("utf-8")
+    write_ok(sdd_export, root, json.loads(draft_text), expect="none")
+
+    assert read_export(root, "nutrients.json") == (FIXTURES / "nutrients.json").read_bytes()
+    assert read_export(root, "README.md") == (FIXTURES / "README.md").read_bytes()
+    assert read_export(root, ".gitattributes") == (FIXTURES / "gitattributes").read_bytes()
+    assert read_export(root, ".gitattributes") == GITATTRIBUTES.encode("utf-8")
+
+
+def test_readme_fixture_marker_holds_both_hashes():
+    readme = (FIXTURES / "README.md").read_bytes()
+    first, rest = readme.split(b"\n", 1)
+    match = MARKER.match(first.decode("utf-8"))
+
+    assert match
+    assert match.group(1) == hashlib.sha256((FIXTURES / "nutrients.json").read_bytes()).hexdigest()
+    assert match.group(2) == hashlib.sha256(rest).hexdigest()
+
+
+def test_nutrients_fixture_is_schema_1_in_key_order():
+    data = json.loads((FIXTURES / "nutrients.json").read_bytes().decode("utf-8"))
+
+    assert (data["tool"], data["schema"]) == ("sdd-export", 1)
+    assert list(data) == ["tool", "schema", "generation", "project", "exported_at", "language", "scope", "principles",
+                          "features", "lessons", "discarded"]
+
+
+def test_newer_nutrients_are_not_read(sdd_export, tmp_path):
+    root = project(tmp_path)
+    (root / ".sdd-export").mkdir()
+    newer = json.loads((FIXTURES / "nutrients.json").read_bytes())
+    newer["schema"] = 2
+    (root / ".sdd-export" / "nutrients.json").write_text(json.dumps(newer, ensure_ascii=False), "utf-8")
+
+    result = run_export(sdd_export, root, "check")
+    assert (result.code, result.out["reason"], result.out["existing"]) == (3, "nutrients-newer", None)
+
+
+def example_block(title: str) -> dict:
+    """The JSON block under a heading of data-model.md; fails (never skips) when it cannot be found."""
+    content = DATA_MODEL.read_bytes().decode("utf-8")
+    assert f"### {title}" in content, f"data-model.md has no '### {title}'"
+    after = content[content.index(f"### {title}"):]
+    start = after.index("```json\n") + len("```json\n")
+    return json.loads(after[start:after.index("```", start)])
+
+
+def json_blocks() -> list[str]:
+    content = DATA_MODEL.read_bytes().decode("utf-8")
+    return [block.split("```", 1)[0] for block in content.split("```json\n")[1:]]
+
+
+def test_the_data_model_example_passes_validate_and_write(sdd_export, tmp_path, fixed_day):
+    example = example_block("最小範例")
+    root = example_project(tmp_path)
+    data = {k: v for k, v in example.items() if k not in ("tool", "schema", "exported_at")}
+
+    result = validate(sdd_export, root, data)
+    assert result.code == 0, result.out["errors"]
+    write_ok(sdd_export, root, data, expect="none")
+
+    written = json.loads(read_export(root, "nutrients.json"))
+    assert {k: v for k, v in written.items() if k != "exported_at"} == {k: v for k, v in example.items() if k != "exported_at"}
+
+
+def test_the_example_matches_the_fixture_lineage():
+    example = example_block("最小範例")
+    lineage = json.loads((FIXTURES / "lineage-example.json").read_bytes())
+
+    assert example["generation"] == lineage["generation"]
+    lineage_ids = {item["id"] for section in ("principles", "features", "lessons") for item in lineage[section]}
+    assert {"deploy", "cross-platform", "atomic-write"} <= lineage_ids
+    assert [item["id"] for item in lineage["discarded"]] == ["deploy-symlink"]
+
+
+def test_every_complete_json_example_of_the_data_model_is_checked(sdd_export):
+    """There is one complete JSON example today; a new one must be added to the tests above."""
+    blocks = json_blocks()
+    complete = [block for block in blocks if '"tool": "sdd-export"' in block or '"tool": "sdd-rebuild"' in block]
+
+    assert len(complete) == 1, "a new complete example in data-model.md needs its own validate test"
+    assert json.loads(complete[0]) == example_block("最小範例")
+
+
+# ----------------------------------------------------------- line endings
+
+
+def test_crlf_copies_are_read_and_not_taken_for_edits(sdd_export, tmp_path, fixed_day):
+    root = example_project(tmp_path)
+    write_ok(sdd_export, root, json.loads((FIXTURES / "draft.json").read_bytes()), expect="none")
+    lf = run_export(sdd_export, root, "check").out
+    for path in [root / ".sdd-export" / name for name in ("nutrients.json", "README.md", ".gitattributes")] + \
+            [root / ".sdd-rebuild" / "lineage.json"]:
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    crlf = run_export(sdd_export, root, "check")
+
+    assert crlf.code == 0, crlf.out
+    out = crlf.out
+    assert (out["export_dir"], out["nutrients"], out["view"], out["gitattributes"], out["lineage"]) == \
+        ("ours", "unchanged", "current", "ok", "present")
+    assert out["state"] == lf["state"]
+    assert out["existing"] == lf["existing"]
+
+
+@needs_git
+def test_gitattributes_keeps_lf_through_an_autocrlf_clone(sdd_export, tmp_path):
+    source = project(tmp_path, "source", git=True, files={"notes.txt": "one\ntwo\n"})
+    write_ok(sdd_export, source, draft())
+    git_run(source, "add", "-A")
+    git_run(source, "commit", "--quiet", "-m", "nutrients")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "-c", "core.autocrlf=true", "clone", "--quiet", str(source), str(clone)], check=True,
+                   capture_output=True)
+    git_run(clone, "config", "core.autocrlf", "true")
+    for rel in (".sdd-export/nutrients.json", ".sdd-export/README.md", "notes.txt"):
+        (clone / rel).unlink()
+    git_run(clone, "checkout", "--", ".")
+
+    for name in ("nutrients.json", "README.md", ".gitattributes"):
+        assert b"\r\n" not in (clone / ".sdd-export" / name).read_bytes(), name
+
+
+# ------------------------------------------- the rules 007 must follow when writing
+
+
+def source_nutrients() -> dict:
+    """Generation-1 nutrients that sdd-rebuild reads; each rule below turns them into a generation-2 lineage."""
+    return nutrients_of(draft(
+        principles=[principle("p1")],
+        features=[
+            feature("f1", requirements=[requirement("r1"), requirement("r2")]),
+            feature("f2", requirements=[requirement("r3"), requirement("r4", status="pending", evidence=[])]),
+        ],
+        lessons=[lesson("l1")],
+        discarded=[discarded("d0", kind="doubt")],
+    ))
+
+
+def to_lineage(nutrients: dict) -> dict:
+    """The lineage 007 writes when it keeps everything as it is (the first row of the table)."""
+    def strip(item):
+        return {k: v for k, v in item.items() if k not in ("status", "evidence")}
+
+    features = []
+    for number, item in enumerate(nutrients["features"], start=1):
+        entry = {}
+        for key, value in strip(item).items():
+            if key == "requirements":
+                continue
+            entry[key] = value
+            if key == "source":
+                entry["spec_dir"] = f"specs/{number:03d}-{item['id']}"
+        entry["requirements"] = [strip(r) for r in item["requirements"]]
+        features.append(entry)
+    return {
+        "tool": "sdd-rebuild", "schema": 1, "generation": nutrients["generation"] + 1, "rebuilt_at": "2026-11-21",
+        "source": {"project": nutrients["project"], "generation": nutrients["generation"], "nutrients_schema": 1},
+        "principles": [strip(p) for p in nutrients["principles"]], "features": features,
+        "lessons": [strip(l) for l in nutrients["lessons"]], "discarded": copy.deepcopy(nutrients["discarded"]),
+    }
+
+
+def draft_from_lineage(lineage: dict) -> dict:
+    """The next export of the rebuilt project when nothing changed since the rebuild."""
+    def add(item, source=None):
+        item = copy.deepcopy(item)
+        if source and item.get("source") == "rebuild":
+            item["source"] = source
+        item["status"] = "confirmed"
+        item["evidence"] = [".sdd-rebuild/lineage.json"]
+        return item
+
+    features = []
+    for item in lineage["features"]:
+        entry = {k: v for k, v in item.items() if k not in ("spec_dir", "requirements")}
+        entry["source"] = "spec"
+        entry["spec"] = item["spec_dir"] + "/spec.md"
+        entry["requirements"] = [add(r, "spec") for r in item["requirements"]]
+        features.append(entry)
+    return {
+        "generation": lineage["generation"], "project": lineage["source"]["project"], "language": "zh-Hant",
+        "scope": {"coverage": "full", "included": []},
+        "principles": [add(p, "constitution") for p in lineage["principles"]], "features": features,
+        "lessons": [add(l) for l in lineage["lessons"]], "discarded": copy.deepcopy(lineage["discarded"]),
+    }
+
+
+def rebuilt_project(tmp_path: Path, lineage: dict) -> Path:
+    files = {f"{item['spec_dir']}/spec.md": SPEC_TEXT for item in lineage["features"] if isinstance(item, dict)}
+    files[".sdd-rebuild/lineage.json"] = json.dumps(lineage, ensure_ascii=False, indent=2)
+    return make_old_project(tmp_path, "rebuilt", files=files)
+
+
+def lineage_items(lineage: dict) -> dict:
+    return {item["id"]: item for section in ("principles", "features", "lessons") for item in lineage[section]} | \
+        {r["id"]: r for f in lineage["features"] for r in f["requirements"]}
+
+
+def row_keep(lineage):
+    pass
+
+
+def row_modify(lineage):
+    r1 = lineage_items(lineage)["r1"]
+    r1["text"] = "重建時修改過的需求。"
+    r1["revised"] = [2]
+
+
+def row_merge(lineage):
+    f1 = lineage["features"][0]
+    f1["requirements"] = [{"id": "r12", "origin": 2, "kind": "functional", "text": "合併後的需求。", "revised": [],
+                           "derived_from": ["r1", "r2"], "source": "rebuild"}]
+
+
+def row_split(lineage):
+    f2 = lineage["features"][1]
+    r3 = f2["requirements"][0]
+    f2["requirements"] = [
+        {**r3, "id": "r3a", "origin": 2, "text": "拆分後之一。", "revised": [], "derived_from": ["r3"]},
+        {**r3, "id": "r3b", "origin": 2, "text": "拆分後之二。", "revised": [], "derived_from": ["r3"]},
+        f2["requirements"][1],
+    ]
+
+
+def row_rebuild_new(lineage):
+    lineage["features"].append({
+        "id": "f3", "origin": 2, "title": "重建時新增", "summary": "重建時新增的功能。", "revised": [], "derived_from": [],
+        "source": "rebuild", "spec_dir": "specs/003-f3", "spec": None, "depends_on": ["f1"],
+        "requirements": [{"id": "r5", "origin": 2, "kind": "functional", "text": "新需求。", "revised": [],
+                          "derived_from": [], "source": "rebuild"}],
+    })
+
+
+def row_discard(lineage):
+    f1 = lineage["features"][0]
+    f1["requirements"] = [r for r in f1["requirements"] if r["id"] != "r2"]
+    lineage["discarded"].append({"id": "r2", "kind": "requirement", "origin": 1, "discarded_in": 2,
+                                 "text": "需求 r2。", "reason": "維護者決定捨棄"})
+
+
+def row_source_discarded(lineage):
+    assert [item["id"] for item in lineage["discarded"]] == ["d0"]
+
+
+def row_pending_decided(lineage):
+    # r4 was pending in the source nutrients; the maintainer kept it during the rebuild, so it has no status here
+    assert "status" not in lineage_items(lineage)["r4"]
+
+
+ROWS = {
+    "keep": row_keep, "modify": row_modify, "merge": row_merge, "split": row_split, "rebuild-new": row_rebuild_new,
+    "discard": row_discard, "source-discarded": row_source_discarded, "pending-decided": row_pending_decided,
+}
+
+
+def broken_draft(row: str, data: dict) -> str:
+    """Break the next export the way that row could be broken; returns the check that must refuse it."""
+    items = {item["id"]: item for section, _, item, _ in __import__("sdd_export").walk_items(data) if section != "discarded"}
+    if row == "keep":
+        items["l1"]["origin"] = 2
+        return "origin-changed"
+    if row == "modify":
+        items["r1"]["text"] = "這一代又改過，但沒有記下。"
+        items["r1"]["revised"] = []
+        return "revision-unmarked"
+    if row == "merge":
+        data["features"][0]["requirements"][0]["derived_from"] = ["r1", "r9"]
+        return "derived-unknown"
+    if row == "split":
+        data["features"][1]["requirements"][1]["id"] = "d0"
+        return "id-reused"
+    if row == "rebuild-new":
+        items["f3"]["origin"] = 1
+        return "origin-changed"
+    if row == "discard":
+        data["discarded"] = [entry for entry in data["discarded"] if entry["id"] != "r2"]
+        return "discard-lost"
+    if row == "source-discarded":
+        data["discarded"][0]["reason"] = "改寫了前代的理由"
+        return "discard-lost"
+    data["features"][1]["requirements"] = [r for r in data["features"][1]["requirements"] if r["id"] != "r4"]
+    return "lineage-item-missing"
+
+
+@pytest.mark.parametrize("row", sorted(ROWS))
+def test_007_writing_rules_are_accepted(sdd_export, tmp_path, row):
+    lineage = to_lineage(source_nutrients())
+    ROWS[row](lineage)
+    root = rebuilt_project(tmp_path, lineage)
+
+    check = run_export(sdd_export, root, "check")
+    assert (check.code, check.out["lineage"], check.out["generation"]) == (0, "present", 2), check.out
+    result = validate(sdd_export, root, draft_from_lineage(lineage))
+    assert result.code == 0, result.out["errors"]
+
+
+@pytest.mark.parametrize("row", sorted(ROWS))
+def test_007_writing_rules_refuse_a_broken_next_export(sdd_export, tmp_path, row):
+    lineage = to_lineage(source_nutrients())
+    ROWS[row](lineage)
+    root = rebuilt_project(tmp_path, lineage)
+    data = draft_from_lineage(lineage)
+    expected = broken_draft(row, data)
+
+    assert expected in checks(validate(sdd_export, root, data))
+
+
+@pytest.mark.parametrize(
+    "change, reason",
+    [
+        (lambda l: lineage_items(l)["r4"].update(status="pending"), "lineage-invalid"),
+        (lambda l: l.update(generation=3), "lineage-invalid"),
+        (lambda l: lineage_items(l)["r1"].update(origin=2, revised=[2]), "lineage-invalid"),
+        (lambda l: l.update(schema=2), "lineage-newer"),
+    ],
+)
+def test_lineages_that_break_the_writing_rules_are_refused(sdd_export, tmp_path, change, reason):
+    lineage = to_lineage(source_nutrients())
+    change(lineage)
+    root = rebuilt_project(tmp_path, lineage)
+
+    result = run_export(sdd_export, root, "check")
+
+    assert (result.code, result.out["reason"]) == (3, reason)
