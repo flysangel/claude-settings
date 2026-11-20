@@ -532,8 +532,11 @@ def cmd_init(resolve_version, run_official) -> int:
         return EXIT_FAILED
 
     if record and record.status == "complete" and all((root / e.path).is_file() for e in record.entries):
-        print(f"Spec Kit {record.speckit_version} is already initialized. Nothing changed.")
-        return EXIT_OK
+        pending = unstaged_scripts(root, record.entries) if is_git_work_tree(root) else []
+        if not pending:
+            print(f"Spec Kit {record.speckit_version} is already initialized. Nothing changed.")
+            return EXIT_OK
+        return _stage_only(root, record, pending)
 
     staging = Path(tempfile.mkdtemp(prefix="sdd-init-"))
     try:
@@ -574,6 +577,68 @@ def cmd_init(resolve_version, run_official) -> int:
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def unstaged_scripts(root: Path, entries) -> list[str]:
+    """Recorded .sh from Spec Kit that init never staged and git does not know yet. Read only."""
+    paths = [
+        e.path
+        for e in entries
+        if e.path.endswith(".sh") and e.origin == "speckit" and not e.staged_executable and (root / e.path).is_file()
+    ]
+    if not paths:
+        return []
+    known = index_paths(root) | head_paths(root)
+    return sorted(path for path in paths if path not in known)
+
+
+def stage_executable(root: Path, paths: list[str], entries: dict) -> list[str]:
+    """`git add --chmod=+x` each path; returns the ones that were added and flags their entries."""
+    staged = []
+    for path in paths:
+        done = git(root, "add", "--chmod=+x", "--", path)
+        if done is not None and done.returncode == 0:
+            entries[path].staged_executable = True
+            staged.append(path)
+        else:
+            message = _one_line(_text(done.stderr)) if done is not None else "git could not be started"
+            error(f"note: {path} was not added to the git index: {message}")
+    return staged
+
+
+def _report_staged(root: Path, entries, staged: list[str]) -> None:
+    """The Git: line for a git repository."""
+    committed = head_paths(root)
+    uncommitted = sum(1 for path in entries if path not in committed)
+    if staged:
+        print(
+            f"Git: {len(staged)} files were added to the index and nothing was committed. "
+            f"{uncommitted} paths are uncommitted."
+        )
+    else:
+        print(f"Git: nothing was added to the index. {uncommitted} paths are uncommitted.")
+
+
+def _stage_only(root: Path, record: Record, pending: list[str]) -> int:
+    """Everything is in place except the executable bit of some .sh in the git index."""
+    entries = {e.path: e for e in record.entries}
+    staged = stage_executable(root, pending, entries)
+    if staged:
+        try:
+            write_record(root, record)
+        except OSError as exc:
+            error(
+                f"error: writing into the project failed: {exc}",
+                "Fix the cause, then run /sdd-init again; it creates what is still missing and overwrites nothing.",
+            )
+            return EXIT_FAILED
+    for path in staged:
+        emit("staged", f"{path} (executable bit recorded in the git index)")
+    print(f"Spec Kit {record.speckit_version} is already initialized. Nothing was created.")
+    _report_staged(root, entries, staged)
+    for text in NEXT_STEPS:
+        print(text)
+    return EXIT_OK
+
+
 def _apply_init(root: Path, record: Record | None, version: str, sources: dict, origins: dict) -> int:
     in_git = is_git_work_tree(root)
     recorded = {e.path: e for e in record.entries} if record else {}
@@ -600,6 +665,8 @@ def _apply_init(root: Path, record: Record | None, version: str, sources: dict, 
         warn = not in_git or any(effective_eol(root, p) != "lf" for p in scripts)
 
     entries = {path: entry for path, entry in recorded.items() if os.path.lexists(root / path)}
+    # .sh copied by an earlier run that never reached the git index are staged with the new ones.
+    to_stage = unstaged_scripts(root, entries.values()) if in_git else []
     for path in create:
         entries[path] = Entry(path, content_hash(sources[path].read_bytes()), origins[path], False)
     new_dirs: set[str] = set(record.created_dirs) if record else set()
@@ -617,16 +684,8 @@ def _apply_init(root: Path, record: Record | None, version: str, sources: dict, 
             target.parent.mkdir(parents=True, exist_ok=True)
             copy_new_file(sources[path], target)
         if in_git:
-            for path in create:
-                if not path.endswith(".sh"):
-                    continue
-                done = git(root, "add", "--chmod=+x", "--", path)
-                if done is not None and done.returncode == 0:
-                    entries[path].staged_executable = True
-                    staged.append(path)
-                else:
-                    message = _one_line(_text(done.stderr)) if done is not None else "git could not be started"
-                    error(f"note: {path} was not added to the git index: {message}")
+            to_stage = sorted(to_stage + [path for path in create if path.endswith(".sh")])
+            staged = stage_executable(root, to_stage, entries)
         result.status = "complete"
         write_record(root, result)
     except OSError as exc:
@@ -656,15 +715,7 @@ def _apply_init(root: Path, record: Record | None, version: str, sources: dict, 
             "until the files are added with: git add --chmod=+x .specify/scripts/bash/*.sh"
         )
     else:
-        committed = head_paths(root)
-        uncommitted = sum(1 for path in entries if path not in committed)
-        if staged:
-            print(
-                f"Git: {len(staged)} files were added to the index and nothing was committed. "
-                f"{uncommitted} paths are uncommitted."
-            )
-        else:
-            print(f"Git: nothing was added to the index. {uncommitted} paths are uncommitted.")
+        _report_staged(root, entries, staged)
     for text in NEXT_STEPS:
         print(text)
     return EXIT_OK

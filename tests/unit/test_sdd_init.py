@@ -1448,10 +1448,11 @@ def test_repair_after_a_failed_copy_stages_the_sh_copied_by_the_earlier_run(
 
     assert_nothing_changes_on_another_run(runner, root)
 
-    # What the maintainer does next must keep the executable bit.
-    git_run(root, "add", "-A")
-    modes = index(root)
-    assert {p: modes[p] for p in OFFICIAL_SH} == {p: "100755" for p in OFFICIAL_SH}
+    if filemode == "false":
+        # Where git ignores file modes (Windows), what the maintainer does next keeps the executable bit.
+        git_run(root, "add", "-A")
+        modes = index(root)
+        assert {p: modes[p] for p in OFFICIAL_SH} == {p: "100755" for p in OFFICIAL_SH}
 
 
 @pytest.mark.parametrize("filemode", ["true", "false"])
@@ -1487,9 +1488,11 @@ def test_complete_record_with_unstaged_sh_only_stages_them(runner, sdd_init, mak
 
     assert_nothing_changes_on_another_run(runner, root)
 
-    git_run(root, "add", "-A")
-    modes = index(root)
-    assert {p: modes[p] for p in OFFICIAL_SH} == {p: "100755" for p in OFFICIAL_SH}
+    if filemode == "false":
+        # Where git ignores file modes (Windows), what the maintainer does next keeps the executable bit.
+        git_run(root, "add", "-A")
+        modes = index(root)
+        assert {p: modes[p] for p in OFFICIAL_SH} == {p: "100755" for p in OFFICIAL_SH}
 
 
 def test_staging_that_fails_again_is_reported_and_retried_by_the_next_run(runner, sdd_init, make_project, monkeypatch):
@@ -1629,7 +1632,7 @@ def test_sh_taken_out_of_the_index_is_staged_again_only_when_init_never_staged_i
     # staged_executable is true: init staged it once, the maintainer removed it, init leaves it alone.
     root = make_project(git=True)
     runner.run(root, "init")
-    git_run(root, "rm", "--cached", "--quiet", "--", *OFFICIAL_SH)
+    git_run(root, "rm", "--cached", "--quiet", "-f", "--", *OFFICIAL_SH)
     assert_nothing_changes_on_another_run(runner, root)
     assert index(root) == {}
 
@@ -1637,7 +1640,7 @@ def test_sh_taken_out_of_the_index_is_staged_again_only_when_init_never_staged_i
     other = make_project(git=True)
     init_with_failed_git_add(runner, sdd_init, other, monkeypatch)
     git_run(other, "add", "--", *OFFICIAL_SH)
-    git_run(other, "rm", "--cached", "--quiet", "--", *OFFICIAL_SH)
+    git_run(other, "rm", "--cached", "--quiet", "-f", "--", *OFFICIAL_SH)
 
     code, out, _ = runner.run(other, "init")
 
