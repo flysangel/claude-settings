@@ -2177,3 +2177,294 @@ def test_clear_unreadable_progress_and_conflict(sdd_rebuild, tmp_path, sdd_expor
 
     assert (result.code, result.out["reason"]) == (1, "conflict")
     assert tree_snapshot(new) == before
+
+
+# ------------------------------------------- (T043) the decisions of US2
+
+
+def requirement_draft(rid: str, status: str = "confirmed", text: str | None = None) -> dict:
+    return {"id": rid, "origin": 1, "kind": "functional", "text": text or f"需求 {rid}。", "revised": [],
+            "derived_from": [], "source": "code" if status == "confirmed" else "doc", "status": status,
+            "evidence": ["README.md"] if status == "confirmed" else []}
+
+
+def feature_draft(fid: str, requirements: list, depends_on=()) -> dict:
+    return {"id": fid, "origin": 1, "title": f"功能 {fid}", "summary": f"可以使用 {fid}。", "revised": [],
+            "derived_from": [], "source": "code", "spec": None, "depends_on": list(depends_on),
+            "requirements": requirements}
+
+
+def four_features_draft() -> dict:
+    """US2's independent test: 4 features, one pending requirement."""
+    return {
+        "generation": 1, "project": "four", "language": "zh-Hant", "scope": {"coverage": "full", "included": []},
+        "principles": [{"id": "small", "origin": 1, "title": "保持小", "text": "每個功能 MUST 小。", "revised": [],
+                        "derived_from": [], "source": "doc", "status": "confirmed", "evidence": ["README.md"]}],
+        "features": [
+            feature_draft("deploy", [requirement_draft("deploy-copy")]),
+            feature_draft("status", [requirement_draft("status-list")], ["deploy"]),
+            feature_draft("report", [requirement_draft("report-diff", "pending")], ["deploy"]),
+            feature_draft("audit", [requirement_draft("audit-log")], ["deploy"]),
+        ],
+        "lessons": [{"id": "atomic", "origin": 1, "kind": "pitfall", "title": "寫入中斷", "text": "寫暫存檔再取代。",
+                     "revised": [], "derived_from": [], "status": "confirmed", "evidence": ["README.md"]}],
+        "discarded": [],
+    }
+
+
+def us2(module, tmp_path, sdd_export):
+    old = make_rebuild_old(sdd_export, tmp_path, four_features_draft(), name="four")
+    new = make_rebuild_new(tmp_path)
+    nutrients = nutrients_of(old)
+    progress = keep_all_progress(os.path.realpath(old), nutrients, "not-needed")
+    progress["pending_decided"] = []
+    progress["target"] = {"principles": [], "features": [], "lessons": []}
+    ok(save(module, new, progress))
+    return old, new, nutrients, progress
+
+
+def kept(nutrients, section, index):
+    return target_item(nutrients[section][index], section)
+
+
+def preview(module, new, progress):
+    ok(save(module, new, progress))
+    return run_rebuild(module, new, "preview")
+
+
+def test_us2_discard_merge_modify_add(sdd_rebuild, tmp_path, sdd_export):
+    old, new, nutrients, progress = us2(sdd_rebuild, tmp_path, sdd_export)
+    deploy = kept(nutrients, "features", 0)
+    deploy["summary"] = "以一行指令部署。"  # modified
+    merged = {"id": "overview", "basis": "derived", "from": ["status", "report"], "title": "總覽", "summary": "看狀態與差異。",
+              "depends_on": ["deploy"], "existing_spec": None, "spec_dir": None, "reviewed": False, "requirements": [
+                  {"id": "status-list", "basis": "inherit", "from": [], "kind": None, "text": None},
+                  {"id": "report-diff", "basis": "inherit", "from": [], "kind": None, "text": None}]}
+    added = {"id": "notify", "basis": "new", "from": [], "title": "通知", "summary": "部署後通知。", "depends_on": ["deploy"],
+             "existing_spec": None, "spec_dir": None, "reviewed": False, "requirements": [
+                 {"id": "notify-mail", "basis": "new", "from": [], "kind": "functional", "text": "寄出通知。"}]}
+    progress["target"] = {"principles": [kept(nutrients, "principles", 0)], "features": [deploy, merged, added],
+                          "lessons": [kept(nutrients, "lessons", 0)]}
+    progress["discards"] = [{"id": "audit", "text": None, "reason": "不再需要。"}, {"id": "audit-log", "text": None, "reason": None}]
+    progress["pending_decided"] = ["report-diff"]
+    out = ok(preview(sdd_rebuild, new, progress))
+    summary = out["summary"]
+
+    assert [e["id"] for e in summary["modified"]] == ["deploy"]
+    assert summary["merged"] == [{"section": "features", "id": "overview", "title": "總覽", "from": ["status", "report"]}]
+    assert [e["id"] for e in summary["added"]] == ["notify", "notify-mail"]
+    assert [(e["id"], e["reason"]) for e in summary["discarded"]] == [("audit", "不再需要。"), ("audit-log", DEFAULT_REASON)]
+    assert [e["id"] for e in summary["order"]] == ["deploy", "overview", "notify"]
+    assert summary["pending_decided"] == ["report-diff"]
+    lineage = by_id(out["lineage"])
+    assert "status" not in json.dumps(out["lineage"]["features"][1]["requirements"][1]).replace("status-list", "")
+
+
+@pytest.mark.parametrize("missing", ["pending", "unaccounted"])
+def test_us2_incomplete_decisions_are_reported_and_nothing_is_written(sdd_rebuild, tmp_path, sdd_export, missing):
+    old, new, nutrients, progress = us2(sdd_rebuild, tmp_path, sdd_export)
+    progress["target"] = {"principles": [kept(nutrients, "principles", 0)],
+                          "features": [kept(nutrients, "features", i) for i in range(4)],
+                          "lessons": [kept(nutrients, "lessons", 0)]}
+    progress["pending_decided"] = [] if missing == "pending" else ["report-diff"]
+    if missing == "unaccounted":
+        progress["target"]["lessons"] = []
+    ok(save(sdd_rebuild, new, progress))
+    before = tree_snapshot(new)
+    result = run_rebuild(sdd_rebuild, new, "preview")
+
+    assert result.out["ok"] is False
+    assert [e["check"] for e in result.out["errors"]] == ["pending-undecided" if missing == "pending" else "unaccounted"]
+    assert tree_snapshot(new) == before
+
+
+def keep_everything(nutrients, progress):
+    progress["target"] = {"principles": [kept(nutrients, "principles", 0)],
+                          "features": [kept(nutrients, "features", i) for i in range(4)],
+                          "lessons": [kept(nutrients, "lessons", 0)]}
+    progress["pending_decided"] = ["report-diff"]
+    return progress
+
+
+@pytest.mark.parametrize("disposition", [
+    "keep", "modify-principle", "modify-summary", "modify-requirement", "merge-features", "merge-requirements",
+    "split-without-original", "split-keeping-original", "discard-feature", "discard-lesson", "new-principle",
+    "new-feature", "new-requirement", "new-lesson",
+])
+def test_each_disposition(sdd_rebuild, tmp_path, sdd_export, disposition):
+    old, new, nutrients, progress = us2(sdd_rebuild, tmp_path, sdd_export)
+    progress = keep_everything(nutrients, progress)
+    target = progress["target"]
+    features = target["features"]
+    expect = ("kept", "small")
+    if disposition == "modify-principle":
+        target["principles"][0]["text"] = "每個功能 MUST 很小。"
+        expect = ("modified", "small")
+    elif disposition == "modify-summary":
+        features[0]["summary"] = "新的摘要。"
+        expect = ("modified", "deploy")
+    elif disposition == "modify-requirement":
+        features[0]["requirements"][0]["text"] = "新的需求。"
+        expect = ("modified", "deploy-copy")
+    elif disposition == "merge-features":
+        features[1] = {**features[1], "id": "overview", "basis": "derived", "from": ["status", "report"],
+                       "title": "總覽", "summary": "總覽。", "requirements": features[1]["requirements"] + features[2]["requirements"]}
+        del features[2]
+        expect = ("merged", "overview")
+    elif disposition == "merge-requirements":
+        features[1]["requirements"] = [{"id": "list-diff", "basis": "derived", "from": ["status-list", "report-diff"],
+                                        "kind": "functional", "text": "列出狀態與差異。"}]
+        features[2]["requirements"] = [{"id": "report-new", "basis": "new", "from": [], "kind": "functional", "text": "新。"}]
+        expect = ("merged", "list-diff")
+    elif disposition == "split-without-original":
+        features[3] = {**features[3], "id": "audit-read", "basis": "derived", "from": ["audit"], "title": "讀稽核",
+                       "summary": "讀。"}
+        features.append({**features[3], "id": "audit-write", "title": "寫稽核", "summary": "寫。", "requirements": [
+            {"id": "audit-write-log", "basis": "new", "from": [], "kind": "functional", "text": "寫入。"}]})
+        expect = ("split", "audit-read")
+    elif disposition == "split-keeping-original":
+        features.append({"id": "audit-export", "basis": "derived", "from": ["audit"], "title": "匯出稽核", "summary": "匯出。",
+                         "depends_on": ["audit"], "existing_spec": None, "spec_dir": None, "reviewed": False,
+                         "requirements": [{"id": "audit-export-csv", "basis": "new", "from": [], "kind": "functional",
+                                           "text": "匯出 CSV。"}]})
+        expect = ("split", "audit-export")
+    elif disposition == "discard-feature":
+        del features[3]
+        progress["discards"] = [{"id": "audit", "text": None, "reason": None}, {"id": "audit-log", "text": None, "reason": None}]
+        expect = ("discarded", "audit")
+    elif disposition == "discard-lesson":
+        target["lessons"] = []
+        progress["discards"] = [{"id": "atomic", "text": "不適用。", "reason": "改用資料庫。"}]
+        expect = ("discarded", "atomic")
+    elif disposition == "new-principle":
+        target["principles"].append({"id": "fast", "basis": "new", "from": [], "title": "快", "text": "MUST 快。"})
+        expect = ("added", "fast")
+    elif disposition == "new-feature":
+        features.append({"id": "notify", "basis": "new", "from": [], "title": "通知", "summary": "通知。", "depends_on": [],
+                         "existing_spec": None, "spec_dir": None, "reviewed": False, "requirements": [
+                             {"id": "notify-mail", "basis": "new", "from": [], "kind": "story", "text": "寄信。"}]})
+        expect = ("added", "notify")
+    elif disposition == "new-requirement":
+        features[0]["requirements"].append({"id": "deploy-dry-run", "basis": "new", "from": [], "kind": "functional",
+                                            "text": "先試跑。"})
+        expect = ("added", "deploy-dry-run")
+    elif disposition == "new-lesson":
+        target["lessons"].append({"id": "spec-first", "basis": "new", "from": [], "kind": "decision", "title": "先寫 spec",
+                                  "text": "先寫 spec，因為需求較清楚。"})
+        expect = ("added", "spec-first")
+    out = ok(preview(sdd_rebuild, new, progress))
+
+    assert expect[1] in [e["id"] for e in out["summary"][expect[0]]], out["summary"]
+    assert sdd_export.lineage_problems(compose_with_placeholders(sdd_rebuild, new)) == []
+
+
+def compose_with_placeholders(module, new):
+    data = saved(new)
+    return module.compose_lineage(data["source"], data, placeholders=True)
+
+
+def test_split_keeping_the_original_records_both(sdd_rebuild, tmp_path, sdd_export):
+    old, new, nutrients, progress = us2(sdd_rebuild, tmp_path, sdd_export)
+    progress = keep_everything(nutrients, progress)
+    progress["target"]["features"].append({
+        "id": "audit-export", "basis": "derived", "from": ["audit"], "title": "匯出稽核", "summary": "匯出。",
+        "depends_on": ["audit"], "existing_spec": None, "spec_dir": None, "reviewed": False,
+        "requirements": [{"id": "audit-export-csv", "basis": "new", "from": [], "kind": "functional", "text": "匯出。"}]})
+    lineage = by_id(ok(preview(sdd_rebuild, new, progress))["lineage"])
+
+    assert (lineage["audit"]["origin"], lineage["audit"]["derived_from"]) == (1, [])
+    assert (lineage["audit-export"]["origin"], lineage["audit-export"]["derived_from"]) == (2, ["audit"])
+
+
+def test_from_keeps_the_maintainers_order(sdd_rebuild, tmp_path, sdd_export):
+    old, new, nutrients, progress = us2(sdd_rebuild, tmp_path, sdd_export)
+    progress = keep_everything(nutrients, progress)
+    features = progress["target"]["features"]
+    features[1] = {**features[1], "id": "overview", "basis": "derived", "from": ["report", "status"], "title": "總覽",
+                   "summary": "總覽。", "requirements": features[1]["requirements"] + features[2]["requirements"]}
+    del features[2]
+    out = ok(preview(sdd_rebuild, new, progress))
+
+    assert by_id(out["lineage"])["overview"]["derived_from"] == ["report", "status"]
+
+
+@pytest.mark.parametrize("decision", ["keep", "modify", "discard"])
+def test_pending_decisions_are_written_without_status(sdd_rebuild, tmp_path, sdd_export, decision):
+    old, new, nutrients, progress = us2(sdd_rebuild, tmp_path, sdd_export)
+    progress = keep_everything(nutrients, progress)
+    report = progress["target"]["features"][2]
+    if decision == "modify":
+        report["requirements"][0]["text"] = "確認後的需求。"
+    elif decision == "discard":
+        report["requirements"] = [{"id": "report-new", "basis": "new", "from": [], "kind": "functional", "text": "新。"}]
+        progress["discards"] = [{"id": "report-diff", "text": None, "reason": None}]
+    out = ok(preview(sdd_rebuild, new, progress))
+
+    assert "evidence" not in json.dumps(out["lineage"]) and '"status": ' not in json.dumps(out["lineage"])
+    assert out["summary"]["pending_decided"] == ["report-diff"]
+
+
+def test_adjustments(sdd_rebuild, tmp_path, sdd_export):
+    old, new, nutrients, progress = us2(sdd_rebuild, tmp_path, sdd_export)
+    progress = keep_everything(nutrients, progress)
+    progress["adjustments"] = [{"lesson": "atomic", "change": "新增原則：寫入要原子。", "adopted": None}]
+    ok(save(sdd_rebuild, new, progress))
+    assert invalid_at(sdd_rebuild, new, {**progress, "phase": "confirmed", "stage": "summary"}) == "adjustments[0].adopted"
+    for adopted in (True, False):
+        progress["adjustments"][0]["adopted"] = adopted
+        out = ok(preview(sdd_rebuild, new, progress))
+        assert out["summary"]["adjustments"] == [{"lesson": "atomic", "change": "新增原則：寫入要原子。", "adopted": adopted}]
+    progress["adjustments"].append({"lesson": "deploy", "change": "x", "adopted": True})
+    assert invalid_at(sdd_rebuild, new, progress) == "adjustments[1].lesson"
+
+
+def test_deferred_and_for_plan(sdd_rebuild, tmp_path, sdd_export):
+    old, new, nutrients, progress = us2(sdd_rebuild, tmp_path, sdd_export)
+    progress = keep_everything(nutrients, progress)
+    progress["deferred"] = [{"item": "多語系", "reason": "之後再說", "feature": "deploy"}]
+    progress["for_plan"] = [{"item": "用 Python", "feature": None}]
+    ok(save(sdd_rebuild, new, progress))
+
+    assert saved(new)["deferred"] == progress["deferred"] and saved(new)["for_plan"] == progress["for_plan"]
+
+
+def test_existing_spec_in_the_lineage(sdd_rebuild, tmp_path, sdd_export):
+    old = make_rebuild_old(sdd_export, tmp_path, four_features_draft(), name="four")
+    new = make_rebuild_new(tmp_path, specs={"001-deploy": "# d\n"})
+    nutrients = nutrients_of(old)
+    progress = keep_everything(nutrients, keep_all_progress(os.path.realpath(old), nutrients, "not-needed"))
+    progress["target"]["features"][0]["existing_spec"] = "specs/001-deploy"
+    ok(save(sdd_rebuild, new, progress))
+    progress = confirm(sdd_rebuild, new, progress)
+    progress["target"]["features"][0]["spec_dir"] = "specs/001-deploy"
+    progress = generate_all(sdd_rebuild, new, progress)
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+    lineage = json.loads((new / ".sdd-rebuild/lineage.json").read_bytes())
+
+    assert [f["spec_dir"] for f in lineage["features"]] == ["specs/001-deploy", "specs/002-status", "specs/003-report",
+                                                            "specs/004-audit"]
+    assert ok(run_rebuild(sdd_rebuild, new, "focus"))["feature_directory"] == "specs/002-status"
+
+
+def test_refresh_source_shows_what_to_decide_again(sdd_rebuild, tmp_path, sdd_export):
+    old, new, nutrients, progress = us2(sdd_rebuild, tmp_path, sdd_export)
+    progress = keep_everything(nutrients, progress)
+    ok(save(sdd_rebuild, new, progress))
+    data = nutrients_of(old)
+    data["features"][3]["id"] = "audit-trail"  # renamed in the old project
+    data["features"][3]["requirements"].append(dict(data["features"][3]["requirements"][0], id="audit-more"))
+    (old / ".sdd-export" / "nutrients.json").write_bytes(sdd_export.serialize(data, "nutrients"))
+    ok(save(sdd_rebuild, new, progress, "--refresh-source"))
+    result = run_rebuild(sdd_rebuild, new, "preview")
+
+    assert result.out["ok"] is False
+    assert {"unaccounted", "inherit-unknown"} <= {e["check"] for e in result.out["errors"]}
+
+
+def test_preview_catches_a_disabled_rule(sdd_rebuild, tmp_path, sdd_export, monkeypatch):
+    # The decision tests are locks: with the unaccounted rule switched off, a missing lesson would slip through.
+    old, new, nutrients, progress = us2(sdd_rebuild, tmp_path, sdd_export)
+    progress = keep_everything(nutrients, progress)
+    progress["target"]["lessons"] = []
+    ok(save(sdd_rebuild, new, progress))
+    assert run_rebuild(sdd_rebuild, new, "preview").out["ok"] is False
