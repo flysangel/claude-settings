@@ -4,9 +4,9 @@
 進行規格驅動開發的 skill。支援 Linux 與 Windows。
 
 > **目前狀態**：部署工具（spec 001）已合併進 `main`，Linux 與 Windows 的 CI 都通過，下方的指令已可使用。
-> `home/` 目前有全域 `CLAUDE.md`（spec 002）、`sdd-init` skill（spec 003）、`sdd-update` skill（spec 004）與 `sdd-grill` skill（spec 005）。
-> `CLAUDE.md` 引用的其餘 3 個 skill（`sdd-export`、`sdd-rebuild`、`sdd-drive`）
-> 由 spec 006 至 008 提供，完成前尚未安裝；此時 Claude 會回報 skill 不存在。
+> `home/` 目前有全域 `CLAUDE.md`（spec 002）、`sdd-init` skill（spec 003）、`sdd-update` skill（spec 004）、`sdd-grill` skill（spec 005）
+> 與 `sdd-export` skill（spec 006）。`CLAUDE.md` 引用的其餘 2 個 skill（`sdd-rebuild`、`sdd-drive`）
+> 由 spec 007 與 008 提供，完成前尚未安裝；此時 Claude 會回報 skill 不存在。
 
 ## 安裝與更新
 
@@ -89,6 +89,15 @@ curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tool
 確認摘要之前不寫入 constitution 與 `specs/`；進度存在不入庫的 `.specify/sdd-grill/`，中斷後再執行會接續。
 產生完畢後 `.specify/feature.json` 指向這一批編號最小的 spec，下一步是 `/sdd-drive`。
 前置需求：專案已導入 Spec Kit（`/sdd-init`）、`uv`。細節見 [home/skills/sdd-grill/README.md](home/skills/sdd-grill/README.md)。
+
+## 從舊專案匯出養分
+
+| 指令 | 作用 |
+|---|---|
+| `/sdd-export [範圍路徑...]` | 在舊專案把原則、各功能的需求與相依、經驗教訓與世代資訊整理成草稿，你逐項決定並確認後寫入 `.sdd-export/` |
+
+只讀取專案、不需要 Spec Kit；確認之前不寫入任何檔案，也只寫 `.sdd-export/`。下一步是在新專案執行 `/sdd-rebuild`（spec 007，尚未提供）。
+前置需求：`uv`；`git` 非必要。細節見 [home/skills/sdd-export/README.md](home/skills/sdd-export/README.md)。
 
 ## 部署工具的結束碼
 
