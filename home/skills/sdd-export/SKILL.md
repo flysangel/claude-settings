@@ -333,8 +333,9 @@ Outcomes:
 Build the draft in the conversation, following "The draft" above. Do not compute the generation yourself:
 `generation` is the one `check` reported. Use `project` from `check` (or the existing nutrients' `project` in a
 re-export). Every new item gets a new `id` that is never reused: it must not match any `id` in the lineage or the
-existing nutrients, discarded items included. New items have `origin` equal to `generation`, `revised` `[]` and
-`derived_from` `[]`.
+existing nutrients, discarded items included, nor any `id` that appears in a `derived_from` there. Such an `id`
+belonged to an item that was merged or split away, and it still stands for that item in the chain of generations.
+New items have `origin` equal to `generation`, `revised` `[]` and `derived_from` `[]`.
 
 When `lineage` is `"none"` and there are no existing nutrients, the project is the first generation and every item
 has `origin` 1.
@@ -384,8 +385,10 @@ yet they are the lineage's items, and `validate` refuses a draft in which one of
 (`lineage-item-missing`). Only an item that first appeared in this conversation, in neither the lineage nor the
 existing nutrients, is deleted without a record, unless the maintainer wants it recorded.
 
-When the maintainer merges or splits items, the result gets a new `id`, `origin` equal to `generation` and
-`derived_from` listing the original `id`s; the originals then need no `discarded` entry.
+When the maintainer merges or splits items, the result gets a new `id` (never reused, as above), `origin` equal to
+`generation` and `derived_from` listing the original `id`s; the originals then need no `discarded` entry. An item
+that was merged away cannot come back under its old `id`: when the maintainer wants to split it out again, the
+split-out item gets a new `id` with `derived_from` naming the merged item.
 
 Outcomes:
 
@@ -467,10 +470,12 @@ Outcomes:
     `origin`), `origin-unknown` (an item claims an earlier generation that neither the lineage nor the existing
     nutrients know), `revision-unmarked` (an inherited item changed: add `generation` to its `revised`),
     `discard-lost` (an earlier `discarded` entry must stay unchanged), `discarded-active` (an `id` is both kept and
-    discarded), `derived-unknown` (a `derived_from` names an unknown item), `id-reused` (a new item took an `id` the
-    lineage already used: choose a new one). Fix each as its description says. When the fix needs a decision the
-    maintainer has not made yet, such as whether an item of the lineage is kept or discarded, ask the maintainer one
-    question per item, then validate again.
+    discarded), `derived-unknown` (a `derived_from` names an unknown item), `id-reused` (a new item took an `id`
+    that the lineage already used, as an item or a discarded item, or that a `derived_from` of the lineage or the
+    existing nutrients names: choose a new `id` without asking, since an `id` does not change what an item means).
+    Fix each as its description says. When the fix needs a decision the maintainer has not made yet, such as
+    whether an item of the lineage is kept or discarded, ask the maintainer one question per item, then validate
+    again.
   - If the same error comes back after you fixed it twice and you cannot see why, show the maintainer the error and
     ask how to proceed (or stop, rule 7).
 - Exit code 3: the project's state changed during the conversation. Handle `reason` as the same outcome of stage 1.

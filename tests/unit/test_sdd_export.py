@@ -2632,6 +2632,73 @@ def test_three_generations_refuse_a_broken_link(sdd_export, tmp_path):
     assert {"origin-changed", "discard-lost"} <= set(checks(result))
 
 
+def gen3_requirement(item_id: str, derived_from: list[str] | None = None) -> dict:
+    return {"id": item_id, "origin": 3, "kind": "functional", "text": f"第 3 代的需求 {item_id}。", "revised": [],
+            "derived_from": derived_from or [], "source": "spec", "status": "confirmed",
+            "evidence": ["specs/002-overview/spec.md"]}
+
+
+def test_rule_9_refuses_an_id_merged_away_in_an_earlier_generation(sdd_export, tmp_path):
+    """T057 (a): status-list was merged into overview-list by the rebuild; it lives on only in derived_from."""
+    third = generation_project(tmp_path, "gen3", ["001-deploy", "002-overview"], "lineage-gen3.json")
+    data = fixture("gen3-draft.json")
+    data["features"][1]["requirements"].append(gen3_requirement("status-list"))
+
+    errors = rule_errors(sdd_export, third, data, "id-reused")
+
+    assert [e["path"] for e in errors] == ["features[1].requirements[1].id"]
+
+
+def test_rule_9_refuses_an_id_merged_away_earlier_in_this_generation(sdd_export, tmp_path, fixed_day):
+    """T057 (b): x was added and then merged into y by earlier exports of this generation; it is not free again."""
+    third = generation_project(tmp_path, "gen3", ["001-deploy", "002-overview"], "lineage-gen3.json")
+    first = fixture("gen3-draft.json")
+    first["features"][1]["requirements"].append(gen3_requirement("extra-x"))
+    state = write_ok(sdd_export, third, first, expect="none").out["state"]
+    merged = fixture("gen3-draft.json")
+    merged["features"][1]["requirements"].append(gen3_requirement("extra-y", ["extra-x"]))
+    write_ok(sdd_export, third, merged, expect=state)
+
+    again = copy.deepcopy(merged)
+    again["features"][1]["requirements"].append(gen3_requirement("extra-x"))
+    errors = rule_errors(sdd_export, third, again, "id-reused")
+
+    assert [e["path"] for e in errors] == ["features[1].requirements[2].id"]
+    assert validate(sdd_export, third, merged).code == 0  # exporting the same nutrients again is still fine
+
+
+def test_rule_9_keeps_an_item_of_this_generation_that_another_item_derives_from(sdd_export, tmp_path, fixed_day):
+    """T057 (c): an item still active in the existing nutrients is that same item, even if another one derives from it."""
+    third = generation_project(tmp_path, "gen3", ["001-deploy", "002-overview"], "lineage-gen3.json")
+    first = fixture("gen3-draft.json")
+    first["features"][1]["requirements"].append(gen3_requirement("part-a"))
+    state = write_ok(sdd_export, third, first, expect="none").out["state"]
+    data = copy.deepcopy(first)
+    data["features"][1]["requirements"].append(gen3_requirement("part-b", ["part-a"]))
+    write_ok(sdd_export, third, data, expect=state)
+
+    assert validate(sdd_export, third, data).code == 0
+
+
+def test_rule_9_a_merged_item_splits_back_under_new_ids(sdd_export, tmp_path):
+    """T057 (d): overview-list cannot be split back into status-list; a new id derived from it can."""
+    third = generation_project(tmp_path, "gen3", ["001-deploy", "002-overview"], "lineage-gen3.json")
+    reused = fixture("gen3-draft.json")
+    reused["features"][1]["requirements"].append(gen3_requirement("status-list", ["overview-list"]))
+    fresh = fixture("gen3-draft.json")
+    fresh["features"][1]["requirements"].append(gen3_requirement("status-list-again", ["overview-list"]))
+
+    assert [e["path"] for e in rule_errors(sdd_export, third, reused, "id-reused")] == ["features[1].requirements[1].id"]
+    assert validate(sdd_export, third, fresh).code == 0
+
+
+def test_rule_9_still_accepts_the_three_generation_fixtures(sdd_export, tmp_path):
+    """T057 (c): keeping the items the rebuild created (overview, overview-list) is not a reuse."""
+    third = generation_project(tmp_path, "gen3", ["001-deploy", "002-overview"], "lineage-gen3.json")
+
+    assert validate(sdd_export, third, fixture("gen3-draft.json")).code == 0
+
+
 def test_an_item_the_rebuild_created_is_discarded_not_deleted(sdd_export, tmp_path):
     """T058: an item of the lineage whose origin equals this generation is still the lineage's item."""
     third = generation_project(tmp_path, "gen3", ["001-deploy", "002-overview"], "lineage-gen3.json")

@@ -47,6 +47,8 @@ uv run --with pytest pytest                      全部
    `specs/001-x/spec.md`、一條教訓、一筆捨棄紀錄）。`check` 預期 `generation` 為 2、該 spec 的 `in_lineage` 為 `true`。
    草稿漏掉那條教訓時 `validate` 預期 `lineage-item-missing`；把繼承項目的 `origin` 改成 2 預期 `origin-changed`；
    改了繼承需求的文字但 `revised` 沒有 2 預期 `revision-unmarked`；刪掉那筆捨棄紀錄預期 `discard-lost`。
+   在世代紀錄的功能加上 `derived_from: ["old-x"]`（重建時合併而來），草稿新增一條 `id` 為 `old-x`、`origin` 為 2 的需求，
+   預期 `id-reused`；改用新的 `id` 並以 `derived_from` 指向該功能則通過。
 8. **唯讀**：把專案設為唯讀（Linux `chmod -w`；Windows 以檔案屬性設定）後執行 `write`。預期結束碼 1、`reason: "os-error"`，
    沒有留下 `.sdd-export/` 或暫存檔。
 9. **過大**：以腳本產生 1600 個小檔案的專案，`check` 預期 `too_large: true`；`files` 不帶範圍時 `files` 為空陣列；

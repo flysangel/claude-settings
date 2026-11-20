@@ -668,6 +668,23 @@ def test_stage_6_does_not_ask_again_about_a_deleted_item_of_the_lineage():
     has_any(six, "has not made yet")
 
 
+def test_stage_4_new_ids_avoid_every_derived_from():
+    """T057: an id that was merged or split away still stands for that item, so it is never taken again."""
+    four = stage(4)
+    new_ids = part(four, "every new item gets a new `id` that is never reused", "new items have `origin`")
+
+    has_all(new_ids, "lineage", "existing nutrients", "discarded items included", "`derived_from`")
+    merging = part(four, "when the maintainer merges or splits", "outcomes:")
+    has_all(merging, "never reused", "cannot come back under its old `id`", "new `id`", "`derived_from`")
+
+
+def test_stage_6_id_reused_takes_a_new_id_without_asking():
+    six = stage(6)
+    reused = part(six, "`id-reused` (", "fix each as")
+
+    has_all(reused, "`derived_from`", "new `id` without asking")
+
+
 # ---------------------------------------------------------------- stage 5
 
 
@@ -850,7 +867,8 @@ COVERAGE = {
     ("item", 23): (STAGES[4], ["in_lineage", "lineage_missing_specs", "still apply", "exactly as it is, unchanged",
                                "never copied into the draft", '`"rebuild"`']),
     ("item", 24): (STAGES[4], ["export_dir", "starting point", "one by one", "outside the chosen scope"]),
-    ("item", 25): (STAGES[4], ["never reused", "discarded items included"]),
+    ("item", 25): (STAGES[4], ["never reused", "discarded items included", "appears in a `derived_from`",
+                               "split-out item gets a new `id`"]),
     ("item", 26): (STAGES[5], ["generation", "principles", "features", "doubts", "lessons", "pending"]),
     ("item", 27): (STAGES[5], ["accept it all", "moves to `discarded`", "whatever its `origin`"]),
     ("item", 28): (STAGES[5], ["one question per doubt", "`doubt`"]),

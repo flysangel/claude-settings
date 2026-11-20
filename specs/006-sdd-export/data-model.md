@@ -326,12 +326,16 @@
 |---|---|---|---|---|---|
 | 原樣保留 | 沿用 | 沿用 | 沿用 | 沿用 | |
 | 修改後保留 | 沿用 | 沿用 | 沿用並加上 `generation` | 沿用 | |
-| 合併多個項目 | 新取，不與來源養分任何 `id` 重複 | `generation` | 空 | 被合併的 `id` | 被合併的項目不必另記為捨棄 |
-| 拆分一個項目 | 新取 | `generation` | 空 | 被拆分的 `id` | |
-| 重建時新增 | 新取 | `generation` | 空 | 空 | `source` 為 `"rebuild"` |
+| 合併多個項目 | 新取（見表後） | `generation` | 空 | 被合併的 `id` | 被合併的項目不必另記為捨棄 |
+| 拆分一個項目 | 新取（見表後） | `generation` | 空 | 被拆分的 `id` | |
+| 重建時新增 | 新取（見表後） | `generation` | 空 | 空 | `source` 為 `"rebuild"` |
 | 捨棄 | 沿用 | 沿用 | | | 移到 `discarded`，`discarded_in` 為 `generation` |
 | 來源養分的 `discarded` | 沿用 | 沿用 | | | 原樣帶入 |
 | 來源養分中 `pending` 的項目 | 依維護者的決定套用上面任一列 | | | | 不得以 `pending` 寫入 |
+
+「新取」的 `id` MUST NOT 與來源養分的任何有效項目、`discarded` 中的任何 `id`，或來源養分任何項目的 `derived_from` 中出現過的
+`id` 相同，也不與世代紀錄中其他項目的 `id` 相同：被合併或拆分而消失的 `id` 仍代表前代的那個項目，重複使用會讓追溯同時指向
+兩個不同的項目（世代規則 9）。
 
 來源養分中的每一個有效項目 MUST 對應到上表其中一列（保留、修改、被合併或拆分到某個新項目的 `derived_from`、或捨棄），
 否則 006 下一次匯出時會以世代規則 2 拒絕。
@@ -358,7 +362,7 @@
 | 6 | `discard-lost` | L 的 `discarded`，以及 N 中 `discarded_in` 小於 `generation` 的捨棄紀錄，都原樣出現在草稿的 `discarded` |
 | 7 | `discarded-active` | `discarded` 中的 `id` 不是有效項目 |
 | 8 | `derived-unknown` | `derived_from` 中的每個 `id` 出現在 L 或 N（含其 `discarded`），或已出現在 L、N 中同一項目的 `derived_from`（沿用前代記下的來源，那些 `id` 屬於更早的世代，不在 L 中） |
-| 9 | `id-reused` | `origin` 等於 `generation` 的項目，`id` 不與 L 中任何項目（含 `discarded`）相同。L 中同 `id`、同種類、`origin` 也等於這一代的有效項目（重建時新增、合併或拆分而建立的項目）視為沿用，不算重用；違反的情況是 `id` 與 L 的 `discarded` 相同，或與 L 中 `origin` 不等於這一代（或種類不同）的有效項目相同 |
+| 9 | `id-reused` | `origin` 等於 `generation` 的項目，`id` 不與 L 中任何項目（含 `discarded`）相同，也不與 L、N 中任何項目的 `derived_from` 出現過的 `id`（曾經存在、後來被合併或拆分而不再是有效項目的 `id`）相同。沿用不算重用：L 中同 `id`、同種類、`origin` 也等於這一代的有效項目（重建時新增、合併或拆分而建立的項目）視為沿用；只出現在 `derived_from` 的 `id`，另外與 N 中同 `id`、同種類、`origin` 也等於這一代的有效項目（這一代先前的匯出寫入、仍然有效的項目）相同時也視為沿用。違反的情況是 `id` 與 L 的 `discarded` 相同、與 L 中 `origin` 不等於這一代（或種類不同）的有效項目相同，或與 `derived_from` 中出現過、而不屬於上述沿用的 `id` 相同。直接後果：被合併的項目之後不能以原來的 `id`「拆回去」，拆出的項目 MUST 取新的 `id`，並以 `derived_from` 指向合併後的項目 |
 
 ## 驗證規則（`validate`）
 

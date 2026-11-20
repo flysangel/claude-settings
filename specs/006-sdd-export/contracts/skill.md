@@ -128,7 +128,8 @@
     （FR-012、FR-013、US4；字樣：`lineage`、`origin`、`discarded`）。
 24. `export_dir` 為 `ours` 時（再次匯出）：以 `existing` 為起點；既有項目沿用 `id`；依據沒有改變的項目不改寫文字；
     範圍外的既有項目原樣保留；`nutrients` 為 `edited` 或 `unknown` 時，要改動既有內容 MUST 逐項詢問（R4；字樣：`existing`）。
-25. 新項目的 `id` 不與世代紀錄或既有養分中的任何 `id`（含 `discarded`）重複。
+25. 新項目的 `id` 不與世代紀錄或既有養分中的任何 `id`（含 `discarded`），或其中任何 `derived_from` 出現過的 `id` 重複；合併、拆分的
+    結果同樣取新的 `id`。被合併的項目之後要拆回去時，拆出的項目取新的 `id`，以 `derived_from` 指向合併後的項目（世代規則 9）。
 
 | 結果 | 下一步 |
 |---|---|
@@ -165,7 +166,7 @@
 | `reason: "secret"` | 把 `errors` 指出的欄位改寫成不含該值的描述；MUST NOT 在對話中重複該值；再 `validate` |
 | `reason: "invalid"`，結構或格式的錯誤（`field`、`id`、`range`、`code-block`、`dependency`、`scope`） | 修正草稿後再 `validate`；不涉及內容意義的修正不必詢問維護者 |
 | `unsupported` 或 `evidence` | 補上正確的依據，或把該項改為待確認；改為待確認時告訴維護者 |
-| 世代規則的錯誤（`lineage-item-missing`、`origin-changed`、`revision-unmarked`、`discard-lost` 等） | 依錯誤修正；需要維護者決定的（前代項目要保留還是捨棄）以一題詢問 |
+| 世代規則的錯誤（`lineage-item-missing`、`origin-changed`、`revision-unmarked`、`discard-lost` 等） | 依錯誤修正；需要維護者決定而他還沒決定的（前代項目要保留還是捨棄）以一題詢問；`lineage-item-missing` 而維護者已決定刪除時移到 `discarded`，不再詢問；`id-reused` 時直接改取新的 `id`，不必詢問 |
 | 結束碼 3 | 依階段 1 的同名結果處理（專案狀態在對話途中改變） |
 
 ### 階段 7：最終確認（FR-010、FR-014、US4-4）

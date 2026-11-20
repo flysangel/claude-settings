@@ -739,6 +739,12 @@ def derived_sources(data: dict | None) -> dict[str, set[str]]:
     return result
 
 
+def created_here(found: dict[str, tuple[str, str, dict]], item_id: str, section: str, generation: int) -> bool:
+    """Whether found holds an active item with this id, of the same kind, created in this generation."""
+    same = found.get(item_id)
+    return same is not None and same[2].get("origin") == generation and same[0] == section
+
+
 def generation_problems(draft: dict, lineage: dict | None, existing: dict | None) -> list[Problem]:
     """The generation rules 1 to 9 of data-model.md, checked against the lineage L and the existing nutrients N."""
     problems: list[Problem] = []
@@ -755,6 +761,8 @@ def generation_problems(draft: dict, lineage: dict | None, existing: dict | None
     lineage_ids = set(in_lineage) | {item["id"] for _, item in discarded_items(lineage)}
     known_ids = lineage_ids | set(in_existing) | {item["id"] for _, item in discarded_items(existing)}
     lineage_derived, existing_derived = derived_sources(lineage), derived_sources(existing)
+    # ids that once existed and were merged or split away: they live on only in derived_from, and stay taken.
+    historic_ids = {entry for sources in (*lineage_derived.values(), *existing_derived.values()) for entry in sources}
 
     # Rule 2: nothing of the lineage disappears silently.
     for item_id, (section, _, _) in in_lineage.items():
@@ -794,13 +802,15 @@ def generation_problems(draft: dict, lineage: dict | None, existing: dict | None
             if isinstance(entry, str) and entry not in known_ids and entry not in recorded:
                 problems.append(Problem("derived-unknown", join(join(path, "derived_from"), index), f"'{entry}' is not "
                                         "an item of the lineage or the existing nutrients"))
-        # Rule 9: an item new in this generation does not take an id the lineage already used,
-        # unless it is that very item of the lineage (one the rebuild added in this generation).
-        if origin == generation and item_id in lineage_ids:
-            same = in_lineage.get(item_id)
-            if same is None or same[2].get("origin") != generation or same[0] != section:
+        # Rule 9: an item new in this generation does not take an id the lineage already used, nor one that any
+        # derived_from of the lineage or the existing nutrients names, unless it is that very item: one the rebuild
+        # created in this generation, or (for the derived_from ids only) one an earlier export of this generation
+        # wrote and still holds.
+        if origin == generation and (item_id in lineage_ids or item_id in historic_ids):
+            if not created_here(in_lineage, item_id, section, generation) \
+                    and (item_id in lineage_ids or not created_here(in_existing, item_id, section, generation)):
                 problems.append(Problem("id-reused", join(path, "id"), f"the id '{item_id}' was already used by the "
-                                        "lineage; choose a new id"))
+                                        "lineage or the existing nutrients; choose a new id"))
     # Rule 6: earlier discards stay as they are.
     required: dict[str, dict] = {}
     for _, item in discarded_items(lineage):
