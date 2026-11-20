@@ -328,3 +328,27 @@ def test_skill_never_edits_feature_json_itself():
         "do not edit `.specify/feature.json` yourself",
         "do not change `.specify/feature.json` yourself",
     )
+
+
+def test_resume():
+    resume = section(RESUME)
+
+    has_all(resume, '"present"', "decided", "`changed`", "one question", "start over", CLEAR)
+    has_all(resume, "constitution", "specs", "head")
+    has_all(resume, "`stage`", "`current_feature`")
+    has_any(resume, "do not ask again", "never ask again", "without asking again", "do not ask about them again")
+    has_all(resume, '"confirmed"', "not generated")
+    has_any(resume, "do not reopen", "without reopening", "not reopen")
+
+
+def test_resume_comes_after_start_and_before_the_rules():
+    content = body()
+
+    assert content.index("## " + START) < content.index("## " + RESUME) < content.index("## " + RULES)
+
+
+def test_all_sections_are_present():
+    names = list(sections())
+
+    for name in (START, RESUME, RULES, ORDER, SAVING, SUMMARY, GENERATE, FAILURE, FINISH):
+        assert name in names, name
