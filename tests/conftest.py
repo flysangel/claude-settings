@@ -84,3 +84,80 @@ def env(deploy, tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("HOME", str(e.home))
     monkeypatch.setenv("USERPROFILE", str(e.home))
     return e
+
+
+# ---------------------------------------------------------------- sdd-init
+
+SDD_INIT_PY = REPO_ROOT / "home" / "skills" / "sdd-init" / "scripts" / "sdd_init.py"
+
+FAKE_VERSION = "9.8.7"
+
+# A small stand-in for what the official tool generates. Line endings are LF.
+FAKE_OFFICIAL_FILES: dict[str, str] = {
+    ".claude/skills/speckit-plan/SKILL.md": "---\nname: speckit-plan\n---\nplan\n",
+    ".claude/skills/speckit-specify/SKILL.md": "---\nname: speckit-specify\n---\nspecify\n",
+    ".specify/scripts/bash/common.sh": "#!/usr/bin/env bash\necho common\n",
+    ".specify/scripts/bash/setup-plan.sh": "#!/usr/bin/env bash\necho plan\n",
+    ".specify/templates/plan-template.md": "# Plan template\n\nbody\n",
+    ".specify/memory/constitution.md": "# Constitution\n\n[PRINCIPLE]\n",
+}
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "network: needs network access and runs the official Spec Kit tool")
+
+
+def _load_sdd_init():
+    spec = importlib.util.spec_from_file_location("sdd_init", SDD_INIT_PY)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["sdd_init"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="session")
+def sdd_init():
+    return _load_sdd_init()
+
+
+def fake_official_files(version: str = FAKE_VERSION) -> dict[str, str]:
+    files = dict(FAKE_OFFICIAL_FILES)
+    files[".specify/init-options.json"] = (
+        '{\n  "integration": "claude",\n  "script": "sh",\n  "speckit_version": "%s"\n}\n' % version
+    )
+    return files
+
+
+def write_fake_official_output(dest: Path, version: str = FAKE_VERSION) -> None:
+    """Write the fake official output into dest, the way `specify init` would."""
+    write_tree(dest, fake_official_files(version))
+
+
+def git_run(cwd: Path, *args: str) -> str:
+    import subprocess
+
+    done = subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+    return done.stdout.decode("utf-8")
+
+
+@pytest.fixture
+def make_project(tmp_path, monkeypatch):
+    """Factory for temporary projects; HOME points at a temporary directory."""
+    home = tmp_path / "fake-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    counter = {"n": 0}
+
+    def factory(git: bool = True, name: str | None = None) -> Path:
+        counter["n"] += 1
+        root = tmp_path / (name or f"project{counter['n']}")
+        root.mkdir()
+        if git:
+            git_run(root, "init", "--quiet")
+            git_run(root, "config", "user.name", "test")
+            git_run(root, "config", "user.email", "test@example.invalid")
+        return root
+
+    return factory

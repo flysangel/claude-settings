@@ -22,6 +22,13 @@ uv run <skill>/scripts/sdd_init.py remove    移除 Spec Kit
 
 結束碼 2 保留不用，與 001 部署工具的「衝突」區隔。
 
+表中結束碼 1 的「紀錄無法解析」只適用於 init（包含 `schema` 不認得與路徑違反規則的紀錄）。remove 遇到無效紀錄時：
+
+| 紀錄的狀況 | remove 的結束碼 | stdout | 是否刪除檔案 |
+|---|---|---|---|
+| 無法解析，或 `schema` 不認得 | 0 | `Nothing was removed: …` 一行 | 否 |
+| 有路徑不在 `.specify/` 或 `.claude/skills/speckit-*/` 之下 | 1 | `Nothing was removed: …` 一行；原因輸出到 stderr | 否 |
+
 ## 輸出
 
 輸出到 stdout，以英文撰寫，每行一筆，格式固定；兩個平台的輸出逐字相同（路徑一律用 `/`，各段內依路徑排序）。
@@ -82,6 +89,14 @@ Git: not a git repository, and none was created. Executable bits cannot be recor
 
 已完整導入時只輸出摘要的第一行，不輸出 `Git:` 與下一步建議。
 
+補充（維護者核可 plan 時確認）：
+
+- (a) 「缺少工具」（結束碼 3）與「無法取得最新穩定版或官方工具執行失敗」（結束碼 4）這兩種失敗情況下，
+  摘要只輸出第一行，不輸出 `Git:` 一行與兩行下一步建議。
+- (b) `Git:` 一行的 `<k> paths are uncommitted` 中，k 是本次執行後導入紀錄 `entries` 內的路徑中尚未在 `HEAD` 的數量，
+  不含紀錄 `.specify/sdd-init.json` 本身，也不含專案其他未提交的內容。
+- (c) 紀錄 `.specify/sdd-init.json` 不輸出 `created` 行，也不計入摘要的 `<n> created`。
+
 ### remove
 
 ```text
@@ -97,6 +112,8 @@ unstaged  .specify/scripts/bash/setup-plan.sh
 | 有刪除 | `Spec Kit removed: <n> deleted, <m> kept because they were modified.` |
 | 沒有紀錄 | `Nothing to remove: this project has no sdd-init record, so no file can be proven to be created by sdd-init.` |
 | 紀錄無法解析 | `Nothing was removed: .specify/sdd-init.json cannot be read, so no file can be proven to be created by sdd-init.` |
+
+「紀錄無法解析」這一列也用於 `schema` 不認得的紀錄（結束碼 0），以及有路徑違反規則的紀錄（結束碼 1，原因另外輸出到 stderr）。
 
 ## 不變的保證
 

@@ -34,9 +34,9 @@ description: "Task list for 003 sdd-init 導入 Spec Kit"
 
 **Purpose**: 確認既有基礎可用，補齊契約，備妥測試 fixture
 
-- [ ] T001 確認 `home/skills/`、`tests/unit/`、`tests/e2e/`、`tests/conftest.py` 與 `.github/workflows/ci.yml` 已存在，`uv`、`git`、`bash` 都在 `PATH` 上，且 `uv run --with pytest pytest` 在目前的分支全部通過（`tests/unit/test_claude_md.py` 中「引用的 skill 資料夾存在」一項跳過是預期的）
-- [ ] T002 把維護者核可 plan 時補充的三點寫進 `specs/003-sdd-init/contracts/cli.md`（只補這三點，不改其他內容）：(a) init 在「缺少工具」（結束碼 3）與「無法取得最新穩定版或官方工具執行失敗」（結束碼 4）這兩種失敗情況下，摘要只輸出第一行，不輸出 `Git:` 一行與兩行下一步建議；(b) `Git:` 一行的 `<k> paths are uncommitted` 中，k 是本次執行後導入紀錄 `entries` 內的路徑中尚未在 `HEAD` 的數量，不含紀錄 `.specify/sdd-init.json` 本身，也不含專案其他未提交的內容；(c) 紀錄 `.specify/sdd-init.json` 不輸出 `created` 行，也不計入摘要的 `<n> created`。以下任務以「cli.md 補充 (a)(b)(c)」引用
-- [ ] T003 [P] 擴充 `tests/conftest.py`（不改動既有的 fixture）：以 `pytest_configure` 註冊 `network` 標記；新增以模組方式載入 `home/skills/sdd-init/scripts/sdd_init.py` 的 session fixture；新增建立「假的官方產出」的輔助函式（至少含 2 個 `.claude/skills/speckit-*/SKILL.md`、2 支 `.specify/scripts/bash/*.sh`、1 份 `.specify/templates/` 範本、`.specify/memory/constitution.md` 與含 `speckit_version` 的 `.specify/init-options.json`）；新增暫存專案 fixture（可選擇是否 `git init`，並在該 repository 設定測試用的 `user.name`、`user.email`），fixture 內把 `HOME` 與 `USERPROFILE` 指向暫存目錄，不使用真正的家目錄
+- [X] T001 確認 `home/skills/`、`tests/unit/`、`tests/e2e/`、`tests/conftest.py` 與 `.github/workflows/ci.yml` 已存在，`uv`、`git`、`bash` 都在 `PATH` 上，且 `uv run --with pytest pytest` 在目前的分支全部通過（`tests/unit/test_claude_md.py` 中「引用的 skill 資料夾存在」一項跳過是預期的）
+- [X] T002 把維護者核可 plan 時補充的三點寫進 `specs/003-sdd-init/contracts/cli.md`（只補這三點，不改其他內容）：(a) init 在「缺少工具」（結束碼 3）與「無法取得最新穩定版或官方工具執行失敗」（結束碼 4）這兩種失敗情況下，摘要只輸出第一行，不輸出 `Git:` 一行與兩行下一步建議；(b) `Git:` 一行的 `<k> paths are uncommitted` 中，k 是本次執行後導入紀錄 `entries` 內的路徑中尚未在 `HEAD` 的數量，不含紀錄 `.specify/sdd-init.json` 本身，也不含專案其他未提交的內容；(c) 紀錄 `.specify/sdd-init.json` 不輸出 `created` 行，也不計入摘要的 `<n> created`。以下任務以「cli.md 補充 (a)(b)(c)」引用
+- [X] T003 [P] 擴充 `tests/conftest.py`（不改動既有的 fixture）：以 `pytest_configure` 註冊 `network` 標記；新增以模組方式載入 `home/skills/sdd-init/scripts/sdd_init.py` 的 session fixture；新增建立「假的官方產出」的輔助函式（至少含 2 個 `.claude/skills/speckit-*/SKILL.md`、2 支 `.specify/scripts/bash/*.sh`、1 份 `.specify/templates/` 範本、`.specify/memory/constitution.md` 與含 `speckit_version` 的 `.specify/init-options.json`）；新增暫存專案 fixture（可選擇是否 `git init`，並在該 repository 設定測試用的 `user.name`、`user.email`），fixture 內把 `HOME` 與 `USERPROFILE` 指向暫存目錄，不使用真正的家目錄
 
 ---
 
