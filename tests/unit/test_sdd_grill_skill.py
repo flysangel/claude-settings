@@ -64,7 +64,7 @@ def test_script_loads_no_other_skill():
 
     assert "spec_from_file_location" not in script
     assert "importlib" not in script
-    for other in ("sdd_init", "sdd_update", "sdd-init", "sdd-update"):
+    for other in ("sdd_init", "sdd_update", "skills/sdd-"):
         assert other not in script
 
 
