@@ -43,9 +43,9 @@ skill 的結構與內容檢查在 `tests/unit/test_sdd_grill_skill.py`；改同�
 
 **Purpose**: 確認既有基礎可用，備妥測試 fixture
 
-- [ ] T001 確認 `home/skills/`、`tests/unit/`、`tests/conftest.py` 與 `.github/workflows/ci.yml` 已存在，`uv`、`git` 都在 `PATH` 上，且 `uv run --with pytest pytest` 在目前的分支全部通過（`tests/unit/test_claude_md.py` 中「引用的 skill 資料夾存在」一項跳過是預期的）；確認 `home/skills/sdd-grill/` 尚不存在，且不讀取 `~/.claude/skills/sdd-grill`
-- [ ] T002 擴充 `tests/conftest.py`（不改動既有的 fixture）：新增以 `importlib` 載入 `home/skills/sdd-grill/scripts/sdd_grill.py` 的 session fixture（載入時 MUST NOT 執行任何動作，見 contracts/cli.md「以模組方式載入」）；新增建立「假的 Spec Kit 專案」的輔助函式，包含 research.md R4「Spec Kit 缺少能力」列出的六個必要檔案（`.specify/`、`.claude/skills/speckit-constitution/SKILL.md`、`.claude/skills/speckit-specify/SKILL.md`、`.specify/scripts/bash/resolve-template.sh`、`.specify/templates/spec-template.md`、`.specify/templates/constitution-template.md`）與可選的 `.specify/memory/constitution.md`、`.specify/init-options.json`、`specs/<名稱>/spec.md`；新增可選擇是否 `git init` 的暫存專案 fixture；新增以 `main(argv, …)` 指定專案根目錄與 stdin 呼叫腳本並取回結束碼、stdout JSON、stderr 的輔助函式
-- [ ] T003 [P] 唯讀確認 `tools/deploy.py` 會自動納入 `home/skills/sdd-grill/`（plan.md「Structure Decision」：不需要修改它）；若不成立，向主代理提問而不是自行修改
+- [X] T001 確認 `home/skills/`、`tests/unit/`、`tests/conftest.py` 與 `.github/workflows/ci.yml` 已存在，`uv`、`git` 都在 `PATH` 上，且 `uv run --with pytest pytest` 在目前的分支全部通過（`tests/unit/test_claude_md.py` 中「引用的 skill 資料夾存在」一項跳過是預期的）；確認 `home/skills/sdd-grill/` 尚不存在，且不讀取 `~/.claude/skills/sdd-grill`
+- [X] T002 擴充 `tests/conftest.py`（不改動既有的 fixture）：新增以 `importlib` 載入 `home/skills/sdd-grill/scripts/sdd_grill.py` 的 session fixture（載入時 MUST NOT 執行任何動作，見 contracts/cli.md「以模組方式載入」）；新增建立「假的 Spec Kit 專案」的輔助函式，包含 research.md R4「Spec Kit 缺少能力」列出的六個必要檔案（`.specify/`、`.claude/skills/speckit-constitution/SKILL.md`、`.claude/skills/speckit-specify/SKILL.md`、`.specify/scripts/bash/resolve-template.sh`、`.specify/templates/spec-template.md`、`.specify/templates/constitution-template.md`）與可選的 `.specify/memory/constitution.md`、`.specify/init-options.json`、`specs/<名稱>/spec.md`；新增可選擇是否 `git init` 的暫存專案 fixture；新增以 `main(argv, …)` 指定專案根目錄與 stdin 呼叫腳本並取回結束碼、stdout JSON、stderr 的輔助函式
+- [X] T003 [P] 唯讀確認 `tools/deploy.py` 會自動納入 `home/skills/sdd-grill/`（plan.md「Structure Decision」：不需要修改它）；若不成立，向主代理提問而不是自行修改
 
 ---
 
@@ -55,12 +55,12 @@ skill 的結構與內容檢查在 `tests/unit/test_sdd_grill_skill.py`；改同�
 
 **⚠️ CRITICAL**: 這個階段完成前不能開始任何 user story
 
-- [ ] T004 建立 `tests/unit/test_sdd_grill.py` 並加入核心測試，確認在 T005 至 T008 實作前失敗：參數錯誤（沒有子指令、不認得的子指令、多出參數）時結束碼 1 且 stderr 顯示用法；載入模組時不執行任何動作；stdout 只有一份 JSON（UTF-8、LF、縮排 2、結尾換行、鍵順序固定）；失敗時 JSON 有 `error` 且同一句寫到 stderr（contracts/cli.md「共通」「結束碼」）。以及共用函式：內容雜湊先把 CRLF、CR 換成 LF 再算 SHA-256，LF 與 CRLF 版本相同、其他差異不同；指紋依 `data-model.md` 的 `Fingerprint.constitution`、`Fingerprint.specs`、`Fingerprint.head` 計算（`head` 在非 git、沒有 commit、沒有 `git` 時為 `null`）；自我忽略資料夾的 `.gitignore` 內容恰為 data-model.md「自己的資料夾」的兩行固定內容；資料夾衝突判定（`.gitignore` 內容不同、或有兩個檔案以外的檔案或子資料夾）；原子寫入（先寫同資料夾暫存檔再取代，失敗時不留下半寫的檔案）；機密掃描對 research.md R8 列出的各類樣式（私鑰標頭、權杖前綴、URL 中的 `user:password@`、`password`／`secret`／`token`／`api_key` 後接 `=` 或 `:` 與非空白值）都回報欄位路徑且不含該值，一般的長識別字與一般文字不誤判
-- [ ] T005 建立 `home/skills/sdd-grill/scripts/sdd_grill.py` 骨架：uv inline metadata（`requires-python = ">=3.11"`、`dependencies` 為空）；只用標準函式庫；`main(argv)` 回傳結束碼並可指定專案根目錄與 stdin；五個子指令的分派（先回傳「尚未實作」的失敗，由後續任務實作）；結束碼 0、1、3 的常數（2 保留、4 不使用）；JSON 輸出與錯誤輸出的共用函式；載入為模組時不執行任何動作（contracts/cli.md「指令」「共通」「結束碼」「以模組方式載入」，contracts/skill.md「scripts/sdd_grill.py」）
-- [ ] T006 在 `sdd_grill.py` 實作內容雜湊（換行正規化）、指紋計算與 `git rev-parse HEAD` 的讀取（`git` 不存在時視為不是 git repository），欄位依 `data-model.md` 的 `Fingerprint.constitution`、`Fingerprint.specs`、`Fingerprint.head`；所有輸出的路徑一律以 `/` 分隔、順序固定
-- [ ] T007 在 `sdd_grill.py` 實作自我忽略的資料夾 `.specify/sdd-grill/`：建立資料夾與固定內容的 `.gitignore`、衝突判定、原子寫入、刪除自己的兩個檔案（資料夾變空時一併刪除）；每個函式以資料夾名稱為參數，能獨立呼叫（contracts/cli.md「以模組方式載入」；data-model.md「自己的資料夾」）
-- [ ] T008 在 `sdd_grill.py` 實作機密掃描：依 research.md R8 的樣式掃描所有字串值，符合時回報欄位路徑，錯誤訊息 MUST NOT 印出該值；樣式刻意保守
-- [ ] T009 [P] 建立 `tests/unit/test_sdd_grill_skill.py`，先加入針對腳本的靜態檢查：開頭有 uv inline metadata 且 `requires-python = ">=3.11"`、`dependencies` 為空；只 import 標準函式庫；不載入其他 skill 的程式；內容沒有中日韓文字、絕對路徑與信箱（contracts/skill.md「scripts/sdd_grill.py」；research.md R3 的 FR-022 列）
+- [X] T004 建立 `tests/unit/test_sdd_grill.py` 並加入核心測試，確認在 T005 至 T008 實作前失敗：參數錯誤（沒有子指令、不認得的子指令、多出參數）時結束碼 1 且 stderr 顯示用法；載入模組時不執行任何動作；stdout 只有一份 JSON（UTF-8、LF、縮排 2、結尾換行、鍵順序固定）；失敗時 JSON 有 `error` 且同一句寫到 stderr（contracts/cli.md「共通」「結束碼」）。以及共用函式：內容雜湊先把 CRLF、CR 換成 LF 再算 SHA-256，LF 與 CRLF 版本相同、其他差異不同；指紋依 `data-model.md` 的 `Fingerprint.constitution`、`Fingerprint.specs`、`Fingerprint.head` 計算（`head` 在非 git、沒有 commit、沒有 `git` 時為 `null`）；自我忽略資料夾的 `.gitignore` 內容恰為 data-model.md「自己的資料夾」的兩行固定內容；資料夾衝突判定（`.gitignore` 內容不同、或有兩個檔案以外的檔案或子資料夾）；原子寫入（先寫同資料夾暫存檔再取代，失敗時不留下半寫的檔案）；機密掃描對 research.md R8 列出的各類樣式（私鑰標頭、權杖前綴、URL 中的 `user:password@`、`password`／`secret`／`token`／`api_key` 後接 `=` 或 `:` 與非空白值）都回報欄位路徑且不含該值，一般的長識別字與一般文字不誤判
+- [X] T005 建立 `home/skills/sdd-grill/scripts/sdd_grill.py` 骨架：uv inline metadata（`requires-python = ">=3.11"`、`dependencies` 為空）；只用標準函式庫；`main(argv)` 回傳結束碼並可指定專案根目錄與 stdin；五個子指令的分派（先回傳「尚未實作」的失敗，由後續任務實作）；結束碼 0、1、3 的常數（2 保留、4 不使用）；JSON 輸出與錯誤輸出的共用函式；載入為模組時不執行任何動作（contracts/cli.md「指令」「共通」「結束碼」「以模組方式載入」，contracts/skill.md「scripts/sdd_grill.py」）
+- [X] T006 在 `sdd_grill.py` 實作內容雜湊（換行正規化）、指紋計算與 `git rev-parse HEAD` 的讀取（`git` 不存在時視為不是 git repository），欄位依 `data-model.md` 的 `Fingerprint.constitution`、`Fingerprint.specs`、`Fingerprint.head`；所有輸出的路徑一律以 `/` 分隔、順序固定
+- [X] T007 在 `sdd_grill.py` 實作自我忽略的資料夾 `.specify/sdd-grill/`：建立資料夾與固定內容的 `.gitignore`、衝突判定、原子寫入、刪除自己的兩個檔案（資料夾變空時一併刪除）；每個函式以資料夾名稱為參數，能獨立呼叫（contracts/cli.md「以模組方式載入」；data-model.md「自己的資料夾」）
+- [X] T008 在 `sdd_grill.py` 實作機密掃描：依 research.md R8 的樣式掃描所有字串值，符合時回報欄位路徑，錯誤訊息 MUST NOT 印出該值；樣式刻意保守
+- [X] T009 [P] 建立 `tests/unit/test_sdd_grill_skill.py`，先加入針對腳本的靜態檢查：開頭有 uv inline metadata 且 `requires-python = ">=3.11"`、`dependencies` 為空；只 import 標準函式庫；不載入其他 skill 的程式；內容沒有中日韓文字、絕對路徑與信箱（contracts/skill.md「scripts/sdd_grill.py」；research.md R3 的 FR-022 列）
 
 **Checkpoint**: 核心就緒，可以開始 user story
 
