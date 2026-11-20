@@ -82,7 +82,9 @@ MUST NOT 有 `disable-model-invocation`（FR-001：Claude MAY 主動使用）。
 
 ### 產生文件（FR-013 至 FR-016、R4）
 
-22. 確認後以 `phase: "confirmed"` 保存。
+22. 確認後以 `phase: "confirmed"` 保存。確認後維護者要改決定時，只有 constitution 與 spec 都尚未產生才可改回
+    `"discussing"`（改回會重設 `baseline`，見 data-model.md 的「狀態轉移」）；已產生任何文件時，詢問依確認內容產生完、
+    停止或重新開始（FR-012、FR-014）。
 23. `constitution.action` 為 `create` 或 `amend` 時，以 Skill 工具呼叫 `speckit-constitution`，只傳入確認過的原則與治理規則，
     並要求不要推斷其他原則；完成後移除未確認的規則，想保留的先詢問維護者（FR-014；字樣：`speckit-constitution`）。
     `keep` 時不呼叫。

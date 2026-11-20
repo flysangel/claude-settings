@@ -327,11 +327,21 @@ What you never do while generating:
 - Never edit `.specify/feature.json` yourself. `speckit-specify` points it at each spec it creates, and the script's
   `focus` command points it at the first spec of this batch at the end.
 
-If the maintainer wants to change a decision after the summary was confirmed: before any spec exists, you can save
-with `phase` back to `"discussing"`, adjust, and confirm again. Once a spec has been generated, `save` refuses that
-("specs were already generated from the confirmed summary; it can no longer go back to discussing"). Explain that
-the generated specs already follow the confirmed summary, and ask whether to finish generating the rest as
-confirmed (the change can be made in the spec afterwards) or to stop here (see "When something fails").
+If the maintainer wants to change a decision after the summary was confirmed, what you can do depends on whether
+any document has been generated yet:
+
+- **Nothing generated yet** (neither the constitution, when the action is `"create"` or `"amend"`, nor any spec):
+  save with `phase` back to `"discussing"`, adjust, and present the summary for confirmation again.
+- **The constitution or a spec has been generated**: do not go back to `"discussing"`. Going back makes the script
+  drop the baseline it recorded at the first confirmation, and the next confirmation would record the documents as
+  they are now, including what was just generated. `verify` could then no longer tell whether the constitution was
+  written as confirmed: an amended constitution would be reported as not written, and a created one would pass even
+  if the changed principles never reached it. Once a spec exists, `save` refuses it anyway ("specs were already
+  generated from the confirmed summary; it can no longer go back to discussing"). Explain that the documents already
+  generated follow the confirmed summary, and ask one question: finish generating the rest as confirmed
+  (recommended; the change can be made in the documents afterwards), stop here (see "When something fails"), or
+  start over (run `clear` and begin a new discussion as in "Resume", step 4, where the documents already generated
+  are kept and count as existing).
 
 ## When something fails
 

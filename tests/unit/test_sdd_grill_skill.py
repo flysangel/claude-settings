@@ -291,6 +291,15 @@ def test_generating_the_documents():
     assert generate.index("speckit-constitution") < generate.index("speckit-specify")
 
 
+def test_going_back_to_discussing_only_before_any_document():
+    generate = section(GENERATE)
+    change = generate[generate.index("wants to change a decision after the summary was confirmed") :]
+
+    has_all(change, '"discussing"', "nothing generated yet", "the constitution or a spec has been generated")
+    has_all(change, "do not go back to", "baseline", "start over")
+    assert change.index("nothing generated yet") < change.index("do not go back to")
+
+
 def test_failure_keeps_the_progress_and_writes_nothing_more():
     failure = section(FAILURE)
 
@@ -363,6 +372,13 @@ def test_resume_confirmed_can_start_over_and_keeps_the_documents():
     has_any(confirmed, "do not delete or undo", "never delete", "do not delete")
     has_all(confirmed, "step 5 of \"start\"")
     has_any(confirmed, "numbered after them", "after the existing ones")
+
+
+def test_resume_confirmed_checks_a_written_constitution_again():
+    confirmed = confirmed_branch(section(RESUME))
+
+    has_all(confirmed, "did not report `constitution-not-written`", "rule by rule", "step 2 of \"generating the documents\"")
+    assert confirmed.index("rule by rule") < confirmed.index("not generated yet; if none are missing")
 
 
 def test_resume_confirmed_does_not_continue_over_lasting_failures():

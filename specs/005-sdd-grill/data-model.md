@@ -158,8 +158,9 @@ discussing ──save──▶ discussing          每個決定之後
    │ save（phase: confirmed）             維護者確認摘要；記下 baseline
    ▼
 confirmed ──save──▶ confirmed            每產生一份文件就填入 spec_dir
-   │  │
-   │  └─save（phase: discussing）         只在還沒有任何 spec_dir 時允許（確認後又要改摘要）
+   │  │  │
+   │  │  └─clear──▶（沒有進度）           接續時維護者選擇重新開始；已產生的文件保留
+   │  └─save（phase: discussing）         腳本只在還沒有任何 spec_dir 時允許；SKILL.md 另要求 constitution 也尚未產生
    │ verify 通過
    ▼
 focus（寫 .specify/feature.json；失敗時停在 confirmed）
@@ -169,3 +170,8 @@ clear ──▶（沒有進度）
 ```
 
 中途結束、產生失敗、`verify` 或 `focus` 不通過：停在目前的狀態，進度保留（FR-018）。
+
+改回 `discussing` 會把 `baseline` 設為 `null`，下一次確認以當下的檔案重新記下。constitution 若已由
+`speckit-constitution` 寫入，新的基準就包含它，`verify` 無法再判斷 constitution 是否依確認的內容寫入
+（`amend` 會誤報 `constitution-not-written`，`create` 則一律通過）。因此 SKILL.md 只在 constitution 與 spec
+都尚未產生時才改回 `discussing`；腳本能檢查的只有 `spec_dir`（第 8 條），constitution 的部分由 SKILL.md 負責。
