@@ -161,3 +161,67 @@ def make_project(tmp_path, monkeypatch):
         return root
 
     return factory
+
+
+# ------------------------------------- sdd-init: running the real script
+
+GIT_IDENTITY = ("-c", "user.name=test", "-c", "user.email=test@example.invalid")
+
+
+def find_bash() -> str:
+    """Git Bash on Windows (not the WSL launcher in System32), plain bash elsewhere."""
+    import shutil
+    import subprocess
+
+    if sys.platform == "win32":
+        done = subprocess.run(["git", "--exec-path"], capture_output=True, text=True)
+        if done.returncode == 0:
+            for parent in Path(done.stdout.strip()).parents:
+                candidate = parent / "bin" / "bash.exe"
+                if candidate.is_file():
+                    return str(candidate)
+    return shutil.which("bash") or "bash"
+
+
+def real_run_env(home: Path) -> dict[str, str]:
+    """Environment for running the real script: a temporary home, uv's real cache."""
+    import os
+    import subprocess
+
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    env["USERPROFILE"] = str(home)
+    for variable, command in (("UV_CACHE_DIR", ["uv", "cache", "dir"]), ("UV_PYTHON_INSTALL_DIR", ["uv", "python", "dir"])):
+        if variable not in env:
+            env[variable] = subprocess.run(command, capture_output=True, text=True, check=True).stdout.strip()
+    return env
+
+
+def run_sdd_init(cwd: Path, env: dict[str, str], command: str):
+    """Run the real script the way the skill does: uv run <script> init|remove."""
+    import subprocess
+
+    return subprocess.run(
+        ["uv", "run", str(SDD_INIT_PY), command],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+
+def run_spec_kit_scripts(project: Path, env: dict[str, str]) -> None:
+    """Run the two scripts the speckit-specify and speckit-plan skills call, and check the result."""
+    import subprocess
+
+    bash = find_bash()
+    for arguments in (
+        [".specify/scripts/bash/create-new-feature.sh", "--json", "--short-name", "demo", "Demo"],
+        [".specify/scripts/bash/setup-plan.sh", "--json"],
+    ):
+        done = subprocess.run(
+            [bash, *arguments], cwd=project, env=env, capture_output=True, text=True, encoding="utf-8"
+        )
+        assert done.returncode == 0, f"{arguments[0]} failed ({done.returncode}):\n{done.stdout}\n{done.stderr}"
+    assert (project / "specs" / "001-demo" / "plan.md").is_file()
