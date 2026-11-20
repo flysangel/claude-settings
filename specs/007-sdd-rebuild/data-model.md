@@ -84,6 +84,11 @@ Claude 送來的值被忽略（以既有值或腳本算出的值取代）。
 
 快照無法建立（舊專案的養分不是 `ours`）時 `save` 失敗，不寫入。
 
+**機密**（原則 V）：舊專案的兩個檔案在 006 寫入後仍可能被手動編輯，006 讀取時不檢查機密。007 以 006 的機密樣式（`SECRET_PATTERNS`）
+掃描讀到的養分與舊世代紀錄的每個字串（欄位名稱也算）：養分命中時視為 `invalid`（不是 `ours`，因此不能建立快照）；舊世代紀錄命中時
+`lineage_state` 記為 `"invalid"`、`lineage` 為 `null`（上表因此只允許 `"skipped"`）。既有進度中任何字串命中時（掃描加入前建立、或被手動編輯），
+進度視為無法讀取。命中時只回報欄位路徑，值不出現在任何輸出與檔案中。
+
 ### 目標（`target`、`discards`）
 
 `target` 有 `principles`、`features`、`lessons` 三個陣列；`features` 的順序就是 spec 的順序（施工順序）。每個項目：
@@ -144,8 +149,9 @@ Claude 送來的值被忽略（以既有值或腳本算出的值取代）。
 | `discard-conflict` | `discards` 的 `id` 是來源養分的有效項目，且沒有被 `inherit` 或出現在 `from` |
 | `pending-undecided` | 來源養分中每個 `pending` 的 `id` 都在 `pending_decided` 中 |
 | `existing-spec` | `existing_spec` 是新專案中存在、含 `spec.md` 的資料夾，彼此不同；有 `existing_spec` 的功能全部排在沒有的之前 |
-| `lineage-format` | 組好的世代紀錄通過 006 的 `lineage_problems`（`spec_dir` 尚未決定的功能以預留值 `specs/pending`、尚未決定的 `rebuilt_at` 以當天日期代入檢查；`preview` 輸出的 `lineage` 中兩者仍為 `null`）。只在前面八種檢查都通過時執行 |
-| `next-export` | 組好的世代紀錄通過 006 的 `generation_problems(L, L, None)`（research R6 第三層）。只在前面八種檢查都通過時執行 |
+| `secret` | 組好的世代紀錄中沒有符合 006 機密樣式的字串（上一節「機密」的最後一道檢查；只指出 `lineage.` 開頭的欄位路徑，`preview` 此時不輸出 `lineage` 與 `summary`） |
+| `lineage-format` | 組好的世代紀錄通過 006 的 `lineage_problems`（`spec_dir` 尚未決定的功能以預留值 `specs/pending`、尚未決定的 `rebuilt_at` 以當天日期代入檢查；`preview` 輸出的 `lineage` 中兩者仍為 `null`）。只在前面九種檢查都通過時執行 |
+| `next-export` | 組好的世代紀錄通過 006 的 `generation_problems(L, L, None)`（research R6 第三層）。只在前面九種檢查都通過時執行 |
 
 ### 已用過的 `id`
 

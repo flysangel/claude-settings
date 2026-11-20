@@ -2574,3 +2574,203 @@ def test_us4_a_failed_export_leaves_no_half_file(sdd_rebuild, sdd_export, tmp_pa
     assert result.out["reason"] == "os-error"
     assert not (old / ".sdd-export").exists()
     assert ok(check(sdd_rebuild, new, old))["export_dir"] == "none"
+
+
+# ------------------------- (T076) secrets in what the old project or the progress holds
+
+# A made-up value: it only has to look like a token to 006's patterns. Never a real credential.
+FAKE_TOKEN = "ghp_" + "Zq7Fake9Token" * 2
+
+
+def shows(result, value: str = FAKE_TOKEN) -> bool:
+    """Whether a command's stdout or stderr holds the value anywhere."""
+    return value in result.raw.decode("utf-8") or value in result.err
+
+
+def plant(data: dict, path: str, text: str) -> None:
+    """Set the string at a field path such as lessons[0].text (dotted names, [n] indexes)."""
+    import re
+
+    parts = [int(i) if i else name for name, i in re.findall(r"([^.\[\]]+)|\[(\d+)\]", path)]
+    target = data
+    for part in parts[:-1]:
+        target = target[part]
+    target[parts[-1]] = text
+
+
+def edit_nutrients(module_export, old: Path, path: str, text: str) -> None:
+    data = nutrients_of(old)
+    plant(data, path, text)
+    (old / ".sdd-export" / "nutrients.json").write_bytes(module_export.serialize(data, "nutrients"))
+
+
+SECRET_NUTRIENT_FIELDS = [
+    "lessons[0].text", "lessons[0].title", "principles[0].text", "features[0].title", "features[0].summary",
+    "features[0].requirements[0].text", "project",
+]
+
+
+@pytest.mark.parametrize("path", SECRET_NUTRIENT_FIELDS)
+def test_check_refuses_nutrients_that_hold_a_secret(sdd_rebuild, tmp_path, sdd_export, path):
+    old = gen1(tmp_path, sdd_export)
+    edit_nutrients(sdd_export, old, path, f"password={FAKE_TOKEN}")
+    new = make_rebuild_new(tmp_path)
+    before = tree_snapshot(new)
+    result = check(sdd_rebuild, new, old)
+
+    assert (result.code, result.out["reason"]) == (3, "nutrients-invalid")
+    assert result.out["nutrients"] is None and result.out["export_dir"] == "invalid"
+    assert [(e["check"], e["path"]) for e in result.out["nutrients_errors"]] == [("secret", path)]
+    assert not shows(result)
+    assert tree_snapshot(new) == before
+
+
+def test_check_with_progress_does_not_show_nutrients_that_now_hold_a_secret(sdd_rebuild, tmp_path, sdd_export):
+    old, new, _ = started(sdd_rebuild, tmp_path, sdd_export)
+    edit_nutrients(sdd_export, old, "lessons[0].text", f"token: {FAKE_TOKEN}")
+    result = check(sdd_rebuild, new)
+    out = ok(result)
+
+    assert (out["export_dir"], out["nutrients"], out["source_state"], out["source_diff"]) == (
+        "invalid", None, "unavailable", None)
+    assert [e["check"] for e in out["nutrients_errors"]] == ["secret"]
+    assert out["saved"] is not None and not shows(result)
+
+
+def test_check_does_not_repeat_a_secret_in_a_field_name(sdd_rebuild, tmp_path, sdd_export):
+    old = gen1(tmp_path, sdd_export)
+    data = nutrients_of(old)
+    data["lessons"][0][f"token={FAKE_TOKEN}"] = "x"
+    (old / ".sdd-export" / "nutrients.json").write_bytes(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+    result = check(sdd_rebuild, make_rebuild_new(tmp_path), old)
+
+    assert (result.code, result.out["reason"]) == (3, "nutrients-invalid")
+    assert result.out["nutrients_errors"] and not shows(result)
+
+
+def gen2_lineage_with_secret(tmp_path, sdd_export) -> Path:
+    old = gen2(tmp_path, sdd_export)
+    data = json.loads((old / ".sdd-rebuild" / "lineage.json").read_bytes().decode("utf-8"))
+    data["lessons"][0]["text"] += f" token: {FAKE_TOKEN}"
+    write_tree(old, {".sdd-rebuild/lineage.json": sdd_export.serialize(data, "lineage")})
+    return old
+
+
+def test_an_old_lineage_with_a_secret_is_invalid_and_never_saved(sdd_rebuild, tmp_path, sdd_export):
+    old = gen2_lineage_with_secret(tmp_path, sdd_export)
+    new = make_rebuild_new(tmp_path)
+    result = check(sdd_rebuild, new, old)
+    out = ok(result)
+
+    assert out["old_lineage"] == "invalid"
+    assert [(e["check"], e["path"]) for e in out["old_lineage_errors"]] == [("secret", "lessons[0].text")]
+    assert not shows(result)
+
+    nutrients = out["nutrients"]
+    used = save(sdd_rebuild, new, keep_all_progress(out["old"]["path"], nutrients, "used"))
+    assert (used.code, used.out["reason"], used.out["path"]) == (1, "invalid", "old_lineage")
+    assert not shows(used)
+    ok(save(sdd_rebuild, new, keep_all_progress(out["old"]["path"], nutrients, "skipped")))
+    assert FAKE_TOKEN not in (new / ".specify/sdd-rebuild/progress.json").read_text(encoding="utf-8")
+    again = check(sdd_rebuild, new)
+    assert ok(again)["saved"]["source"]["lineage"] is None and not shows(again)
+
+
+def test_refresh_source_refuses_nutrients_with_a_secret(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    edit_nutrients(sdd_export, old, "features[0].summary", f"api_key = {FAKE_TOKEN}")
+    before = tree_snapshot(new)
+    result = save(sdd_rebuild, new, progress, "--refresh-source")
+
+    assert (result.code, result.out["reason"]) == (1, "source")
+    assert tree_snapshot(new) == before and not shows(result)
+
+
+def test_first_save_refuses_nutrients_with_a_secret(sdd_rebuild, tmp_path, sdd_export):
+    old = gen1(tmp_path, sdd_export)
+    progress = keep_all_progress(os.path.realpath(old), nutrients_of(old), "not-needed")
+    edit_nutrients(sdd_export, old, "lessons[0].text", f"password={FAKE_TOKEN}")
+    new = make_rebuild_new(tmp_path)
+    before = tree_snapshot(new)
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"]) == (1, "source")
+    assert tree_snapshot(new) == before and not shows(result)
+
+
+@pytest.mark.parametrize("where", ["source.nutrients.lessons[0].text", "source.lineage", "target.lessons[0].text"])
+def test_saved_progress_that_holds_a_secret_is_unreadable(sdd_rebuild, tmp_path, sdd_export, where):
+    """A progress written before the scan existed (or edited by hand) is not shown and not used."""
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    data = saved(new)
+    if where == "source.lineage":
+        data["source"]["lineage"] = {"note": f"token: {FAKE_TOKEN}"}
+    else:
+        plant(data, where, f"password={FAKE_TOKEN}")
+    write_tree(new, {".specify/sdd-rebuild/progress.json": json.dumps(data, ensure_ascii=False)})
+    result = check(sdd_rebuild, new, old)
+
+    assert (result.code, result.out["reason"], result.out["progress"], result.out["saved"]) == (
+        3, "progress-unreadable", "unreadable", None)
+    assert not shows(result)
+    for argv in (["preview"], ["claim", "deploy"], ["verify"], ["lineage"], ["focus"]):
+        later = run_rebuild(sdd_rebuild, new, *argv)
+        assert (later.code, later.out["reason"]) == (1, "no-progress"), argv
+        assert not shows(later), argv
+    assert not (new / ".sdd-rebuild").exists()
+    assert ok(run_rebuild(sdd_rebuild, new, "clear")) == {"cleared": True}
+
+
+def test_preview_and_lineage_scan_the_composed_lineage(sdd_rebuild, tmp_path, sdd_export, monkeypatch):
+    """The last net: whatever reaches the composed lineage is scanned before it is shown or written."""
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    real = sdd_rebuild.compose_lineage
+
+    def leaky(*args, **kwargs):
+        lineage = real(*args, **kwargs)
+        lineage["lessons"][0]["text"] = f"password={FAKE_TOKEN}"
+        return lineage
+
+    monkeypatch.setattr(sdd_rebuild, "compose_lineage", leaky)
+    result = run_rebuild(sdd_rebuild, new, "preview")
+    assert (result.code, result.out["reason"]) == (1, "invalid")
+    assert [(e["check"], e["path"]) for e in result.out["errors"]] == [("secret", "lineage.lessons[0].text")]
+    assert result.out["lineage"] is None and result.out["summary"] is None
+    assert not shows(result)
+
+    written = run_rebuild(sdd_rebuild, new, "lineage")
+    assert (written.code, written.out["reason"]) == (1, "invalid")
+    assert [e["check"] for e in written.out["errors"]] == ["secret"]
+    assert not shows(written) and not (new / ".sdd-rebuild").exists()
+
+
+@pytest.mark.parametrize("path", [
+    "constitution.governance[0]", "deferred[0].item", "for_plan[0].item", "discards[0].reason",
+    "adjustments[0].change", "target.principles[0].title", "language", "target.features[0].summary",
+    "target.features[0].requirements[0].text",
+])
+def test_save_refuses_a_secret_the_maintainer_typed(sdd_rebuild, tmp_path, sdd_export, path):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    nutrients = nutrients_of(old)
+    progress["constitution"]["governance"] = ["rule"]
+    progress["deferred"] = [{"item": "later", "reason": "why", "feature": None}]
+    progress["for_plan"] = [{"item": "choice", "feature": None}]
+    lesson = nutrients["lessons"][-1]["id"]
+    progress["target"]["lessons"] = [l for l in progress["target"]["lessons"] if l["id"] != lesson]
+    progress["discards"] = [{"id": lesson, "text": None, "reason": "no longer"}]
+    progress["adjustments"] = [{"lesson": nutrients["lessons"][0]["id"], "change": "c", "adopted": None}]
+    ok(save(sdd_rebuild, new, progress))
+    before = tree_snapshot(new)
+    plant(progress, path, f"password={FAKE_TOKEN}")
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", path)
+    assert not shows(result) and tree_snapshot(new) == before
+
+
+def test_save_does_not_repeat_a_secret_in_a_field_name(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress[f"token={FAKE_TOKEN}"] = 1
+    result = save(sdd_rebuild, new, progress)
+
+    assert result.code == 1 and not shows(result)

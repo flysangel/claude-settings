@@ -273,7 +273,7 @@ def test_rule_3_names_save_as_the_only_write_before_confirming():
 
 
 # ---------------------------------------- outcomes of every stage (T070)
-# contracts/skill.md "階段與結果的數量": 17 + 5 + 14 + 2 + 5 + 3 + 3 + 6 + 3 + 6 + 7 + 7 + 4 + 12 = 94.
+# contracts/skill.md "階段與結果的數量": 17 + 5 + 14 + 2 + 5 + 3 + 3 + 7 + 3 + 6 + 7 + 7 + 4 + 13 = 96.
 # Each outcome names the words a block (a paragraph or list item) of its stage must hold together.
 
 OUTCOMES = {
@@ -342,6 +342,7 @@ OUTCOMES = {
     ],
     8: [
         ("`ok` is `false`", "unaccounted", "id-taken", "pending-undecided"),
+        ("`secret`", "by hand", "clear"),
         ("next-export", "lineage-format", "stop", "defect"),
         ("confirms", '"confirmed"', "stage 9"),
         ("`invalid`", "preview", "again"),
@@ -395,6 +396,7 @@ OUTCOMES = {
         ("`verify`", "stage 11"),
         ("`focus`", "`clear`", "stage 13", "start over"),
         ("unavailable", "snapshot"),
+        ("nutrients_errors", "`secret`", "snapshot"),
         ("source_diff", "--refresh-source", "snapshot", "start over"),
         ("start over", "kept", "existing", "clear"),
         ("change a decision", "finish", "/sdd-grill"),
@@ -402,11 +404,11 @@ OUTCOMES = {
 }
 
 
-def test_there_are_94_outcomes():
+def test_there_are_96_outcomes():
     counts = {key: len(value) for key, value in OUTCOMES.items()}
 
-    assert counts == {1: 17, 2: 5, 3: 14, 4: 2, 5: 5, 6: 3, 7: 3, 8: 6, 9: 3, 10: 6, 11: 7, 12: 7, 13: 4, "resume": 12}
-    assert sum(counts.values()) == 94
+    assert counts == {1: 17, 2: 5, 3: 14, 4: 2, 5: 5, 6: 3, 7: 3, 8: 7, 9: 3, 10: 6, 11: 7, 12: 7, 13: 4, "resume": 13}
+    assert sum(counts.values()) == 96
 
 
 @pytest.mark.parametrize("stage, words", [(stage, words) for stage, entries in OUTCOMES.items() for words in entries],
@@ -825,3 +827,68 @@ def test_walkthrough_fixes_stay():
     assert has_block(section(5), "discard it", "take it out of the target")
     assert has_block(section(11), "other than `not-reviewed`", "only")
     assert has_block(section("resume"), "`items`", "stage 4", "stage 5")
+
+
+# --------------------- (T076) secrets in the old project's files or in the progress
+
+NEGATIONS = ("never", "do not", "must not")
+
+
+def negated(block: str) -> bool:
+    return any(word in block for word in NEGATIONS)
+
+
+def test_a_secret_in_the_nutrients_is_reported_by_path_without_opening_the_file():
+    part = section(1)
+
+    assert has_block(part, "nutrients-invalid", "`secret`", ".sdd-export/nutrients.json", "path", "remove")
+    block = next(b.lower() for b in blocks(part) if "`secret`" in b and "nutrients-invalid" in b)
+    assert negated(block) and "open" in block
+
+
+def test_a_secret_in_the_old_lineage_is_reported_by_path_without_opening_the_file():
+    part = section(3)
+
+    assert has_block(part, "old_lineage_errors", "`secret`", ".sdd-rebuild/lineage.json", "path", "remove")
+    block = next(b.lower() for b in blocks(part) if "`secret`" in b and "old_lineage" in b)
+    assert negated(block) and "open" in block
+
+
+def test_an_unreadable_progress_is_not_opened():
+    block = next(b.lower() for b in blocks(section(1)) if "progress-unreadable" in b)
+
+    assert "secret" in block and negated(block) and "open" in block
+
+
+def test_no_export_from_here_when_the_old_lineage_holds_a_secret():
+    # sdd-export's own check prints the old lineage's content; stage 2 must not run it then.
+    assert has_block(section(2), "old_lineage_errors", "`secret`", "stop")
+
+
+def test_a_secret_in_the_composed_lineage_stops_the_confirmation():
+    assert has_block(section(8), "`secret`", "by hand", "clear")
+
+
+def test_a_secret_in_the_current_nutrients_while_resuming():
+    assert has_block(section("resume"), "nutrients_errors", "`secret`", "snapshot", ".sdd-export/nutrients.json")
+
+
+def test_lineage_changed_names_the_file_without_quoting_it():
+    block = next(b.lower() for b in blocks(section(12)) if "lineage-changed" in b)
+
+    assert "path" in block and negated(block) and "content" in block
+
+
+def test_the_skill_never_has_the_old_files_or_the_progress_opened():
+    # Every mention of these files tells the reader not to open them (they reach the reader only through the script).
+    for name in ("nutrients.json", "progress.json"):
+        found = [b.lower() for b in blocks(body()) if name in b]
+        assert found, name
+        for block in found:
+            assert negated(block), (name, block)
+
+
+def test_rule_8_says_the_script_scans_what_it_reads():
+    rule = next(b.lower() for b in blocks(section("rules")) if b.startswith("8."))
+
+    assert "old project" in rule and "path" in rule and "secret" in rule

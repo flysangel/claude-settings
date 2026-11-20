@@ -50,6 +50,8 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 7. **語言**：對話依全域設定；產生的文件依 FR-021（繁體中文，規範詞保留英文，除非新專案既有文件使用其他語言）；進度與世代紀錄的文字
    維持養分的繁體中文（006 schema 1 固定）（字樣：`Traditional Chinese`）。
 8. **機密**：機密值 MUST NOT 出現在對話、進度、產生的文件與世代紀錄中；只記錄「需要什麼」（原則 V；字樣：`secret`）。
+   腳本也掃描從舊專案與進度讀到的內容，命中時只給 `check: "secret"` 與欄位路徑；向維護者說明是哪個檔案、哪個路徑，
+   MUST NOT 為了找出值而開啟該檔案（舊專案的 `nutrients.json`、`lineage.json`、新專案的進度檔只經由腳本的輸出取得）。
 9. **保存**：每一個決定之後以 `save` 保存完整進度（stdin，quoted heredoc），讓中斷後能接續（字樣：`save`、`heredoc`）。
 10. **維護者在確認前要求結束**：確認進度已保存，告訴維護者再執行 `/sdd-rebuild` 會接續、或在接續時選擇重新開始；
     不產生任何文件，停止（Edge Cases「維護者中途結束」）。
@@ -68,7 +70,7 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 | 結束碼 0，沒有進度，`export_dir` 為 `ours` | 階段 3 |
 | 結束碼 0，沒有進度，`export_dir` 為 `none` 或 `empty` | 階段 2 |
 | `progress: "conflict"` | 列出 `.specify/sdd-rebuild/` 中不明的檔案，請維護者移走後再執行；停止 |
-| `progress-unreadable` | 說明進度無法讀取；詢問：清除進度並重新開始（建議）或停止讓維護者自己檢查；清除時執行 `clear` 後重新執行 `check` |
+| `progress-unreadable` | 說明進度無法讀取（可能被手動編輯，或含有機密樣式）；詢問：清除進度並重新開始（建議）或停止讓維護者自己檢查（MUST NOT 自己開啟進度檔）；清除時執行 `clear` 後重新執行 `check` |
 | `old-mismatch` | 說明進度屬於另一個舊專案（列出兩個路徑）；詢問：沿用進度的舊專案繼續（建議）或清除進度、以新的路徑重新開始 |
 | `dependency` | 列出缺少的 skill，請維護者重新部署（`tools/deploy.py`）；停止 |
 | `speckit-missing` | 請維護者先執行 `/sdd-init`；停止（FR-002） |
@@ -79,14 +81,15 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 | `rebuilt` | 說明這個專案已經重建過（第幾代）；一個專案只重建一次：要加需求用 `/sdd-grill`，要再生下一代就在這個專案 `/sdd-export` 後另開新專案；停止 |
 | `rebuild-conflict` | 列出 `rebuild_conflicts` 或錯誤；`.sdd-rebuild/` 不是本功能能使用的狀態，請維護者處理；停止 |
 | `nutrients-conflict` | 列出 `conflicts`（舊專案的 `.sdd-export/` 有不是 sdd-export 的檔案）；請維護者在舊專案處理；停止 |
-| `nutrients-unreadable`、`nutrients-invalid` | 列出 `nutrients_errors` 的欄位路徑；請維護者修正養分，或在舊專案再執行 `/sdd-export`；停止（FR-019） |
+| `nutrients-unreadable`、`nutrients-invalid` | 列出 `nutrients_errors` 的欄位路徑；請維護者修正養分，或在舊專案再執行 `/sdd-export`；`check` 為 `secret` 時說明舊專案的 `.sdd-export/nutrients.json` 在該路徑看起來含機密值，請維護者在舊專案移除後重跑，MUST NOT 開啟該檔案；停止（FR-019） |
 | `nutrients-newer` | 說明養分來自較新的 sdd-export，請維護者更新 skill（重新部署本 repo 的 `home/`）；停止（Edge Cases） |
 
 ### 階段 2：舊專案沒有養分時的匯出（US4、FR-003、R3）
 
 15. 說明舊專案還沒有養分，將依 sdd-export 的規則對舊專案匯出，會在舊專案寫入 `.sdd-export/`（只有這個資料夾），匯出前後都需要維護者確認；
     以一題詢問：先匯出（建議）、我自己到舊專案執行 `/sdd-export` 後再回來、停止。
-16. `export_skill` 為 `false` 時不能匯出：說明需要部署 sdd-export，停止。
+16. `export_skill` 為 `false` 時不能匯出：說明需要部署 sdd-export，停止。`old_lineage_errors` 有 `check: "secret"` 時也不從這裡匯出
+    （006 的 `check` 會原樣印出舊世代紀錄）：說明舊專案的 `.sdd-rebuild/lineage.json` 在該路徑看起來含機密值，請維護者移除後重跑，停止。
 17. 匯出的指示：以 Read 讀取 `${CLAUDE_SKILL_DIR}/../sdd-export/SKILL.md`，依它的「Rules for the whole run」與 Stage 1 至 Stage 9 執行，
     **只做下列替換**，其他規則（含機密、只讀、git 允許清單、一題一項）原樣遵守（字樣：`../sdd-export/SKILL.md`、`--project`、`-C`）：
     - 腳本是 `${CLAUDE_SKILL_DIR}/../sdd-export/scripts/sdd_export.py`，每個指令加上 `--project "<old.path>"`；
@@ -115,7 +118,7 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 | `none` 且 `needs_old_lineage` 為 `false` | 第一代；記為 `"not-needed"`；階段 4 |
 | `none` 且 `needs_old_lineage` 為 `true` | 說明世代紀錄在匯出後被移除、只存在於它的祖先會遺失；詢問：停止並從 git 歷史還原（建議）或只以養分繼續（記為 `"skipped"`） |
 | `mismatch` | 說明世代紀錄與養分的世代不同；詢問：停止並確認兩者屬於同一個專案（建議）或只以養分繼續 |
-| `unreadable`、`invalid` | 列出 `old_lineage_errors`；詢問：停止並修正（建議）或只以養分繼續 |
+| `unreadable`、`invalid` | 列出 `old_lineage_errors`；詢問：停止並修正（建議）或只以養分繼續；`check` 為 `secret` 時說明舊專案的 `.sdd-rebuild/lineage.json` 在該路徑看起來含機密值、建議移除後重跑，MUST NOT 開啟該檔案 |
 | `newer` | 說明它來自較新的 sdd-rebuild；詢問：停止並更新 skill（建議）或只以養分繼續 |
 | `conflict` | 說明它不是 sdd-rebuild 寫的；詢問：停止並檢查（建議）或只以養分繼續 |
 | 選擇停止 | 沒有寫入（尚未 `save`）；說明處理後再執行 `/sdd-rebuild`；停止 |
@@ -196,6 +199,7 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 | 結果 | 下一步 |
 |---|---|
 | `preview` 的 `ok` 為 `false` | 依 `errors` 修正目標（`unaccounted` 表示有來源項目沒有去處、`id-taken` 表示 `id` 已用過要改名、`pending-undecided` 表示還有待確認項目等）；需要決定的一題一項詢問；回到第 33 項 |
+| `preview` 的 `errors` 含 `secret` | 組好的世代紀錄看起來含機密值（只有路徑）；`save` 與腳本都會擋下，所以代表進度檔被手動修改；詢問：清除並重新開始（建議）或停止；MUST NOT 開啟進度檔 |
 | `preview` 回 `next-export` 或 `lineage-format` 錯誤 | 這代表 007 的組成與 006 不一致；回報錯誤內容，請維護者回報問題；停止（不確認） |
 | 維護者確認 | `save`（`phase: "confirmed"`）；成功 → 階段 9 |
 | 確認時 `save` 回 `invalid` | `preview` 之後進度又被改；重新執行第 33 項 |
@@ -256,7 +260,7 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 |---|---|
 | 成功（含 `unchanged: true`） | 階段 13 |
 | `mismatch-documents` | 同階段 11 |
-| `lineage-changed` | `.sdd-rebuild/lineage.json` 在途中被寫入不同的內容：列出；不覆蓋；請維護者檢查（它可能是手動放入的）；停止 |
+| `lineage-changed` | `.sdd-rebuild/lineage.json` 在途中被寫入不同的內容：只指出路徑，MUST NOT 開啟或引用其內容（它可能是手動放入的）；不覆蓋；請維護者檢查；停止 |
 | `rebuild-conflict` | 列出；停止 |
 | `invalid` | 確認後進度不可能再變，出現代表進度檔被手動修改；回報 `errors`；停止 |
 | `internal` | 回報 `errors`，說明這是 sdd-rebuild 的缺陷、世代紀錄沒有寫入、已產生的文件保留；請維護者回報；停止 |
@@ -280,7 +284,9 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 ### 接續（進度存在時，FR-010 的延伸、Edge Cases）
 
 45. 依 `check` 呈現進度：階段、已決定的項目數、`next`。
-46. 舊專案的變化：`source_state` 為 `unavailable` 時說明以快照繼續、不影響；`source_changed` 為真時呈現 `source_diff`（字樣：`source_diff`）：
+46. 舊專案的變化：`source_state` 為 `unavailable` 時說明以快照繼續、不影響；`nutrients_errors` 有 `check: "secret"` 時說明舊專案的
+    `.sdd-export/nutrients.json` 在該路徑看起來含機密值、快照不含它而繼續以快照為準，請維護者移除（MUST NOT 開啟該檔案）；
+    `source_changed` 為真時呈現 `source_diff`（字樣：`source_diff`）：
     - `phase` 為 `deciding`：詢問：改用新的養分（建議；`save --refresh-source`，之後 `preview` 會指出需要重新決定的項目，逐項處理）、沿用快照繼續、重新開始。
     - `phase` 為 `confirmed`：說明已確認的內容以快照為準，繼續（不再詢問）。
 47. 新專案的變化（`changed`）：`deciding` 時，constitution 或 spec 有變就重新執行階段 4 的比對；`confirmed` 時交給 `verify` 判斷。
@@ -314,15 +320,15 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 | 5 逐項決定 | 5 |
 | 6 新需求 | 3 |
 | 7 教訓 | 3 |
-| 8 摘要與確認 | 6 |
+| 8 摘要與確認 | 7 |
 | 9 constitution | 3 |
 | 10 spec | 6 |
 | 11 驗證 | 7 |
 | 12 世代紀錄 | 7 |
 | 13 收尾 | 4 |
-| 接續 | 8 種 `next.step`，加上舊專案變化 2 種、重新開始與改決定 2 種（共 12） |
+| 接續 | 8 種 `next.step`，加上舊專案變化 3 種、重新開始與改決定 2 種（共 13） |
 
-合計 94 種結果，每一種都有下一步。
+合計 96 種結果，每一種都有下一步。
 
 ## README.md
 

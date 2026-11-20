@@ -88,7 +88,11 @@ These apply at every stage.
    Chinese text whatever the documents' language.
 8. **Secrets stay out.** No password, key, token or credential value may appear in the conversation, the progress,
    the generated documents or the lineage. If one matters, record only what is needed ("needs an API key for the
-   payment service, supplied at run time"). `save` refuses text that looks like a secret.
+   payment service, supplied at run time"). `save` refuses text that looks like a secret. The script also scans
+   what it reads from the old project and from the saved progress, because those files can be edited by hand after
+   they were written: where something looks like a secret, it shows nothing of it, only a `check` named `secret`
+   and the field path, and it keeps nothing of it. Report the file and the path to the maintainer; never open the
+   file to find the value, and never repeat a value you come across.
 9. **Save after every decision.** After every decision, give the whole progress to `save` on stdin with a quoted
    heredoc, so that the shell changes nothing in it:
 
@@ -196,9 +200,10 @@ Do not try to work around a problem by writing, moving or deleting anything your
 - Exit code 0 and `progress` is `"present"`: a rebuild is under way; go to "Resuming".
 - Exit code 0, no progress, `export_dir` is `"ours"`: the old project has nutrients; go to stage 3.
 - Exit code 0, no progress, `export_dir` is `none` or `empty`: the old project has no nutrients yet; go to stage 2.
-- `reason` is `progress-unreadable`: the saved progress cannot be read (it was probably edited by hand). Ask: clear
-  it and start over (recommended), or stop so the maintainer can look at `.specify/sdd-rebuild/progress.json`. To
-  clear, run `clear` and then run `check` again with the same `--old`; if `clear` answers `conflict`, handle it like
+- `reason` is `progress-unreadable`: the saved progress cannot be read (it was probably edited by hand, or it holds
+  something that looks like a secret, which the script never shows). Ask: clear it and start over (recommended), or
+  stop so the maintainer can look at `.specify/sdd-rebuild/progress.json`; do not open that file yourself. To clear,
+  run `clear` and then run `check` again with the same `--old`; if `clear` answers `conflict`, handle it like
   `progress` `"conflict"` above. Stopping writes nothing.
 - `reason` is `old-mismatch`: the saved progress belongs to another old project. Show both paths:
   `saved.old_project` (the progress) and `old.path` (the path given now). Ask: continue with the progress's old
@@ -230,7 +235,11 @@ Do not try to work around a problem by writing, moving or deleting anything your
   written. Stop.
 - `reason` is `nutrients-unreadable` or `nutrients-invalid`: the old project's nutrients cannot be read or do not
   match the format. List the field paths in `nutrients_errors`, and ask the maintainer to fix the nutrients or run
-  `/sdd-export` again in the old project. Nothing was written. Stop.
+  `/sdd-export` again in the old project. When an error's `check` is `secret`, a field looks like it holds a secret
+  (probably added by hand after the export): tell the maintainer that the old project's `.sdd-export/nutrients.json`
+  looks like it holds a secret value at that path, and ask them to remove it there (or run `/sdd-export` again)
+  and then run `/sdd-rebuild` again. Do not open that file to find the value; the path is all you report. Nothing
+  was written. Stop.
 - `reason` is `nutrients-newer`: the nutrients come from a newer sdd-export. Ask the maintainer to update the skills
   (deploy the settings repository's `home/` again). Nothing was written. Stop.
 - Any other exit code or `reason`: rule 12.
@@ -241,7 +250,11 @@ The old project has no nutrients (`export_dir` is `none` or `empty`). They can b
 sdd-export's own instructions; doing so writes `.sdd-export/` into the old project, and nothing else.
 
 First, if `export_skill` from `check` is `false`, the sdd-export skill is not installed next to this one: tell the
-maintainer that it must be deployed for the export, that nothing was written, and stop.
+maintainer that it must be deployed for the export, that nothing was written, and stop. Likewise, if
+`old_lineage_errors` from `check` holds a `check` named `secret`, do not export from here: sdd-export's own `check`
+prints the old project's lineage as it is, value included. Tell the maintainer that the old project's
+`.sdd-rebuild/lineage.json` looks like it holds a secret value at that path, ask them to remove it there and run
+`/sdd-rebuild` again; nothing was written. Stop.
 
 Otherwise explain that the old project has no nutrients yet; that you can export them now by following sdd-export's
 rules; that this writes the old project's `.sdd-export/` folder and only that folder; and that the maintainer
@@ -306,7 +319,10 @@ of `derived_from` unbroken. Record the result in the progress `old_lineage`:
 - `old_lineage` is `"mismatch"`: the lineage is of another generation than the nutrients. Ask: stop and check that
   both belong to the same project (recommended), or continue with the nutrients only (`"skipped"`).
 - `old_lineage` is `unreadable` or `invalid`: list `old_lineage_errors` (field paths). Ask: stop and fix it
-  (recommended), or continue with the nutrients only (`"skipped"`).
+  (recommended), or continue with the nutrients only (`"skipped"`). When an error's `check` is `secret`, the old
+  project's `.sdd-rebuild/lineage.json` looks like it holds a secret value at that path (probably added by hand); say
+  so, and recommend that the maintainer remove it there and run `/sdd-rebuild` again. Do not open that file to find
+  the value. The script keeps nothing of a lineage like that, so continuing means `"skipped"`.
 - `old_lineage` is `"newer"`: it comes from a newer sdd-rebuild. Ask: stop and update the skills (recommended), or
   continue with the nutrients only (`"skipped"`).
 - `old_lineage` is `"conflict"`: the file was not written by sdd-rebuild. Ask: stop and check it (recommended), or
@@ -485,6 +501,10 @@ Outcomes:
   about it); `inherit-unknown`, `from-unknown` and `discard-conflict` mean an id in the target is wrong or an item
   is both kept and discarded; `existing-spec` means a match to an existing spec is wrong or out of order. Ask one
   question per decision the maintainer has to make, save, and run `preview` again.
+- `errors` holds `secret`: a field of the composed lineage looks like it holds a secret (`path` names it; the value
+  is not shown). `save` refuses such text from you and the script refuses it from the old project, so the saved
+  progress was edited by hand. Tell the maintainer, and ask: clear the progress and start over (recommended; run
+  `clear`, then `check --old`), or stop. Do not open the progress file. Nothing is generated.
 - `errors` holds `next-export` or `lineage-format`: the composed lineage disagrees with sdd-export's rules although
   every decision is valid. That is a defect of sdd-rebuild, not something to fix in the decisions. Show the errors,
   ask the maintainer to report the problem, and stop without confirming. The progress stays saved.
@@ -628,8 +648,9 @@ Outcomes:
 - It succeeds (also with `"unchanged": true`, when an earlier run wrote the same lineage before being interrupted):
   go to stage 13.
 - `mismatch-documents`: the documents changed since `verify`; handle `failures` as in stage 11.
-- `lineage-changed`: `.sdd-rebuild/lineage.json` exists with other content (perhaps it was put there by hand). Show
-  it; never overwrite or change it yourself. Ask the maintainer to look at it. Stop.
+- `lineage-changed`: `.sdd-rebuild/lineage.json` exists with other content (perhaps it was put there by hand). Name
+  its path; do not open it or quote its content, which may hold anything; never overwrite or change it yourself. Ask
+  the maintainer to look at it. Stop.
 - `rebuild-conflict`: `.sdd-rebuild/` holds something this skill did not write (`rebuild_conflicts`). Show it. Stop.
 - `invalid` (with `errors`): the confirmed progress cannot change, so this means the progress file was edited by
   hand. Show `errors`. Stop.
@@ -693,6 +714,10 @@ What changed in the old project:
 
 - `source_state` is `"unavailable"`: the old project or its nutrients cannot be read now. That does not matter: the
   snapshot has everything; continue.
+- `nutrients_errors` holds a `check` named `secret`: the old project's `.sdd-export/nutrients.json` now looks like it
+  holds a secret value at that path (it was edited after the snapshot). The snapshot does not have it and is still
+  used; continue from the snapshot (`--refresh-source` would answer `source`). Tell the maintainer the path and ask
+  them to remove the value there; do not open that file.
 - `source_changed` has `true`: the nutrients (or the old lineage) changed since the snapshot. Show `source_diff`
   (items added, removed and changed; for the lineage, say that it changed). While `phase` is `"deciding"`, ask:
   use the new nutrients (recommended; `save --refresh-source` with the current progress, then run `preview`: its

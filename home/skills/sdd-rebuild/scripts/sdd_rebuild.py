@@ -324,6 +324,47 @@ def problem(check: str, path: str, detail: str) -> dict:
     return {"check": check, "path": path, "detail": detail}
 
 
+# ------------------------------------------------------------------ secrets
+
+SECRET_DETAIL = "this field looks like it holds a secret; its value is not shown"
+
+
+def secret_paths(value, path: str = "") -> list[str]:
+    """Field paths of the strings that look like secrets by sdd-export's patterns; never the values themselves.
+
+    A field name that looks like a secret is reported at the path of the object that holds it, so that the name is
+    not repeated either.
+    """
+    found: list[str] = []
+    if isinstance(value, str):
+        if E().looks_like_secret(value):
+            found.append(path or "(top level)")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str) or E().looks_like_secret(key):
+                found.append(path or "(top level)")
+                continue
+            found += secret_paths(item, E().join(path, key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found += secret_paths(item, E().join(path, index))
+    return list(dict.fromkeys(found))
+
+
+def secret_problems(value, prefix: str = "") -> list[dict]:
+    return [problem("secret", E().join(prefix, path) if prefix else path, SECRET_DETAIL) for path in secret_paths(value)]
+
+
+def shown_problems(problems: list[dict]) -> list[dict]:
+    """sdd-export's problems about the old project, with any path or detail that would repeat a secret replaced."""
+    result = []
+    for entry in problems:
+        if any(E().looks_like_secret(str(entry.get(key, ""))) for key in ("path", "detail")):
+            entry = problem("secret", "(not shown)", SECRET_DETAIL)
+        result.append(entry)
+    return result
+
+
 def own_problems(snapshot: dict, progress: dict, root: Path | None) -> list[dict]:
     """The first layer: sdd-rebuild's own writing rules, which sdd-export cannot check when it reads."""
     nutrients = snapshot["nutrients"]
@@ -390,6 +431,7 @@ def own_problems(snapshot: dict, progress: dict, root: Path | None) -> list[dict
                                     f"'{item_id}' has no decision yet; ask the maintainer and add it to pending_decided"))
 
     problems += existing_spec_problems(target, root)
+    problems += secret_problems(lineage, "lineage")
     return problems
 
 
@@ -822,6 +864,9 @@ def load_progress(root: Path) -> tuple[str, dict | None]:
         return "unreadable", None
     if not stored_shape_ok(data) or snapshot_problem(data, data["source"]) is not None:
         return "unreadable", None
+    # Written before the old project's content was scanned, or edited by hand: never shown, never used.
+    if secret_paths(data):
+        return "unreadable", None
     return "present", data
 
 
@@ -874,21 +919,31 @@ def lineage_hash(old: Path) -> str | None:
 def read_old(old: Path) -> dict:
     """What sdd-export's code says about the old project's .sdd-export/ and .sdd-rebuild/lineage.json (read only)."""
     folder = E().export_folder(old)
-    nutrients = folder["existing"] if folder["export_dir"] == "ours" else None
+    export_dir = folder["export_dir"]
+    nutrients = folder["existing"] if export_dir == "ours" else None
+    errors = [p.as_dict() for p in folder["errors"]] if export_dir in ("invalid", "unreadable") else []
+    # Nutrients edited by hand after the export may hold a secret that sdd-export's reading does not look for:
+    # they count as invalid, and only the field paths are reported.
+    hits = secret_problems(nutrients) if nutrients is not None else []
+    if hits:
+        export_dir, nutrients, errors = "invalid", None, hits
     state, lineage, problems = E().load_lineage(old / REBUILD_DIR / LINEAGE_NAME)
+    lineage_errors = [p.as_dict() for p in problems]
+    if state == "present" and secret_paths(lineage):
+        state, lineage, lineage_errors = "invalid", None, secret_problems(lineage)
     if state == "present" and nutrients is not None and lineage.get("generation") != nutrients.get("generation"):
         state, lineage = "mismatch", None
     raw = old / EXPORT_DIR / "nutrients.json"
     return {
-        "export_dir": folder["export_dir"],
+        "export_dir": export_dir,
         "conflicts": folder["conflicts"],
-        "edited": folder["export_dir"] == "ours" and folder["nutrients"] in ("edited", "unknown"),
-        "errors": [p.as_dict() for p in folder["errors"]] if folder["export_dir"] in ("invalid", "unreadable") else [],
+        "edited": export_dir == "ours" and folder["nutrients"] in ("edited", "unknown"),
+        "errors": shown_problems(errors),
         "nutrients": nutrients,
         "nutrients_sha256": E().content_hash(raw.read_bytes()) if nutrients is not None else None,
         "lineage_state": state,
         "lineage": lineage,
-        "lineage_errors": [p.as_dict() for p in problems],
+        "lineage_errors": shown_problems(lineage_errors),
         "lineage_sha256": lineage_hash(old),
     }
 
@@ -1172,6 +1227,10 @@ def command_save(io: Io, options: dict) -> int:
     try:
         progress = validate_progress(read_stdin_json(io))
     except Invalid as error:
+        if E().looks_like_secret(str(error)):
+            # A field name that looks like a secret: name where it is, not the name itself.
+            where = error.path.rpartition(".")[0] or "(top level)"
+            return io.fail(SECRET.format(where), "secret", path=where)
         return io.fail(str(error), "invalid", path=error.path)
     secret = G().find_secret(progress)
     if secret is not None:
@@ -1307,8 +1366,10 @@ def command_preview(io: Io, options: dict) -> int:
     snapshot = progress["source"]
     problems = preview_problems(snapshot, progress, io.root)
     lineage = compose_lineage(snapshot, progress)
-    out = {"ok": not problems, "errors": problems, "generation": lineage["generation"], "lineage": lineage,
-           "summary": summarize(snapshot, progress, lineage), "counts": counts_of(lineage)}
+    hidden = any(p["check"] == "secret" for p in problems)
+    out = {"ok": not problems, "errors": problems, "generation": lineage["generation"],
+           "lineage": None if hidden else lineage,
+           "summary": None if hidden else summarize(snapshot, progress, lineage), "counts": counts_of(lineage)}
     if problems:
         return io.fail(PREVIEW_INVALID, "invalid", **out)
     return io.emit(out)

@@ -30,6 +30,7 @@ uv run --with pytest pytest -v          # 全部（含 005、006 的既有測試
 | 不補入的對照 | `status-list` 可被重用（證明補入必要） |
 | 跨平台 | 以 006 的固定養分重建出的 `lineage.json` 等於 `tests/unit/fixtures/sdd_rebuild/` 的固定資料；CRLF 輸入結果相同 |
 | 舊專案只讀 | 每個指令執行前後，舊專案的檔案樹（名稱、大小、內容雜湊）相同 |
+| 舊專案被手動加入機密（T076） | 以自編的假權杖（例如 `ghp_` 加 24 個英數）寫進養分或舊世代紀錄的字串：`check` 只列 `check: "secret"` 與欄位路徑；養分 → `nutrients-invalid`、`save` 回 `source`；舊世代紀錄 → `old_lineage: "invalid"`、只能 `skipped`；含機密的既有進度 → `progress-unreadable`；每個指令的 stdout、stderr、進度與 `lineage.json` 都不含該值 |
 
 ## 腳本的手動檢查
 
@@ -63,3 +64,6 @@ uv run <repo>/home/skills/sdd-rebuild/scripts/sdd_rebuild.py check --old <舊專
    既有 spec 未被改動，新 spec 編號接在後面，世代紀錄中該功能的 `spec_dir` 指向既有的資料夾。
 7. **錯誤**：新專案未導入 Spec Kit → 請先 `/sdd-init`；路徑不存在 → 回報並停止；舊專案就是新專案 → 回報並停止；
    新專案已重建過 → 回報並停止；舊專案的世代紀錄被刪除（養分為第 2 代以上）→ 說明影響並詢問停止或略過。
+8. **舊專案被手動加入機密值（原則 V）**：在舊專案的 `.sdd-export/nutrients.json` 某個字串加入假權杖 → 說明是哪個檔案的哪個欄位路徑、
+   請維護者移除後重跑，對話中不出現該值，Claude 沒有開啟該檔案；在舊世代紀錄加入 → 階段 3 說明並建議移除，選擇略過時進度與新專案的
+   `lineage.json` 都不含該值。

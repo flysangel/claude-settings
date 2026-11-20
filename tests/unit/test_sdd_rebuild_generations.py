@@ -671,3 +671,64 @@ def test_outputs_are_the_same_bytes_for_lf_and_crlf_input(sdd_rebuild, sdd_expor
         outputs.append(run_rebuild(sdd_rebuild, new, "preview").raw)
 
     assert outputs[0] == outputs[1]
+
+
+# ------------------------------------- (T076) a secret put into the old project by hand
+
+# A made-up value that only has to look like a token to 006's patterns; never a real credential.
+FAKE_TOKEN = "ghp_" + "Zq7Fake9Token" * 2
+
+
+def recording(monkeypatch):
+    """Record every 007 result while the round trip runs (the helpers above call run_rebuild by name)."""
+    import sys
+
+    results = []
+    real = run_rebuild
+
+    def run(*args, **kwargs):
+        result = real(*args, **kwargs)
+        results.append((args[2:], result))
+        return result
+
+    monkeypatch.setattr(sys.modules[__name__], "run_rebuild", run)
+    return results
+
+
+def leaked(results) -> list:
+    return [argv for argv, r in results if FAKE_TOKEN in r.raw.decode("utf-8") or FAKE_TOKEN in r.err]
+
+
+def test_hand_edited_nutrients_with_a_secret_stop_at_check(sdd_rebuild, sdd_export, tmp_path, monkeypatch):
+    old = make_rebuild_old(sdd_export, tmp_path, export_fixture("gen1-draft.json"), name="gen1")
+    path = old / ".sdd-export" / "nutrients.json"
+    data = json.loads(path.read_bytes())
+    data["lessons"][0]["text"] = f"password={FAKE_TOKEN}"
+    path.write_bytes(sdd_export.serialize(data, "nutrients"))
+    assert ok(run_export(sdd_export, old, "check"))["export_dir"] == "ours"  # 006 still reads them as its own
+    results = recording(monkeypatch)
+    new = make_rebuild_new(tmp_path, "gen2")
+    check = run_rebuild(sdd_rebuild, new, "check", "--old", str(old))
+    first = run_rebuild(sdd_rebuild, new, "save", stdin=keep_all_progress(os.path.realpath(old), data, "not-needed"))
+
+    assert (check.code, check.out["reason"], check.out["nutrients"]) == (3, "nutrients-invalid", None)
+    assert [(e["check"], e["path"]) for e in check.out["nutrients_errors"]] == [("secret", "lessons[0].text")]
+    assert (first.code, first.out["reason"]) == (1, "source")
+    assert not (new / ".specify" / "sdd-rebuild").exists() and not (new / ".sdd-rebuild").exists()
+    assert leaked(results) == []
+
+
+def test_an_old_lineage_with_a_secret_never_reaches_the_new_lineage(sdd_rebuild, sdd_export, tmp_path, monkeypatch):
+    gen2, lineage2 = generation_two(sdd_rebuild, sdd_export, tmp_path)
+    export_with_006(sdd_export, gen2, draft_from_lineage(lineage2, "my-tool"))
+    path = gen2 / ".sdd-rebuild" / "lineage.json"
+    data = json.loads(path.read_bytes())
+    data["lessons"][0]["text"] += f" token: {FAKE_TOKEN}"
+    path.write_bytes(sdd_export.serialize(data, "lineage"))
+    results = recording(monkeypatch)
+
+    new, lineage3 = rebuild(sdd_rebuild, sdd_export, gen2, tmp_path, "gen3")
+
+    assert results[0][1].out["old_lineage"] == "invalid"
+    assert FAKE_TOKEN not in (new / ".sdd-rebuild" / "lineage.json").read_text(encoding="utf-8")
+    assert len(results) > 10 and leaked(results) == []

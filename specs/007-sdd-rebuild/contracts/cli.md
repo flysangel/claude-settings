@@ -27,6 +27,10 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
   寫入一律「同資料夾的暫存檔再取代」（005 的 `atomic_write`）。
 - 執行時以 `importlib` 載入 `<skill>/../sdd-export/scripts/sdd_export.py` 與 `<skill>/../sdd-grill/scripts/sdd_grill.py`；
   任一個不存在或載入失敗時，所有指令以結束碼 3、`reason: "dependency"` 結束，`missing` 列出缺少的 skill 名稱。
+- **機密**（原則 V）：舊專案的養分與世代紀錄、既有的進度都可能在寫入後被手動編輯。007 以 006 的機密樣式掃描它們的每個字串
+  （欄位名稱也算），也掃描 `preview`、`lineage` 組好的世代紀錄；命中時只輸出 `check: "secret"` 與欄位路徑（`detail` 不含值），
+  不建立快照、不寫入任何檔案。任何指令的輸出（含 `error`、`detail`、差異、轉述的 006 錯誤）都不含命中的值；006 的錯誤的路徑或說明
+  含有機密樣式時改以 `{"check": "secret", "path": "(not shown)", ...}` 取代。不新增 `reason`：命中時沿用下表既有的 `reason`。
 - 唯一的外部指令是 `git`（經 005 的 `fingerprint` 執行 `rev-parse`，只讀）。
 - Windows 與 Linux 的輸出逐位元組相同（`saved_at`、`rebuilt_at`、`head`、`old.path` 這類取決於當下或機器的值除外）。
   `--old` 接受該平台的路徑寫法；比較路徑時以實際路徑（`realpath`）、Windows 上不分大小寫。
@@ -38,11 +42,11 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 | 0 | | 全部 | 成功 |
 | 1 | `usage` | 全部 | 用法錯誤 |
 | 1 | `old-mismatch` | `check` | `--old` 與進度的 `old_project` 不同 |
-| 1 | `invalid` | `save`、`preview` | 進度不符合結構，或 `preview` 的檢查不通過（`errors` 列出） |
-| 1 | `secret` | `save` | 字串符合機密樣式（只指出欄位路徑） |
+| 1 | `invalid` | `save`、`preview` | 進度不符合結構，或 `preview` 的檢查不通過（`errors` 列出；含組好的世代紀錄有機密樣式時的 `secret`） |
+| 1 | `secret` | `save` | 字串符合機密樣式（只指出欄位路徑；欄位名稱符合時指出所在物件的路徑） |
 | 1 | `frozen` | `save` | 已確認的內容被修改，或已產生文件後要改回 `deciding` |
 | 1 | `finished` | `save` | 世代紀錄已寫入，只能 `focus`、`clear` |
-| 1 | `source` | `save` | 建立或更新快照時舊專案的養分無法使用（`export_dir` 不是 `ours`） |
+| 1 | `source` | `save` | 建立或更新快照時舊專案的養分無法使用（`export_dir` 不是 `ours`，含養分有機密樣式時） |
 | 1 | `no-progress` | `preview`、`claim`、`verify`、`lineage`、`focus` | 沒有進度；或需要已確認的進度而它還在 `deciding` |
 | 1 | `none`、`ambiguous`、`mismatch` | `claim` | 見 claim |
 | 1 | `not-next` | `claim` | 這個功能不是下一個要產生 spec 的功能，或它對應既有 spec、已經有 `spec_dir` |
@@ -59,8 +63,8 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 | 3 | `same-project`、`old-inside-new`、`new-inside-old` | `check` | 兩個路徑相同或互相包含 |
 | 3 | `rebuilt` | `check` | 新專案已有世代紀錄（`rebuild_dir: "ours"`）而沒有進度 |
 | 3 | `rebuild-conflict` | `check`、`lineage` | `rebuild_dir` 為 `conflict` 或 `invalid` |
-| 3 | `nutrients-conflict`、`nutrients-unreadable`、`nutrients-invalid`、`nutrients-newer` | `check` | 舊專案的 `.sdd-export/` 無法使用（006 的判定；沒有進度時才判定） |
-| 3 | `progress-unreadable` | `check` | 進度無法解析或不符合結構（可以 `clear`） |
+| 3 | `nutrients-conflict`、`nutrients-unreadable`、`nutrients-invalid`、`nutrients-newer` | `check` | 舊專案的 `.sdd-export/` 無法使用（006 的判定，或養分有機密樣式時的 `nutrients-invalid`；沒有進度時才判定） |
+| 3 | `progress-unreadable` | `check` | 進度無法解析、不符合結構，或含有機密樣式（可以 `clear`） |
 
 `check` 的 `reason` 依上表由上而下取第一個成立的。`export_dir` 為 `none`、`empty`（需要先匯出）不是錯誤，結束碼 0。
 
@@ -107,14 +111,14 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 | `rebuild_dir`、`rebuild_conflicts` | data-model「`.sdd-rebuild/`」；`conflict` 時列出不屬於本功能的路徑 |
 | `progress` | `"none"`、`"present"`、`"unreadable"`、`"conflict"` |
 | `changed` | 進度存在時，新專案指紋中改變的項目（`constitution`、`specs`、`head`） |
-| `saved` | 進度的完整內容（`present` 時） |
+| `saved` | 進度的完整內容（`present` 時；含機密樣式的進度是 `unreadable`，不輸出） |
 | `old` | `path`：實際路徑（`--old` 或進度的 `old_project`）；`state`：`"ok"`、`"missing"`、`"not-folder"`、`"same"`、`"old-inside-new"`、`"new-inside-old"` |
-| `export_dir`、`conflicts` | 006 對舊專案 `.sdd-export/` 的判定與衝突的路徑（相對於舊專案）；舊專案無法存取時 `null` |
+| `export_dir`、`conflicts` | 006 對舊專案 `.sdd-export/` 的判定與衝突的路徑（相對於舊專案）；舊專案無法存取時 `null`；006 判為 `ours` 但養分有機密樣式時為 `"invalid"` |
 | `nutrients_edited` | 006 的 `nutrients` 為 `"edited"` 或 `"unknown"`（匯出後被手動編輯） |
-| `nutrients_errors` | `export_dir` 為 `invalid` 或 `unreadable` 時的錯誤（同 006 的 `errors` 格式） |
+| `nutrients_errors` | `export_dir` 為 `invalid` 或 `unreadable` 時的錯誤（同 006 的 `errors` 格式）；機密樣式時每個命中的欄位一項 `{"check": "secret", "path": <養分中的路徑>, "detail": <不含值>}` |
 | `nutrients` | 目前舊專案的養分（`ours` 時）；接續時與快照比對用，Claude 呈現養分時以它（沒有進度時）或 `saved.source.nutrients`（有進度時）為準 |
 | `pending` | 養分中 `status: "pending"` 的 `id`，依出現順序 |
-| `old_lineage`、`old_lineage_errors` | 006 `load_lineage` 對舊專案世代紀錄的結果（`present` 但世代與養分不同時 `"mismatch"`）與錯誤 |
+| `old_lineage`、`old_lineage_errors` | 006 `load_lineage` 對舊專案世代紀錄的結果（`present` 但世代與養分不同時 `"mismatch"`；有機密樣式時 `"invalid"`，錯誤只列 `check: "secret"` 與路徑）與錯誤 |
 | `needs_old_lineage` | 養分的 `generation` ≥ 2 |
 | `source_state` | 有進度時：`"available"`（舊專案的養分可讀）或 `"unavailable"`；沒有進度時 `null` |
 | `source_changed` | 有進度且 `available` 時：養分、舊世代紀錄的雜湊是否與快照不同；否則 `null` |
@@ -142,7 +146,8 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 
 1. 自己的資料夾不存在就建立，並寫入固定內容的 `.gitignore`。
 2. 沒有既有進度、或帶 `--refresh-source`（只在 `deciding` 允許；確認後帶它時結束碼 1、`reason: "frozen"`，不寫入）時，以 006 的程式讀取 `old_project` 建立快照；
-   舊專案的 `.sdd-export/` 不是 `ours` 時 `reason: "source"`，不寫入。其他時候沿用既有快照。
+   舊專案的 `.sdd-export/` 不是 `ours`（含養分有機密樣式）時 `reason: "source"`，不寫入；舊世代紀錄有機密樣式時不納入快照（`lineage_state: "invalid"`）。
+   其他時候沿用既有快照。
 3. 填入 `saved_at`、`fingerprint`；第一次 `confirmed` 時記下 `baseline` 與 `rebuilt_at`；改回 `deciding` 時兩者設為 `null`。
    `spec_dir`、`lineage_written` 沿用既有值。
 4. 原子寫入 `progress.json`。
@@ -177,7 +182,8 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 ```
 
 `errors` 的格式同 006：`{"check", "path", "detail"}`，`check` 名稱見 data-model。`ok` 為 `false` 時結束碼 1、`reason: "invalid"`，
-`error` 為 `the decisions do not yet make a valid lineage`，`summary` 仍輸出能組成的部分。
+`error` 為 `the decisions do not yet make a valid lineage`，`summary` 仍輸出能組成的部分；但 `errors` 含 `secret` 時 `lineage` 與 `summary` 為 `null`
+（不輸出命中的值）。
 
 ## claim
 
@@ -212,7 +218,7 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 
 1. `rebuild_dir` 為 `conflict` 或 `invalid`：結束碼 3、`rebuild-conflict`，不寫入。
 2. 執行 `verify`；不通過時 `mismatch-documents`，不寫入。
-3. 以快照與進度組成世代紀錄，依序執行三層驗證（research R6）：007 的檢查不通過時 `invalid`；
+3. 以快照與進度組成世代紀錄，依序執行三層驗證（research R6）：007 的檢查（含 `secret`）不通過時 `invalid`；
    006 的 `lineage_problems` 或 `generation_problems(L, L, None)` 不通過時 `internal`（輸出 `errors`），都不寫入。
 4. `lineage.json` 已存在：換行正規化後與組成的位元組相同時不改寫（`unchanged: true`）；不同時 `lineage-changed`，不寫入。
 5. 建立 `.sdd-rebuild/`（需要時），原子寫入 `lineage.json`；`.gitattributes` 不存在時寫入固定內容，存在時不動。
