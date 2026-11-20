@@ -1213,3 +1213,15 @@ def test_other_commands_never_write_feature_json(sdd_grill, grill_project, comma
     run_grill(sdd_grill, root, command, stdin=stdin)
 
     assert (root / FEATURE_JSON).read_bytes() == b'{"feature_directory": "specs/002-b"}'
+
+
+def test_focus_without_features_changes_nothing(sdd_grill, grill_project):
+    root = grill_project(constitution=CONSTITUTION_TEMPLATE)
+    generated(sdd_grill, root, [], {}, constitution=WRITTEN_CONSTITUTION)
+    write_tree(root, {FEATURE_JSON: feature_json("specs/009-x")})
+
+    result = run_grill(sdd_grill, root, "focus")
+
+    assert result.code == 0
+    assert result.out == {"feature_directory": None, "previous": "specs/009-x", "changed": False}
+    assert (root / FEATURE_JSON).read_bytes() == feature_json("specs/009-x")

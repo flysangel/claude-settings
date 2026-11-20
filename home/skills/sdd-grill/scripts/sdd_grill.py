@@ -519,6 +519,38 @@ def command_check(io: "Io") -> int:
     return io.emit(result)
 
 
+def command_verify(io: "Io") -> int:
+    progress = confirmed_progress(io.root)
+    if progress is None:
+        return io.fail(NOTHING_TO_VERIFY)
+    result = verify_generated(io.root, progress)
+    if not result["ok"]:
+        return io.fail(MISMATCH, **result)
+    return io.emit(result)
+
+
+def command_focus(io: "Io") -> int:
+    root = io.root
+    progress = confirmed_progress(root)
+    if progress is None:
+        return io.fail(NOTHING_TO_POINT_AT)
+    result = verify_generated(root, progress)
+    if not result["ok"]:
+        return io.fail(FOCUS_MISMATCH, failures=result["failures"])
+    path = root / FEATURE_JSON_PATH
+    if (path.exists() or path.is_symlink()) and not path.is_file():
+        return io.fail(NOT_REGULAR)
+    previous = read_feature_directory(path) if path.is_file() else None
+    if not progress["features"]:
+        # A summary that only changes the constitution generates no spec; there is nothing to point at.
+        return io.emit({"feature_directory": None, "previous": previous, "changed": False})
+    target = progress["features"][0]["spec_dir"]
+    changed = previous != target
+    if changed:
+        atomic_write(path, dumps({"feature_directory": target}))
+    return io.emit({"feature_directory": target, "previous": previous, "changed": changed})
+
+
 def read_stdin_json(io: "Io"):
     raw = io.stdin.read()
     try:
@@ -571,6 +603,149 @@ def command_save(io: "Io") -> int:
     return io.emit({"saved": f"{OWN_DIR}/{PROGRESS_NAME}", "phase": progress["phase"], "baseline": recorded})
 
 
+# ---------------------------------------------------------------- verification
+
+FEATURE_JSON_PATH = ".specify/feature.json"
+NOTHING_TO_VERIFY = "there is no confirmed summary to verify"
+NOTHING_TO_POINT_AT = "there is no confirmed summary to point at"
+MISMATCH = "the generated documents do not match the confirmed summary"
+FOCUS_MISMATCH = MISMATCH + "; .specify/feature.json was not changed"
+NOT_REGULAR = ".specify/feature.json is not a regular file; nothing was written"
+
+
+def _sort_key(number: str | None, mode: str):
+    """A comparable key for a spec number, or None when it cannot be compared in this numbering mode."""
+    if number is None:
+        return None
+    if mode == "sequential":
+        return int(number) if number.isdigit() else None
+    return number
+
+
+def verify_generated(root: Path, progress: dict) -> dict:
+    """The checks of data-model.md "驗證產生的結果"; every failure is listed, in a fixed order."""
+    baseline = progress["baseline"] or {"constitution": None, "specs": {}}
+    features = progress["features"]
+    action = progress["constitution"]["action"]
+    mode = numbering(root)
+    failures: list[dict] = []
+
+    def fail(check: str, detail: str) -> None:
+        failures.append({"check": check, "detail": detail})
+
+    for rel, recorded in baseline["specs"].items():
+        current = file_hash(root / rel)
+        if current is None:
+            fail("existing-spec-changed", f"{rel} existed before the documents were generated and is gone now")
+        elif current != recorded:
+            fail("existing-spec-changed", f"{rel} existed before the documents were generated and has changed")
+
+    constitution_now = file_hash(root / CONSTITUTION_PATH)
+    if action == "keep" and constitution_now != baseline["constitution"]:
+        fail("constitution-changed", f"{CONSTITUTION_PATH} was to be kept as it was, but it has changed")
+    if action == "create" and constitution_state(root) != "written":
+        fail("constitution-not-written", f"{CONSTITUTION_PATH} is still missing or an unfilled template")
+    if action == "amend" and (constitution_now is None or constitution_now == baseline["constitution"]):
+        fail("constitution-not-written", f"{CONSTITUTION_PATH} was to be amended, but it has not changed")
+
+    for entry in features:
+        spec_dir = entry["spec_dir"]
+        if spec_dir is None:
+            fail("spec-missing", f'feature "{entry["id"]}" has no spec folder recorded yet')
+        elif not (root / spec_dir / "spec.md").is_file():
+            fail("spec-missing", f'feature "{entry["id"]}" records {spec_dir}, but {spec_dir}/spec.md does not exist')
+
+    seen: set[str] = set()
+    for entry in features:
+        spec_dir = entry["spec_dir"]
+        if spec_dir is None:
+            continue
+        if f"{spec_dir}/spec.md" in baseline["specs"]:
+            fail("spec-not-new", f'feature "{entry["id"]}" records {spec_dir}, which existed before this batch')
+        elif spec_dir in seen:
+            fail("spec-not-new", f'feature "{entry["id"]}" records {spec_dir}, which another feature records too')
+        seen.add(spec_dir)
+
+    baseline_keys = [
+        _sort_key(spec_number(rel.split("/")[1]), mode) for rel in baseline["specs"] if rel.count("/") == 2
+    ]
+    baseline_keys = [key for key in baseline_keys if key is not None]
+    highest = max(baseline_keys) if baseline_keys else None
+    keys: dict[str, object] = {}
+    previous = None
+    for entry in features:
+        spec_dir = entry["spec_dir"]
+        if spec_dir is None:
+            continue
+        key = _sort_key(spec_number(spec_dir.split("/", 1)[1]), mode)
+        keys[entry["id"]] = key
+        if key is None:
+            fail("order", f"the number of {spec_dir} cannot be read in {mode} numbering")
+            continue
+        if previous is not None and not key > previous[0]:
+            fail("order", f"{spec_dir} is not numbered after {previous[1]}, which comes before it in the summary")
+        elif highest is not None and not key > highest:
+            fail("order", f"{spec_dir} is not numbered after the specs that existed before this batch")
+        previous = (key, spec_dir)
+
+    dirs = {entry["id"]: entry["spec_dir"] for entry in features}
+    for entry in features:
+        own = keys.get(entry["id"])
+        if own is None:
+            continue
+        for dep in entry["depends_on"]:
+            if dep in dirs:
+                target, target_key = dirs[dep], keys.get(dep)
+                if target is None:
+                    continue
+            else:
+                target = dep
+                target_key = _sort_key(spec_number(dep.split("/", 1)[-1]), mode)
+                if target_key is None and f"{dep}/spec.md" in baseline["specs"]:
+                    continue  # an existing spec without a number came before this batch anyway
+            if target_key is None or not target_key < own:
+                fail("dependency-order", f'{entry["spec_dir"]} depends on {target}, which is not numbered before it')
+
+    recorded_dirs = {entry["spec_dir"] for entry in features if entry["spec_dir"]}
+    unexpected = [
+        f"{SPECS_DIR}/{name}"
+        for name in spec_folders(root)
+        if f"{SPECS_DIR}/{name}/spec.md" not in baseline["specs"] and f"{SPECS_DIR}/{name}" not in recorded_dirs
+    ]
+    return {
+        "ok": not failures,
+        "failures": failures,
+        "constitution": constitution_state(root),
+        "specs": [
+            {
+                "feature": entry["id"],
+                "dir": entry["spec_dir"],
+                "depends_on": [dirs.get(dep) or dep for dep in entry["depends_on"]],
+            }
+            for entry in features
+        ],
+        "unexpected": unexpected,
+    }
+
+
+def confirmed_progress(root: Path) -> dict | None:
+    state, progress = load_progress(root)
+    if state != "present" or progress["phase"] != "confirmed":
+        return None
+    return progress
+
+
+def read_feature_directory(path: Path) -> str | None:
+    """The valid feature_directory of .specify/feature.json, or None."""
+    try:
+        data = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(data, dict) and isinstance(data.get("feature_directory"), str):
+        return data["feature_directory"]
+    return None
+
+
 def dumps(data: dict) -> bytes:
     return (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
@@ -611,7 +786,7 @@ def main(argv: list[str] | None = None, root: Path | None = None, stdin=None, st
         return io.fail(f"{argv[0]} failed: {error.strerror or error}")
 
 
-HANDLERS = {"check": command_check, "save": command_save}
+HANDLERS = {"check": command_check, "save": command_save, "verify": command_verify, "focus": command_focus}
 
 
 if __name__ == "__main__":
