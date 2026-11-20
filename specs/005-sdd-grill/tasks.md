@@ -137,13 +137,13 @@ skill 的結構與內容檢查在 `tests/unit/test_sdd_grill_skill.py`；改同�
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T030 [US3] 在 `tests/unit/test_sdd_grill.py` 加入 `check` 的進度與變更偵測測試（contracts/cli.md「check」，data-model.md「指紋」）：沒有進度 → `progress` 為 `"none"`、`saved` 為 `null`；有效進度 → `"present"`、`saved` 為完整內容、`changed` 為空；之後修改 constitution、修改或新增 spec.md、新增 commit，`changed` 依固定順序（`constitution`、`specs`、`head`）列出不同的項目；非 git repository 或沒有 `git` 時 `head` 不算變更；`progress.json` 不是有效 JSON、`schema` 或 `tool` 不符、不符合驗證規則 → `"unreadable"`、`saved` 為 `null`；資料夾衝突 → `"conflict"`；`check` 在以上各情況都不寫入
-- [ ] T031 [US3] 在 `tests/unit/test_sdd_grill.py` 加入 `clear` 測試（contracts/cli.md「clear」）：刪除 `progress.json` 與 `.gitignore`、資料夾變空時一併刪除、輸出 `{"cleared": true}`；本來就沒有 → `{"cleared": false}` 且結束碼 0、重複執行結果相同；`unreadable` 的進度也能清除；資料夾有其他檔案或 `.gitignore` 不是自己寫的 → 結束碼 1、同 `save` 的衝突 `error`、任何檔案都不刪除；`clear` 不寫入或刪除 `.specify/sdd-grill/` 以外的任何東西（包含 `.specify/feature.json` 與 `specs/`）
+- [X] T030 [US3] 在 `tests/unit/test_sdd_grill.py` 加入 `check` 的進度與變更偵測測試（contracts/cli.md「check」，data-model.md「指紋」）：沒有進度 → `progress` 為 `"none"`、`saved` 為 `null`；有效進度 → `"present"`、`saved` 為完整內容、`changed` 為空；之後修改 constitution、修改或新增 spec.md、新增 commit，`changed` 依固定順序（`constitution`、`specs`、`head`）列出不同的項目；非 git repository 或沒有 `git` 時 `head` 不算變更；`progress.json` 不是有效 JSON、`schema` 或 `tool` 不符、不符合驗證規則 → `"unreadable"`、`saved` 為 `null`；資料夾衝突 → `"conflict"`；`check` 在以上各情況都不寫入
+- [X] T031 [US3] 在 `tests/unit/test_sdd_grill.py` 加入 `clear` 測試（contracts/cli.md「clear」）：刪除 `progress.json` 與 `.gitignore`、資料夾變空時一併刪除、輸出 `{"cleared": true}`；本來就沒有 → `{"cleared": false}` 且結束碼 0、重複執行結果相同；`unreadable` 的進度也能清除；資料夾有其他檔案或 `.gitignore` 不是自己寫的 → 結束碼 1、同 `save` 的衝突 `error`、任何檔案都不刪除；`clear` 不寫入或刪除 `.specify/sdd-grill/` 以外的任何東西（包含 `.specify/feature.json` 與 `specs/`）
 
 ### Implementation for User Story 3
 
-- [ ] T032 [US3] 在 `sdd_grill.py` 補完 `check` 的 `progress`、`changed`、`saved`：以 T007 的資料夾函式判定 `none`／`present`／`unreadable`／`conflict`，`present` 時重新計算指紋並與 `Progress.fingerprint` 逐項比較（`Fingerprint.constitution`、`Fingerprint.specs`、`Fingerprint.head`），讓 T030 通過；`check` 仍然只讀
-- [ ] T033 [US3] 在 `sdd_grill.py` 實作 `clear`，讓 T031 通過：只刪自己的兩個檔案與（變空時的）資料夾、不看進度內容、衝突時不刪任何檔案
+- [X] T032 [US3] 在 `sdd_grill.py` 補完 `check` 的 `progress`、`changed`、`saved`：以 T007 的資料夾函式判定 `none`／`present`／`unreadable`／`conflict`，`present` 時重新計算指紋並與 `Progress.fingerprint` 逐項比較（`Fingerprint.constitution`、`Fingerprint.specs`、`Fingerprint.head`），讓 T030 通過；`check` 仍然只讀
+- [X] T033 [US3] 在 `sdd_grill.py` 實作 `clear`，讓 T031 通過：只刪自己的兩個檔案與（變空時的）資料夾、不看進度內容、衝突時不刪任何檔案
 
 ### Tests and implementation of SKILL.md for User Story 3
 

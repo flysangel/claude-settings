@@ -500,8 +500,17 @@ def utc_now() -> str:
 def command_check(io: "Io") -> int:
     root = io.root
     speckit, missing = speckit_state(root)
-    progress, saved = "none", None
+    progress, saved = load_progress(root)
     changed: list[str] = []
+    if saved is not None:
+        now = fingerprint(root)
+        then = saved["fingerprint"]
+        for key in ("constitution", "specs"):
+            if now[key] != then[key]:
+                changed.append(key)
+        # Without git (or outside a repository) there is no HEAD to compare.
+        if now["head"] is not None and now["head"] != then["head"]:
+            changed.append("head")
     result = {
         "speckit": speckit,
         "missing": missing,
@@ -549,6 +558,16 @@ def command_focus(io: "Io") -> int:
     if changed:
         atomic_write(path, dumps({"feature_directory": target}))
     return io.emit({"feature_directory": target, "previous": previous, "changed": changed})
+
+
+def command_clear(io: "Io") -> int:
+    own = io.root / OWN_DIR
+    state = own_folder_state(own)
+    if state == "conflict":
+        return io.fail(CONFLICT)
+    if state == "absent":
+        return io.emit({"cleared": False})
+    return io.emit({"cleared": remove_own_files(own)})
 
 
 def read_stdin_json(io: "Io"):
@@ -777,16 +796,13 @@ def main(argv: list[str] | None = None, root: Path | None = None, stdin=None, st
     )
     if len(argv) != 1 or argv[0] not in COMMANDS:
         return io.fail(USAGE)
-    handler = HANDLERS.get(argv[0])
-    if handler is None:
-        return io.fail(f"{argv[0]} is not implemented yet")
     try:
-        return handler(io)
+        return HANDLERS[argv[0]](io)
     except OSError as error:
         return io.fail(f"{argv[0]} failed: {error.strerror or error}")
 
 
-HANDLERS = {"check": command_check, "save": command_save, "verify": command_verify, "focus": command_focus}
+HANDLERS = {"check": command_check, "save": command_save, "verify": command_verify, "focus": command_focus, "clear": command_clear}
 
 
 if __name__ == "__main__":
