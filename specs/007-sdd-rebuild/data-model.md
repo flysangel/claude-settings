@@ -47,7 +47,7 @@ Claude 送來的值被忽略（以既有值或腳本算出的值取代）。
 | `stage` | `"items"`、`"new"`、`"lessons"`、`"summary"` | 逐項決定 → 新需求 → 教訓引發的調整 → 最終摘要；`confirmed` 時必為 `"summary"` |
 | `source` | 物件 | 腳本：快照，見「快照」 |
 | `old_lineage` | `"used"`、`"not-needed"`、`"skipped"` | 祖先表是否納入舊專案的世代紀錄，見「快照」 |
-| `constitution` | 物件 | `{"action": "create" \| "amend" \| "keep", "governance": [字串]}`；原則的內容來自 `target.principles` |
+| `constitution` | 物件 | `{"action": "create" \| "amend" \| "keep", "governance": [字串]}`；原則的內容來自 `target.principles`。`governance` 是要傳給 `speckit-constitution` 的治理規則；確認後它也收「比對 constitution 時維護者同意保留的多出內容」（規則或原則都記在這裡，只新增），用途只是讓之後的比對不再重複詢問，不進世代紀錄（驗證規則 7） |
 | `target` | 物件 | 決定後的結果，見「目標」 |
 | `discards` | 陣列 | 這次重建捨棄的來源項目，見「目標」 |
 | `pending_decided` | 識別字陣列 | 維護者已逐項決定的待確認項目（來源養分中 `status: "pending"` 的 `id`） |
@@ -110,15 +110,23 @@ Claude 送來的值被忽略（以既有值或腳本算出的值取代）。
 
 `save` 只檢查結構與不變的條件（任何時候都必須成立），違反時不寫入，以結束碼 1 回報欄位路徑：
 
-1. 欄位齊全、沒有多出的欄位、型別與列舉值正確；字串非空（可為 `null` 的除外）。
+1. 欄位齊全、沒有多出的欄位、型別與列舉值正確；字串非空（可為 `null` 的除外）。`target` 與 `discards` 的字串不得含程式碼區塊，
+   每個功能至少有一個需求（006 世代紀錄格式的要求；否則確認前的 `preview` 會誤報為 `lineage-format`）；拒絕時指出欄位路徑。
 2. `schema`、`tool` 正確；`old_project` 與既有進度相同。
-3. `old_lineage` 與快照相符（上表）。
+3. `old_lineage` 與快照相符（上表）；`adjustments[].lesson` 是快照養分中的教訓（`--refresh-source` 時以新快照判斷），否則 `invalid` 並指出 `adjustments[i].lesson`。
 4. 識別字格式正確；`target` 中所有項目（含需求）的 `id` 唯一；`depends_on` 只指向前面的功能。
 5. `stage` 與 `phase` 一致；`generation.constitution` 與 `constitution.action`、`phase` 一致；
-   `spec_dir` 只能由腳本寫入（Claude 送來的值與既有值不同時拒絕）。
+   `spec_dir` 只能由腳本寫入（Claude 送來的值與既有值不同時拒絕）。對應既有 spec 的功能，Claude 送 `null` 或 `existing_spec` 皆可，
+   腳本一律保存 `reviewed: true`，`spec_dir` 在 `deciding` 時存 `null`、`confirmed` 時存 `existing_spec`。
 6. `phase` 為 `"confirmed"` 時：`language` 不為 `null`；`adjustments` 都已決定；**`preview` 的全部檢查通過**（下一節）。
-7. 已確認且有任何 `spec_dir`（不含對應既有 spec 的）或 `generation.constitution` 不是 `pending`、`not-needed` 的進度，不能改回 `deciding`；
-   已確認的進度，`target`、`discards`、`constitution`、`language` 不能再改（只有 `generation` 與各功能的 `reviewed` 可以前進）。
+7. 已確認且有任何 `spec_dir`（不含對應既有 spec 的）或 `generation.constitution` 不是 `pending`、`not-needed` 的進度，不能改回 `deciding`。
+   已確認的進度中，決定世代紀錄內容的部分完全凍結：`target`（`spec_dir` 由 `claim` 寫入、各功能的 `reviewed` 只能由 `false` 變 `true`）、
+   `discards`、`language`、`old_lineage`、`pending_decided`、`adjustments`、`constitution.action`；`generation.constitution` 只能前進
+   （`pending` → `written` → `reviewed`）。`constitution.governance`、`deferred`、`for_plan` 確認後**只能新增**（接在既有項目之後，
+   不能修改或刪除既有項目）。違反時 `frozen`；確認後帶 `--refresh-source` 也是 `frozen`。
+   這三個只新增的欄位不進世代紀錄：確認後加入的內容（contracts/skill.md 第 37、40 項：維護者同意保留的多出規則、`speckit-specify` 澄清得來而寫進
+   spec 的內容）不出現在世代紀錄中，下一次 `/sdd-export` 時由 006 當成這一代新增的項目（`origin` 為這一代）；`verify` 把它們視為確認過的內容，
+   不判為與摘要不符。
 8. `lineage_written` 不為 `null` 後，只接受 `clear`（`save` 拒絕）。
 9. 字串值不符合 006 的機密樣式；錯誤只指出欄位路徑。
 
@@ -136,8 +144,8 @@ Claude 送來的值被忽略（以既有值或腳本算出的值取代）。
 | `discard-conflict` | `discards` 的 `id` 是來源養分的有效項目，且沒有被 `inherit` 或出現在 `from` |
 | `pending-undecided` | 來源養分中每個 `pending` 的 `id` 都在 `pending_decided` 中 |
 | `existing-spec` | `existing_spec` 是新專案中存在、含 `spec.md` 的資料夾，彼此不同；有 `existing_spec` 的功能全部排在沒有的之前 |
-| `lineage-format` | 組好的世代紀錄通過 006 的 `lineage_problems`（`spec_dir` 尚未決定的功能以預留值 `specs/pending` 代入檢查） |
-| `next-export` | 組好的世代紀錄通過 006 的 `generation_problems(L, L, None)`（research R6 第三層） |
+| `lineage-format` | 組好的世代紀錄通過 006 的 `lineage_problems`（`spec_dir` 尚未決定的功能以預留值 `specs/pending`、尚未決定的 `rebuilt_at` 以當天日期代入檢查；`preview` 輸出的 `lineage` 中兩者仍為 `null`）。只在前面八種檢查都通過時執行 |
+| `next-export` | 組好的世代紀錄通過 006 的 `generation_problems(L, L, None)`（research R6 第三層）。只在前面八種檢查都通過時執行 |
 
 ### 已用過的 `id`
 

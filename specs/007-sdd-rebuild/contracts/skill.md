@@ -206,8 +206,9 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 
 36. `action` 為 `create` 或 `amend` 時，以 Skill 工具呼叫 `speckit-constitution`，只傳入確認過的原則與治理規則，要求不推斷其他原則；
     返回後 `save`（`generation.constitution: "written"`）。順序：constitution 在任何 spec 之前。
-37. 比對：雙向逐條；缺少的再呼叫一次只套用缺少的部分；多出的規則移除，想保留的先詢問維護者（同意保留的記進 `constitution.governance` 或目標，
-    成為確認內容的一部分）；完成後 `save`（`"reviewed"`）（FR-013；字樣：`reviewed`）。`keep` 時跳過（`"not-needed"`）。
+37. 比對：雙向逐條；缺少的再呼叫一次只套用缺少的部分；多出的規則移除，想保留的先詢問維護者（同意保留的記進 `constitution.governance`，
+    確認後只新增，用途只是讓之後的比對不再重複詢問；不改目標，不進世代紀錄）；完成後 `save`（`"reviewed"`）（FR-013；字樣：`reviewed`）。
+    `keep` 時跳過（`"not-needed"`）。
 
 | 結果 | 下一步 |
 |---|---|
@@ -220,8 +221,9 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 38. 依目標順序，對每個 `existing_spec` 為 `null` 的功能：以 Skill 工具呼叫 `speckit-specify`，傳入該功能確認過的內容（摘要、需求、相依、
     延後事項與 `for_plan` 寫在 Assumptions）；一次一個；MUST NOT 自行指定編號（字樣：`speckit-specify`、`Assumptions`）。
 39. 返回後立即執行 `claim <功能 id>`。順序：`claim` 在下一個 `speckit-specify` 之前。
-40. 比對 spec 與摘要：沒有依據的規則移除或標為待確認；`speckit-specify` 的澄清問題能從摘要回答就依摘要，不能時一題詢問維護者並記進目標
-    （這是對已確認摘要的補充，摘要中呈現）；完成後 `save`（該功能 `reviewed: true`）。
+40. 比對 spec 與摘要：沒有依據的規則移除或標為待確認；`speckit-specify` 的澄清問題能從摘要回答就依摘要，不能時一題詢問維護者，
+    答案經 `speckit-specify` 的流程寫進該份 spec，需要記錄時加入 `deferred` 或 `for_plan`（確認後只新增）；不改目標；完成後 `save`（該功能 `reviewed: true`）。
+    第 37 項與本項在確認後加入的內容不在世代紀錄中：結束報告（第 44 項）列出它們，並說明下一次 `/sdd-export` 時它們被當成這一代新增的項目。
 
 | 結果 | 下一步 |
 |---|---|

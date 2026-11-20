@@ -141,13 +141,15 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 從 stdin 讀入一份進度（data-model「進度」），依「驗證規則」檢查。`phase` 為 `confirmed` 時另外執行 `preview` 的全部檢查。通過時：
 
 1. 自己的資料夾不存在就建立，並寫入固定內容的 `.gitignore`。
-2. 沒有既有進度、或帶 `--refresh-source`（只在 `deciding` 允許）時，以 006 的程式讀取 `old_project` 建立快照；
+2. 沒有既有進度、或帶 `--refresh-source`（只在 `deciding` 允許；確認後帶它時結束碼 1、`reason: "frozen"`，不寫入）時，以 006 的程式讀取 `old_project` 建立快照；
    舊專案的 `.sdd-export/` 不是 `ours` 時 `reason: "source"`，不寫入。其他時候沿用既有快照。
 3. 填入 `saved_at`、`fingerprint`；第一次 `confirmed` 時記下 `baseline` 與 `rebuilt_at`；改回 `deciding` 時兩者設為 `null`。
    `spec_dir`、`lineage_written` 沿用既有值。
 4. 原子寫入 `progress.json`。
 
 輸出 `{"saved": ".specify/sdd-rebuild/progress.json", "phase": "...", "baseline": true, "snapshot": "created" | "kept" | "refreshed"}`。
+`baseline` 為 `true` 表示這次保存記下了基準（第一次 `confirmed`）。失敗時的輸出另有 `path`（`invalid`、`secret`、`frozen` 時指出欄位路徑；
+`adjustments[i].lesson` 不是快照養分的教訓時同樣是 `invalid`）；`phase` 為 `confirmed` 而 `preview` 的檢查不通過時另有 `errors`（格式同 `preview`）。
 
 ## preview
 
