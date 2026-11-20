@@ -65,9 +65,9 @@ These apply at every stage.
    anything in the old project, and never run any command there (git included): the old project may be the
    maintainer's working copy.
 3. **Nothing is generated before the maintainer confirms.** Until the maintainer confirms the final summary in
-   stage 8, never invoke any `speckit-` skill, never run `claim`, `lineage` or `focus`, and never change the
-   constitution, a spec or `.sdd-rebuild/`. The only write before that confirmation is `save`, which keeps the
-   progress in `.specify/sdd-rebuild/`.
+   stage 8, never invoke any `speckit-` skill, never run `claim`, `lineage` or `focus`, and never change the new
+   project's constitution, a spec or `.sdd-rebuild/`. The only write before that confirmation is `save`, which keeps
+   the progress in `.specify/sdd-rebuild/` (the confirmed export of stage 2 writes the old project, not this one).
 4. **Spec Kit writes the documents.** The constitution is generated only by the `speckit-constitution` skill and
    each spec only by the `speckit-specify` skill. Never write, complete or delete them by hand, and never create a
    spec folder yourself. The only edit you make to a generated document is removing a statement that has no basis
@@ -166,6 +166,9 @@ What `save` may answer at any stage, besides the outcomes each stage lists:
   (stage 13).
 - `conflict`: handle it like `progress` `"conflict"` in stage 1.
 - `os-error`: the progress could not be written; see the `os-error` outcome of stage 3.
+- After the confirmation, `invalid` with `errors` whose `check` is `existing-spec`: an existing spec that a feature
+  is matched to was removed or moved. That cannot be fixed in the progress; handle it like `existing-spec-missing`
+  in stage 11.
 
 When `preview`, `claim`, `verify`, `lineage` or `focus` answers `no-progress`, the progress is missing or not
 confirmed where it should be (for example it was cleared in another window): run `check` and continue from stage 1
@@ -254,8 +257,9 @@ question per decision, no commits.
   `--project "<old.path>"`, where `<old.path>` is `old.path` from `check` (for example
   `uv run "${CLAUDE_SKILL_DIR}/../sdd-export/scripts/sdd_export.py" check --project "<old.path>"`).
 - The paths that `files` and `check` print are relative to the old project. Give Read and Grep one
-  `<old.path>/<path>` at a time, only for paths that `files` lists. Glob is allowed only where sdd-export's Stage 2
-  allows it, for folder names under `<old.path>`.
+  `<old.path>/<path>` at a time, and only for the paths sdd-export's rules let you read (those `files` lists, and
+  `.sdd-export/README.md` where its Stage 7 allows it). Glob is allowed only where sdd-export's Stage 2 allows it,
+  for folder names under `<old.path>`.
 - Git: only the four forms in sdd-export's allowlist, each with `-C "<old.path>"` added right after `git` and
   nothing else added or changed.
 - "The project" in that file means the old project. While exporting, write nothing at all in the new project, not
@@ -335,7 +339,9 @@ Outcomes of this `save`:
 - `reason` is `conflict`: handle it like `progress` `"conflict"` in stage 1.
 - `reason` is `os-error`: the new project cannot be written, so the progress cannot be kept. Ask: stop
   (recommended), or continue without saving (an interruption then loses every decision). Any later `save` that
-  fails the same way gets the same question.
+  fails the same way gets the same question. Without a saved progress nothing can be generated: the decisions can
+  go on up to the final summary, but the confirmation in stage 8 is itself a `save`; if it still fails there, show
+  the summary so the maintainer keeps it, and stop.
 - `reason` is `invalid` or `secret`: fix the progress you sent (the `path` names the field) and save again.
 
 ## Stage 4: What the new project already has
@@ -355,7 +361,7 @@ Look at `constitution` and `specs` from `check`.
   `target.features` (their numbers are lower); add each of them to the target now, as kept, with its requirements;
   stage 5 still goes through their content. Existing specs that match no feature are left alone; they are not part
   of the lineage.
-- Neither: skip this stage.
+- Neither: skip this stage and go to stage 5.
 
 Outcomes:
 
@@ -369,8 +375,9 @@ Outcomes:
 First ask one question: keep everything as it is, or go through it item by item. When the nutrients have `pending`
 items, the first option is "keep everything else as it is", and the pending items are still asked one by one.
 
-Keep everything: put every principle, feature (with its requirements, `depends_on` copied) and lesson into the
-target with `"basis": "inherit"` and `null` content, then handle the pending items below.
+Keep everything: put every principle, feature (with its requirements, `depends_on` copied) and lesson that is not in
+the target or in `discards` yet (stage 4 may have placed some) into the target with `"basis": "inherit"` and
+`null` content, then handle the pending items below.
 
 Item by item: go through the principles, then the features (each with its requirements), then the lessons, in this
 order, one item per question, each with your recommendation. The choices for an item are:
@@ -390,8 +397,9 @@ dependency on the merged result, and one on a discarded feature is dropped (say 
 `preview` later answers `id-taken` for one, choose a new id and tell the maintainer.
 
 Pending items: every item the nutrients mark `pending` gets its own question, one item each, even when "keep
-everything" was chosen: keep it as a fact, modify it, or discard it. After the decision add its id to
-`pending_decided`. Never record a pending item as a fact without that decision.
+everything" was chosen: keep it as a fact, modify it, or discard it (then take it out of the target and add it to
+`discards`). After the decision add its id to `pending_decided`. Never record a pending item as a fact without that
+decision.
 
 After every decision, save (`"stage": "items"`).
 
@@ -582,7 +590,8 @@ uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_rebuild.py" verify
 
 It checks the existing documents were not touched, the constitution is written as decided, every feature has its
 spec, the numbers follow the order and the dependencies, and everything was compared. Each failure has `check` and
-`detail`. When `failures` holds several kinds, handle every kind that stops before `not-reviewed`.
+`detail`. When `failures` holds any `check` other than `not-reviewed`, handle those (each of them stops); only when
+`not-reviewed` is the only kind, continue as its outcome says.
 
 Outcomes:
 
@@ -698,8 +707,8 @@ the comparison of stage 4 again for what changed. When `phase` is `"confirmed"`,
 Then continue from `next.step`:
 
 - `decide`: ask: continue (recommended) or start over (`clear`, then `check --old`). To continue, go to the stage of
-  `saved.stage`: `items` stage 5 (stage 4 first if it was not finished), `new` stage 6, `lessons` stage 7, `summary`
-  stage 8.
+  `saved.stage`: `items` stage 4 (quick when the new project has no constitution or specs; keep what the progress
+  already records) and then stage 5, `new` stage 6, `lessons` stage 7, `summary` stage 8.
 - `constitution`: confirmed, but the constitution is not generated yet. Ask: continue generating (recommended), go
   back to the discussion (only possible now, before anything is generated: save with `"phase": "deciding"`, then go
   to stage 8 to change and confirm again), or start over (`clear`). To continue, go to stage 9.

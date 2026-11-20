@@ -811,3 +811,17 @@ def test_items_13_to_50(number):
 
     for word in words:
         assert word.lower() in part, (number, word)
+
+
+# ------------------------------------- (T072) checks added by the read-through
+
+
+def test_walkthrough_fixes_stay():
+    assert has_block(section("progress"), "existing-spec", "existing-spec-missing")
+    assert has_block(section(3), "os-error", "confirmation", "summary", "stop")
+    assert has_block(section(2), ".sdd-export/README.md", "stage 7")
+    assert has_block(section(4), "neither", "stage 5")
+    assert has_block(section(5), "keep everything", "not in", "discards")
+    assert has_block(section(5), "discard it", "take it out of the target")
+    assert has_block(section(11), "other than `not-reviewed`", "only")
+    assert has_block(section("resume"), "`items`", "stage 4", "stage 5")
