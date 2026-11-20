@@ -185,6 +185,12 @@ def flat_body() -> str:
     return " ".join(body().split()).lower()
 
 
+def flat_instructions() -> str:
+    """The body from the first second-level heading on: without the overview of the commands at the top."""
+    content = flat_body()
+    return content[content.index("## "):]
+
+
 def has_all(haystack: str, *needles: str) -> None:
     for needle in needles:
         assert needle.lower() in haystack, f"missing: {needle!r}"
@@ -353,12 +359,12 @@ def test_draft_reference_lists_the_shape():
 
     for key in ("generation", "project", "language", "scope", "coverage", "included", "principles", "features",
                 "requirements", "lessons", "discarded", "id", "origin", "revised", "derived_from", "status", "evidence",
-                "depends_on", "spec", "summary", "discarded_in", "reason", "zh-hant"):
+                "depends_on", "spec", "summary", "discarded_in", "reason"):
         assert f"`{key}`" in draft, key
     for value in ("story", "functional", "edge-case", "success-criterion", "assumption", "decision", "pitfall",
                   "reversed", "doubt", "confirmed", "pending", "constitution", "mixed", "maintainer", "commit:"):
         assert value in draft, value
-    has_all(draft, "tool", "schema", "exported_at")
+    has_all(draft, "tool", "schema", "exported_at", '"zh-hant"')
     has_any(draft, "leave out", "do not include", "never include")
     has_any(draft, "code block", "code blocks")
 
@@ -367,7 +373,8 @@ def test_draft_reference_lists_the_shape():
 
 
 def test_check_is_the_first_action():
-    content = flat_body()
+    content = flat_instructions()
+    content = content[content.index("## " + STAGES[1].lower()):]
     first = content.index(CHECK.lower())
 
     assert CHECK.lower() in stage(1)
@@ -375,7 +382,7 @@ def test_check_is_the_first_action():
         assert first < content.index(later.lower())
     has_any(stage(1), "first thing", "before anything else", "first action", "before you read")
     has_any(stage(1), "before reading any file", "before you read any file", "before reading any project file",
-            "before you open any project file")
+            "before you read any project file", "before you open any project file")
 
 
 STAGE_1_FAILURES = {
@@ -390,12 +397,34 @@ STAGE_1_FAILURES = {
 }
 
 
+def raw_section(name: str) -> list[str]:
+    lines, inside = [], False
+    for line in body().split("\n"):
+        if line.startswith("## "):
+            inside = line[3:].strip() == name
+        elif inside:
+            lines.append(line)
+    return lines
+
+
+def list_item(name: str, token: str) -> str:
+    """The first top-level list item of a section (with its continuation lines) that mentions token, lowercased."""
+    items: list[list[str]] = []
+    for line in raw_section(name):
+        if line.startswith("- "):
+            items.append([line])
+        elif items and (line.startswith("  ") or not line.strip()) and items[-1] is not None:
+            items[-1].append(line)
+        elif items:
+            items.append(None)
+    for item in items:
+        if item and token.lower() in " ".join(item).lower():
+            return " ".join(" ".join(item).split()).lower()
+    raise AssertionError(f"no list item in '{name}' mentions {token!r}")
+
+
 def stage_1_branch(reason: str) -> str:
-    one = stage(1)
-    start = one.index(f"`{reason}`")
-    following = [one.find("**", start + 1)]
-    end = min([i for i in following if i > start] or [len(one)])
-    return one[start:end]
+    return list_item(STAGES[1], f"`{reason}`")
 
 
 @pytest.mark.parametrize("reason", sorted(STAGE_1_FAILURES))
@@ -425,12 +454,12 @@ def test_stage_1_successful_results():
     has_all(one, "inventory.files", "skipped", "writable", "existing_generation", "generation")
     has_all(one, '"edited"', '"unknown"', "lineage", '"none"', "first generation")
     has_any(one, "stage 2")
-    writable = part(one, "`writable`", "**")
+    writable = list_item(STAGES[1], "`writable` is")
     has_all(writable, "askuserquestion", "continue", "stop")
     has_any(writable, "may fail", "might fail", "may not be able")
-    mismatch = part(one, "`existing_generation`", "**")
+    mismatch = list_item(STAGES[1], "`existing_generation` is")
     has_all(mismatch, "stop", "continue", "copied", "removed")
-    edited = part(one, '"edited"', "**")
+    edited = list_item(STAGES[1], '`"edited"`')
     has_any(edited, "maintainer's decision", "maintainer's decisions", "decisions of the maintainer")
 
 
@@ -464,7 +493,7 @@ def test_stage_2_results():
 
 
 def test_scope_comes_before_reading():
-    content = flat_body()
+    content = flat_instructions()
 
     assert content.index("## " + STAGES[2].lower()) < content.index("## " + STAGES[3].lower())
     assert content.index("--scope") < content.index("## " + STAGES[3].lower())
@@ -510,7 +539,7 @@ def test_stage_4_draft_rules():
 
     has_all(four, "generation", "check", "existing", "lineage", "origin", "discarded", "revised")
     has_any(four, "do not compute", "never compute", "not compute")
-    has_any(four, "new id", "new ids")
+    has_any(four, "new id", "new ids", "new `id`")
     has_any(four, "never repeat", "not repeat", "must not match", "not used before", "never reuse", "not reuse")
 
 
@@ -563,7 +592,7 @@ def test_stage_5_results():
 
 
 def test_nothing_is_written_before_stage_8():
-    content = flat_body()
+    content = flat_instructions()
     stage_8 = content.index("## " + STAGES[8].lower())
 
     assert content.index(WRITE.lower()) > stage_8
@@ -587,7 +616,7 @@ def test_stage_6_validate():
 
 
 def test_validate_comes_before_the_final_confirmation():
-    content = flat_body()
+    content = flat_instructions()
 
     assert content.index(VALIDATE.lower()) < content.index("## " + STAGES[7].lower())
 
@@ -607,7 +636,7 @@ def test_stage_7_confirmation():
 
 
 def test_confirmation_comes_before_write_and_write_before_the_report():
-    content = flat_body()
+    content = flat_instructions()
 
     seven = content.index("## " + STAGES[7].lower())
     eight = content.index("## " + STAGES[8].lower())
@@ -633,7 +662,7 @@ def test_stage_8_write():
 def test_stage_8_failures_show_the_draft():
     eight = stage(8)
     for reason in ('"conflict"', '"os-error"'):
-        branch = part(eight, reason, "**")
+        branch = list_item(STAGES[8], reason)
         has_any(branch, "confirmed draft", "draft in full", "whole draft")
 
 
@@ -642,7 +671,7 @@ def test_stage_8_retry_checks_again():
     retry = part(eight, "retry", None)
 
     assert CHECK.lower() in eight
-    has_any(retry, "same `state`", "state is the same", "`state` is unchanged", "same state")
+    has_any(retry, "same `state`", "state is the same", "`state` is the same", "`state` is unchanged", "same state")
 
 
 # ---------------------------------------------------------------- stage 9
