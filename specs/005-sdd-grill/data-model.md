@@ -122,7 +122,7 @@ Claude 送來的值會被忽略。
 |---|---|
 | `baseline.specs` 的每一份 spec.md 仍存在，雜湊相同 | `existing-spec-changed` |
 | `constitution.action` 為 `"keep"` 時，constitution 的雜湊等於 `baseline.constitution` | `constitution-changed` |
-| `constitution.action` 為 `"create"` 或 `"amend"` 時，constitution 存在且不再是空白範本 | `constitution-not-written` |
+| `constitution.action` 為 `"create"` 時，constitution 存在且不再是空白範本；為 `"amend"` 時，constitution 存在且雜湊不等於 `baseline.constitution` | `constitution-not-written` |
 | 每個功能都有 `spec_dir`，其 `spec.md` 存在 | `spec-missing` |
 | 每個 `spec_dir` 都不在 `baseline.specs` 中，且彼此不同 | `spec-not-new` |
 | 依 `features` 的順序，`spec_dir` 的編號嚴格遞增，且全部大於 `baseline` 中最大的編號 | `order` |
