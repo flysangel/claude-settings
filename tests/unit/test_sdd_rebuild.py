@@ -827,3 +827,1351 @@ def test_problem_format(sdd_rebuild):
     for problem in run_checks(sdd_rebuild, nutrients, progress):
         assert list(problem) == ["check", "path", "detail"]
         assert all(isinstance(value, str) for value in problem.values())
+
+
+# ------------------------------------------------------- (T013) check, A
+
+CHECK_KEYS = [
+    "dependencies", "export_skill", "speckit", "missing", "constitution", "numbering", "specs", "rebuild_dir",
+    "rebuild_conflicts", "progress", "changed", "saved", "old", "export_dir", "nutrients_edited", "nutrients_errors",
+    "conflicts", "nutrients", "pending", "old_lineage", "old_lineage_errors", "needs_old_lineage", "source_state",
+    "source_changed", "source_diff", "next",
+]
+
+
+def check(module, new: Path, old: Path | str | None = None):
+    argv = ["check"] + (["--old", str(old)] if old is not None else [])
+    return run_rebuild(module, new, *argv)
+
+
+def test_check_first_generation(sdd_rebuild, tmp_path, sdd_export):
+    old = gen1(tmp_path, sdd_export)
+    new = make_rebuild_new(tmp_path)
+    out = ok(check(sdd_rebuild, new, old))
+
+    assert list(out) == CHECK_KEYS
+    assert out["dependencies"] == {"sdd-export": "ok", "sdd-grill": "ok"}
+    assert out["export_skill"] is True
+    assert (out["speckit"], out["missing"], out["constitution"], out["numbering"], out["specs"]) == (
+        "ok", [], "missing", "sequential", [])
+    assert (out["rebuild_dir"], out["rebuild_conflicts"], out["progress"], out["changed"], out["saved"]) == (
+        "none", [], "none", [], None)
+    assert out["old"] == {"path": os.path.realpath(old), "state": "ok"}
+    assert (out["export_dir"], out["nutrients_edited"], out["nutrients_errors"], out["conflicts"]) == ("ours", False, [], [])
+    assert out["nutrients"] == nutrients_of(old)
+    assert (out["pending"], out["old_lineage"], out["old_lineage_errors"], out["needs_old_lineage"]) == ([], "none", [], False)
+    assert (out["source_state"], out["source_changed"], out["source_diff"]) == (None, None, None)
+    assert out["next"] == {"step": "start", "feature": None, "candidates": []}
+
+
+def test_check_second_generation_without_its_lineage(sdd_rebuild, tmp_path, sdd_export):
+    # quickstart.md "腳本的手動檢查"
+    out = ok(check(sdd_rebuild, make_rebuild_new(tmp_path), gen2(tmp_path, sdd_export, lineage=False)))
+
+    assert (out["export_dir"], out["old_lineage"], out["needs_old_lineage"], out["next"]["step"]) == (
+        "ours", "none", True, "start")
+    assert out["pending"] == ["status-report-diff"]
+
+
+def test_check_reports_spec_kit_state_like_sdd_grill(sdd_rebuild, tmp_path, sdd_export):
+    old = gen1(tmp_path, sdd_export)
+    new = make_rebuild_new(tmp_path, constitution=WRITTEN_CONSTITUTION, specs={"001-a": "# a\n"},
+                           init_options='{"feature_numbering": "timestamp"}')
+    out = ok(check(sdd_rebuild, new, old))
+
+    assert (out["constitution"], out["numbering"], out["specs"]) == ("written", "timestamp",
+                                                                      [{"dir": "specs/001-a", "number": "001"}])
+
+
+def test_check_without_spec_kit(sdd_rebuild, tmp_path, sdd_export):
+    old = gen1(tmp_path, sdd_export)
+    new = tmp_path / "plain"
+    new.mkdir()
+    result = check(sdd_rebuild, new, old)
+
+    assert (result.code, result.out["reason"], result.out["speckit"]) == (3, "speckit-missing", "missing")
+    assert result.out["export_dir"] == "ours"  # what can be told is still reported
+
+
+def test_check_with_incomplete_spec_kit(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path, omit=(".specify/templates/spec-template.md",))
+    result = check(sdd_rebuild, new, gen1(tmp_path, sdd_export))
+
+    assert (result.code, result.out["reason"]) == (3, "speckit-incomplete")
+    assert result.out["missing"] == [".specify/templates/spec-template.md"]
+
+
+def test_check_needs_an_old_project(sdd_rebuild, tmp_path):
+    result = check(sdd_rebuild, make_rebuild_new(tmp_path))
+
+    assert (result.code, result.out["reason"]) == (3, "old-required")
+    assert result.out["old"] == {"path": None, "state": None}
+    assert result.out["export_dir"] is None and result.out["nutrients"] is None
+
+
+def test_check_old_project_missing_or_not_a_folder(sdd_rebuild, tmp_path):
+    new = make_rebuild_new(tmp_path)
+    missing = check(sdd_rebuild, new, tmp_path / "nowhere")
+    (tmp_path / "a-file").write_text("x")
+    not_folder = check(sdd_rebuild, new, tmp_path / "a-file")
+
+    assert (missing.code, missing.out["reason"], missing.out["old"]["state"]) == (3, "old-missing", "missing")
+    assert (not_folder.code, not_folder.out["reason"], not_folder.out["old"]["state"]) == (3, "old-not-folder", "not-folder")
+    assert missing.out["export_dir"] is None
+
+
+def test_check_same_or_nested_projects(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path)
+    place_export(sdd_export, new, export_fixture("nutrients.json"))
+    inner = new / "inner"
+    inner.mkdir()
+    outer_new = make_rebuild_new(tmp_path / "outer", name="inside")
+
+    same = run_rebuild(sdd_rebuild, new, "check", "--old", ".")
+    old_inside = check(sdd_rebuild, new, inner)
+    new_inside = check(sdd_rebuild, outer_new, tmp_path / "outer")
+
+    assert (same.code, same.out["reason"], same.out["old"]["state"]) == (3, "same-project", "same")
+    assert (old_inside.out["reason"], old_inside.out["old"]["state"]) == ("old-inside-new", "old-inside-new")
+    assert (new_inside.out["reason"], new_inside.out["old"]["state"]) == ("new-inside-old", "new-inside-old")
+    assert same.out["export_dir"] is None  # the old project is not read at all
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink") or sys.platform == "win32", reason="symbolic links")
+def test_check_same_project_through_a_symbolic_link(sdd_rebuild, tmp_path):
+    new = make_rebuild_new(tmp_path)
+    link = tmp_path / "link"
+    link.symlink_to(new, target_is_directory=True)
+    result = check(sdd_rebuild, new, link)
+
+    assert result.out["reason"] == "same-project"
+    assert result.out["old"]["path"] == os.path.realpath(new)
+
+
+def test_check_same_project_written_differently(sdd_rebuild, tmp_path):
+    new = make_rebuild_new(tmp_path)
+    result = check(sdd_rebuild, new, str(new / "specs" / ".." / "." ) + os.sep)
+
+    assert result.out["reason"] == "same-project"
+
+
+def test_paths_compare_without_case_on_windows(sdd_rebuild, tmp_path, monkeypatch):
+    # A stand-in for Windows: two folders whose names differ only in case are the same folder there.
+    upper, lower = tmp_path / "Proj", tmp_path / "proj"
+    upper.mkdir()
+    lower.mkdir()
+    write_tree(lower, {".specify/x": "x"})
+    monkeypatch.setattr(sdd_rebuild, "fold_case", lambda: True)
+
+    assert sdd_rebuild.relation(lower, upper) == "same"
+    assert sdd_rebuild.relation(lower, tmp_path / "PROJ" / "sub") == "old-inside-new"
+    monkeypatch.setattr(sdd_rebuild, "fold_case", lambda: False)
+    assert sdd_rebuild.relation(lower, upper) == "ok"
+
+
+def test_check_accepts_a_relative_old_path(sdd_rebuild, tmp_path, sdd_export):
+    old = gen1(tmp_path, sdd_export)
+    new = make_rebuild_new(tmp_path)
+    out = ok(run_rebuild(sdd_rebuild, new, "check", "--old", os.path.join("..", old.name)))
+
+    assert out["old"]["path"] == os.path.realpath(old)
+
+
+def test_check_old_project_without_nutrients(sdd_rebuild, tmp_path):
+    old = make_rebuild_old(None, tmp_path, None) if False else tmp_path / "bare"
+    old.mkdir()
+    new = make_rebuild_new(tmp_path)
+    none = ok(check(sdd_rebuild, new, old))
+    (old / ".sdd-export").mkdir()
+    empty = ok(check(sdd_rebuild, new, old))
+
+    assert (none["export_dir"], none["nutrients"], none["next"]["step"]) == ("none", None, "start")
+    assert empty["export_dir"] == "empty"
+    assert none["old_lineage"] == "none" and none["needs_old_lineage"] is None
+
+
+@pytest.mark.parametrize("case", ["file", "stranger", "attributes-only", "not-ours"])
+def test_check_rebuild_dir_conflict(sdd_rebuild, tmp_path, sdd_export, case):
+    new = make_rebuild_new(tmp_path)
+    if case == "file":
+        write_tree(new, {".sdd-rebuild": "x"})
+    elif case == "stranger":
+        write_tree(new, {".sdd-rebuild/notes.txt": "x", ".sdd-rebuild/lineage.json": export_fixture_bytes("lineage-gen2.json")})
+    elif case == "attributes-only":
+        write_tree(new, {".sdd-rebuild/.gitattributes": "x"})
+    else:
+        write_tree(new, {".sdd-rebuild/lineage.json": '{"tool": "other"}'})
+    result = check(sdd_rebuild, new, gen1(tmp_path, sdd_export))
+
+    assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuild-conflict", "conflict")
+    assert result.out["rebuild_conflicts"]
+
+
+def export_fixture_bytes(name: str) -> bytes:
+    return (REPO_ROOT / "tests" / "unit" / "fixtures" / "sdd_export" / name).read_bytes()
+
+
+@pytest.mark.parametrize("content", [b"not json", b'{"tool": "sdd-rebuild", "schema": 1}', b'{"tool": "sdd-rebuild", "schema": 9}'])
+def test_check_rebuild_dir_invalid(sdd_rebuild, tmp_path, sdd_export, content):
+    new = make_rebuild_new(tmp_path)
+    write_tree(new, {".sdd-rebuild/lineage.json": content})
+    result = check(sdd_rebuild, new, gen1(tmp_path, sdd_export))
+
+    assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuild-conflict", "invalid")
+
+
+def test_check_empty_rebuild_dir_is_fine(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path)
+    (new / ".sdd-rebuild").mkdir()
+
+    assert ok(check(sdd_rebuild, new, gen1(tmp_path, sdd_export)))["rebuild_dir"] == "empty"
+
+
+def test_check_a_project_rebuilt_already(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path)
+    write_tree(new, {".sdd-rebuild/lineage.json": export_fixture_bytes("lineage-gen2.json")})
+    result = check(sdd_rebuild, new, gen1(tmp_path, sdd_export))
+
+    assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuilt", "ours")
+
+
+@pytest.mark.parametrize(
+    "setup, expected",
+    [
+        ("speckit+old-missing", "speckit-missing"),
+        ("old-missing+rebuilt", "old-missing"),
+        ("same+rebuilt", "same-project"),
+        ("rebuilt+nutrients", "rebuilt"),
+        ("rebuild-conflict+nutrients", "rebuild-conflict"),
+        ("nutrients+progress", "nutrients-invalid"),
+    ],
+)
+def test_check_reason_priority(sdd_rebuild, tmp_path, sdd_export, setup, expected):
+    new = make_rebuild_new(tmp_path)
+    old = gen1(tmp_path, sdd_export)
+    target = old
+    if "speckit" in setup:
+        shutil.rmtree(new / ".specify")
+    if "old-missing" in setup:
+        target = tmp_path / "nowhere"
+    if "same" in setup:
+        target = new
+    if "rebuilt" in setup:
+        write_tree(new, {".sdd-rebuild/lineage.json": export_fixture_bytes("lineage-gen2.json")})
+    if "rebuild-conflict" in setup:
+        write_tree(new, {".sdd-rebuild/x": "x"})
+    if "nutrients" in setup:
+        write_tree(old, {".sdd-export/nutrients.json": '{"tool": "sdd-export", "schema": 1}'})
+    if "progress" in setup:
+        write_tree(new, {".specify/sdd-rebuild/progress.json": "broken", ".specify/sdd-rebuild/.gitignore": OWN_GITIGNORE})
+
+    assert check(sdd_rebuild, new, target).out["reason"] == expected
+
+
+# ------------------------------------------------------- (T014) check, B
+
+
+def test_check_nutrients_conflict(sdd_rebuild, tmp_path, sdd_export):
+    old = gen1(tmp_path, sdd_export)
+    write_tree(old, {".sdd-export/mine.txt": "x"})
+    result = check(sdd_rebuild, make_rebuild_new(tmp_path), old)
+
+    assert (result.code, result.out["reason"], result.out["export_dir"]) == (3, "nutrients-conflict", "conflict")
+    assert result.out["conflicts"] == [".sdd-export/mine.txt"]
+    assert result.out["nutrients"] is None
+
+
+@pytest.mark.parametrize(
+    "content, reason, state",
+    [
+        (b"\xff\xfe", "nutrients-unreadable", "unreadable"),
+        (b'{"tool": "sdd-export", "schema": 1}', "nutrients-invalid", "invalid"),
+        (b'{"tool": "sdd-export", "schema": 2}', "nutrients-newer", "newer"),
+    ],
+)
+def test_check_nutrients_that_cannot_be_used(sdd_rebuild, tmp_path, sdd_export, content, reason, state):
+    old = gen1(tmp_path, sdd_export)
+    write_tree(old, {".sdd-export/nutrients.json": content})
+    result = check(sdd_rebuild, make_rebuild_new(tmp_path), old)
+
+    assert (result.code, result.out["reason"], result.out["export_dir"]) == (3, reason, state)
+    if state in ("unreadable", "invalid"):
+        assert result.out["nutrients_errors"] and set(result.out["nutrients_errors"][0]) == {"check", "path", "detail"}
+
+
+def test_check_hand_edited_nutrients(sdd_rebuild, tmp_path, sdd_export):
+    old = gen1(tmp_path, sdd_export)
+    data = nutrients_of(old)
+    data["features"][0]["title"] = "改過的標題"
+    (old / ".sdd-export" / "nutrients.json").write_bytes(sdd_export.serialize(data, "nutrients"))
+    out = ok(check(sdd_rebuild, make_rebuild_new(tmp_path), old))
+    (old / ".sdd-export" / "README.md").unlink()
+    unknown = ok(check(sdd_rebuild, make_rebuild_new(tmp_path, name="new2"), old))
+
+    assert out["nutrients_edited"] is True and unknown["nutrients_edited"] is True
+
+
+@pytest.mark.parametrize(
+    "lineage, state",
+    [
+        ("lineage-gen2.json", "present"),
+        ("lineage-gen3.json", "mismatch"),
+        (b"not json", "unreadable"),
+        (b'{"tool": "sdd-rebuild", "schema": 1}', "invalid"),
+        (b'{"tool": "sdd-rebuild", "schema": 5}', "newer"),
+        (b'{"tool": "something"}', "conflict"),
+    ],
+)
+def test_check_old_lineage(sdd_rebuild, tmp_path, sdd_export, lineage, state):
+    old = gen2(tmp_path, sdd_export, lineage=False)
+    write_tree(old, {".sdd-rebuild/lineage.json": export_fixture_bytes(lineage) if isinstance(lineage, str) else lineage})
+    out = ok(check(sdd_rebuild, make_rebuild_new(tmp_path), old))
+
+    assert out["old_lineage"] == state
+    assert out["needs_old_lineage"] is True
+    assert bool(out["old_lineage_errors"]) == (state in ("unreadable", "invalid"))
+
+
+def test_check_progress_present_unreadable_and_conflict(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    out = ok(check(sdd_rebuild, new))
+    assert (out["progress"], out["saved"]["phase"], out["old"]["path"]) == ("present", "deciding", os.path.realpath(old))
+    assert out["next"]["step"] == "decide"
+
+    (new / ".specify/sdd-rebuild/progress.json").write_text("{broken")
+    unreadable = check(sdd_rebuild, new, old)
+    assert (unreadable.code, unreadable.out["reason"], unreadable.out["progress"]) == (3, "progress-unreadable", "unreadable")
+
+    (new / ".specify/sdd-rebuild/notes.txt").write_text("mine")
+    conflict = check(sdd_rebuild, new, old)
+    assert conflict.out["progress"] == "conflict"
+
+
+@pytest.mark.parametrize("case", ["gitignore", "file"])
+def test_check_progress_conflict_cases(sdd_rebuild, tmp_path, sdd_export, case):
+    new = make_rebuild_new(tmp_path)
+    if case == "gitignore":
+        write_tree(new, {".specify/sdd-rebuild/.gitignore": "*\n"})
+    else:
+        write_tree(new, {".specify/sdd-rebuild": "x"})
+
+    assert check(sdd_rebuild, new, gen1(tmp_path, sdd_export)).out["progress"] == "conflict"
+
+
+def test_check_old_mismatch(sdd_rebuild, tmp_path, sdd_export):
+    old, new, _ = started(sdd_rebuild, tmp_path, sdd_export)
+    other = gen1(tmp_path, sdd_export, name="other")
+    result = check(sdd_rebuild, new, other)
+    same = check(sdd_rebuild, new, old)
+
+    assert (result.code, result.out["reason"]) == (1, "old-mismatch")
+    assert result.out["old"]["path"] == os.path.realpath(other)
+    assert result.out["saved"]["old_project"] == os.path.realpath(old)
+    assert same.code == 0
+
+
+def test_check_with_progress_survives_a_vanished_old_project(sdd_rebuild, tmp_path, sdd_export):
+    old, new, _ = started(sdd_rebuild, tmp_path, sdd_export)
+    shutil.rmtree(old)
+    out = ok(check(sdd_rebuild, new))
+
+    assert (out["old"]["state"], out["source_state"], out["source_changed"]) == ("missing", "unavailable", None)
+    assert out["saved"] is not None and out["next"]["step"] == "decide"
+
+
+def test_check_with_progress_and_broken_nutrients_is_not_an_error(sdd_rebuild, tmp_path, sdd_export):
+    old, new, _ = started(sdd_rebuild, tmp_path, sdd_export)
+    write_tree(old, {".sdd-export/nutrients.json": "broken"})
+    out = ok(check(sdd_rebuild, new))
+
+    assert (out["export_dir"], out["source_state"]) == ("unreadable", "unavailable")
+
+
+def test_check_reports_changed_nutrients_with_a_diff(sdd_rebuild, tmp_path, sdd_export):
+    old, new, _ = started(sdd_rebuild, tmp_path, sdd_export)
+    out = ok(check(sdd_rebuild, new))
+    assert (out["source_state"], out["source_changed"], out["source_diff"]) == (
+        "available", {"nutrients": False, "lineage": False}, None)
+
+    data = nutrients_of(old)
+    data["features"][0]["title"] = "新標題"
+    (old / ".sdd-export" / "nutrients.json").write_bytes(sdd_export.serialize(data, "nutrients"))
+    write_tree(old, {".sdd-rebuild/lineage.json": "x"})
+    out = ok(check(sdd_rebuild, new))
+
+    assert out["source_changed"] == {"nutrients": True, "lineage": True}
+    assert out["source_diff"]["changed"][0]["id"] == "deploy"
+
+
+def test_check_crlf_nutrients_are_not_a_change(sdd_rebuild, tmp_path, sdd_export):
+    old, new, _ = started(sdd_rebuild, tmp_path, sdd_export)
+    path = old / ".sdd-export" / "nutrients.json"
+    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    assert ok(check(sdd_rebuild, new))["source_changed"] == {"nutrients": False, "lineage": False}
+
+
+def test_check_reports_what_changed_in_the_new_project(sdd_rebuild, tmp_path, sdd_export):
+    old, new, _ = started(sdd_rebuild, tmp_path, sdd_export)
+    write_tree(new, {"specs/001-mine/spec.md": "# mine\n", ".specify/memory/constitution.md": WRITTEN_CONSTITUTION})
+    git_commit_all(new)
+
+    assert ok(check(sdd_rebuild, new))["changed"] == ["constitution", "specs", "head"]
+
+
+def next_of(module, new):
+    return ok(check(module, new))["next"]
+
+
+def test_check_next_step_through_the_whole_run(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    assert next_of(sdd_rebuild, new)["step"] == "decide"
+    progress = confirm(sdd_rebuild, new, progress)
+    assert next_of(sdd_rebuild, new)["step"] == "constitution"
+    simulate_constitution(new)
+    progress["generation"]["constitution"] = "written"
+    ok(save(sdd_rebuild, new, progress))
+    assert next_of(sdd_rebuild, new)["step"] == "review-constitution"
+    progress["generation"]["constitution"] = "reviewed"
+    ok(save(sdd_rebuild, new, progress))
+    assert next_of(sdd_rebuild, new) == {"step": "specify", "feature": "deploy", "candidates": []}
+    folder = simulate_specify(new, "deploy")
+    assert next_of(sdd_rebuild, new) == {"step": "claim", "feature": "deploy", "candidates": [folder]}
+    ok(run_rebuild(sdd_rebuild, new, "claim", "deploy"))
+    assert next_of(sdd_rebuild, new) == {"step": "review", "feature": "deploy", "candidates": []}
+    progress["target"]["features"][0].update(spec_dir=folder, reviewed=True)
+    ok(save(sdd_rebuild, new, progress))
+    assert next_of(sdd_rebuild, new)["feature"] == "status"
+    folder2 = simulate_specify(new, "status")
+    ok(run_rebuild(sdd_rebuild, new, "claim", "status"))
+    progress["target"]["features"][1].update(spec_dir=folder2, reviewed=True)
+    ok(save(sdd_rebuild, new, progress))
+    assert next_of(sdd_rebuild, new)["step"] == "verify"
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+    write_tree(new, {".specify/feature.json": '{"feature_directory": "specs/002-status"}'})
+    assert next_of(sdd_rebuild, new)["step"] == "focus"
+    ok(run_rebuild(sdd_rebuild, new, "focus"))
+    assert next_of(sdd_rebuild, new)["step"] == "clear"
+
+
+def test_check_next_is_clear_when_every_feature_has_an_existing_spec(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path, specs={"001-deploy": "# d\n", "002-status": "# s\n"})
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export, new=new)
+    for feature, folder in zip(progress["target"]["features"], ("specs/001-deploy", "specs/002-status")):
+        feature.update(existing_spec=folder, reviewed=True)
+    progress["constitution"]["action"] = "keep"
+    progress["generation"]["constitution"] = "not-needed"
+    ok(save(sdd_rebuild, new, progress))
+    confirm(sdd_rebuild, new, progress)
+    assert next_of(sdd_rebuild, new)["step"] == "verify"
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+
+    assert next_of(sdd_rebuild, new) == {"step": "clear", "feature": None, "candidates": []}
+
+
+def test_check_is_read_only(sdd_rebuild, tmp_path, sdd_export):
+    old, new, _ = started(sdd_rebuild, tmp_path, sdd_export)
+    before_old, before_new = tree_snapshot(old), tree_snapshot(new)
+    ok(check(sdd_rebuild, new))
+    run_rebuild(sdd_rebuild, new, "check", "--old", str(tmp_path / "nowhere"))
+
+    assert tree_snapshot(old) == before_old and tree_snapshot(new) == before_new
+
+
+def test_check_through_uv_matches_main(sdd_rebuild, tmp_path, sdd_export, export_env):
+    from conftest import real_run_env, run_rebuild_real
+
+    skills = copy_skills(tmp_path)
+    old = gen1(tmp_path, sdd_export)
+    new = make_rebuild_new(tmp_path)
+    before = tree_snapshot(new)
+    done = run_rebuild_real(new, real_run_env(export_env), "check", "--old", str(old),
+                            script=skills / "sdd-rebuild" / "scripts" / "sdd_rebuild.py")
+
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout.decode("utf-8")) == ok(check(sdd_rebuild, new, old))
+    assert tree_snapshot(new) == before
+    assert not (new / ".venv").exists() and not (new / "uv.lock").exists()
+
+
+# ---------------------------------------------------------- (T015) save
+
+
+def test_first_save_writes_only_the_own_folder(sdd_rebuild, tmp_path, sdd_export):
+    old = gen1(tmp_path, sdd_export)
+    new = make_rebuild_new(tmp_path)
+    before_old, before_new = tree_snapshot(old), tree_snapshot(new)
+    progress = keep_all_progress(os.path.realpath(old), nutrients_of(old), "not-needed")
+    out = ok(save(sdd_rebuild, new, progress))
+
+    assert out == {"saved": ".specify/sdd-rebuild/progress.json", "phase": "deciding", "baseline": False,
+                   "snapshot": "created"}
+    changes = tree_changes(before_new, tree_snapshot(new))
+    assert changes == {"added": [".specify/sdd-rebuild", ".specify/sdd-rebuild/.gitignore",
+                                 ".specify/sdd-rebuild/progress.json"], "removed": [], "changed": []}
+    assert (new / ".specify/sdd-rebuild/.gitignore").read_bytes() == OWN_GITIGNORE
+    assert tree_snapshot(old) == before_old
+
+
+def test_saved_progress_holds_the_snapshot_and_script_fields(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    data = saved(new)
+    raw = (old / ".sdd-export" / "nutrients.json").read_bytes()
+
+    assert list(data) == ["schema", "tool", "old_project", "language", "phase", "stage", "source", "old_lineage",
+                          "constitution", "target", "discards", "pending_decided", "adjustments", "deferred",
+                          "for_plan", "generation", "rebuilt_at", "saved_at", "fingerprint", "baseline",
+                          "lineage_written"]
+    assert data["source"] == {"nutrients": nutrients_of(old), "nutrients_sha256": sdd_export.content_hash(raw),
+                              "lineage_state": "none", "lineage": None, "lineage_sha256": None}
+    assert (data["saved_at"], data["rebuilt_at"], data["baseline"], data["lineage_written"]) == (NOW, None, None, None)
+    assert set(data["fingerprint"]) == {"constitution", "specs", "head"}
+    raw_progress = (new / ".specify/sdd-rebuild/progress.json").read_bytes()
+    assert raw_progress == json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
+
+
+def test_save_ignores_script_fields_sent_by_claude(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress.update(source={"nutrients": {}}, saved_at="x", fingerprint={}, baseline={"x": 1}, rebuilt_at="1999-01-01",
+                    lineage_written="abc")
+    ok(save(sdd_rebuild, new, progress))
+    data = saved(new)
+
+    assert data["source"]["nutrients"] == nutrients_of(old)
+    assert (data["saved_at"], data["baseline"], data["rebuilt_at"], data["lineage_written"]) == (NOW, None, None, None)
+
+
+def test_later_saves_keep_the_snapshot(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    first = saved(new)["source"]
+    data = nutrients_of(old)
+    data["features"][0]["title"] = "新標題"
+    (old / ".sdd-export" / "nutrients.json").write_bytes(sdd_export.serialize(data, "nutrients"))
+    out = ok(save(sdd_rebuild, new, progress))
+
+    assert out["snapshot"] == "kept" and saved(new)["source"] == first
+
+
+def test_refresh_source_takes_the_current_nutrients(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    data = nutrients_of(old)
+    data["features"][0]["title"] = "新標題"
+    (old / ".sdd-export" / "nutrients.json").write_bytes(sdd_export.serialize(data, "nutrients"))
+    out = ok(save(sdd_rebuild, new, progress, "--refresh-source"))
+
+    assert out["snapshot"] == "refreshed"
+    assert saved(new)["source"]["nutrients"]["features"][0]["title"] == "新標題"
+
+
+def test_refresh_source_is_refused_once_confirmed(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    before = tree_snapshot(new)
+    result = save(sdd_rebuild, new, progress, "--refresh-source")
+
+    assert (result.code, result.out["reason"]) == (1, "frozen")
+    assert tree_snapshot(new) == before
+
+
+@pytest.mark.parametrize("flags", [(), ("--refresh-source",)])
+def test_save_needs_usable_nutrients_for_the_snapshot(sdd_rebuild, tmp_path, sdd_export, flags):
+    if flags:
+        old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    else:
+        old, new = gen1(tmp_path, sdd_export), make_rebuild_new(tmp_path)
+        progress = keep_all_progress(os.path.realpath(old), nutrients_of(old), "not-needed")
+    write_tree(old, {".sdd-export/nutrients.json": "broken"})
+    before = tree_snapshot(new)
+    result = save(sdd_rebuild, new, progress, *flags)
+
+    assert (result.code, result.out["reason"]) == (1, "source")
+    assert tree_snapshot(new) == before
+
+
+def test_save_refuses_an_old_project_that_is_the_new_one(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path)
+    place_export(sdd_export, new, export_fixture("nutrients.json"))
+    progress = keep_all_progress(os.path.realpath(new), export_fixture("nutrients.json"), "skipped")
+
+    assert save(sdd_rebuild, new, progress).out["reason"] == "source"
+
+
+def invalid_at(module, new, progress, *flags):
+    result = save(module, new, progress, *flags)
+    assert (result.code, result.out["reason"]) == (1, "invalid"), result.out
+    return result.out["path"]
+
+
+@pytest.mark.parametrize(
+    "change, path",
+    [
+        (lambda p: p.pop("discards"), "discards"),
+        (lambda p: p.update(plan="x"), "plan"),
+        (lambda p: p.update(tasks=[]), "tasks"),
+        (lambda p: p.update(schema=2), "schema"),
+        (lambda p: p.update(tool="sdd-grill"), "tool"),
+        (lambda p: p.update(phase="done"), "phase"),
+        (lambda p: p.update(stage="other"), "stage"),
+        (lambda p: p.update(language=""), "language"),
+        (lambda p: p.update(old_lineage="maybe"), "old_lineage"),
+        (lambda p: p["constitution"].update(action="rewrite"), "constitution.action"),
+        (lambda p: p["target"]["principles"][0].update(basis="copy"), "target.principles[0].basis"),
+        (lambda p: p["target"]["principles"][0].update(title=""), "target.principles[0].title"),
+        (lambda p: p["target"]["features"][0].update(code="x"), "target.features[0].code"),
+        (lambda p: p["target"]["features"][0]["requirements"][0].update(kind="wish"),
+         "target.features[0].requirements[0].kind"),
+        (lambda p: p["target"]["principles"][0].update(id="Bad_Id"), "target.principles[0].id"),
+        (lambda p: p["target"]["features"][1]["requirements"][0].update(id="deploy-no-overwrite"),
+         "target.features[1].requirements[0].id"),
+        (lambda p: p["target"]["features"][0].update(depends_on=["status"]), "target.features[0].depends_on[0]"),
+        (lambda p: p["target"]["principles"][0].update(basis="derived"), "target.principles[0].from"),
+        (lambda p: p["target"]["principles"][0].update(**{"from": ["x"]}), "target.principles[0].from"),
+        (lambda p: p["target"]["principles"].append({"id": "n", "basis": "new", "from": [], "title": None, "text": "x"}),
+         "target.principles[1].title"),
+        (lambda p: p["target"]["features"][0].update(requirements=[]), "target.features[0].requirements"),
+        (lambda p: p["target"]["features"][0]["requirements"][0].update(text="a\n```\ncode\n```"),
+         "target.features[0].requirements[0].text"),
+        (lambda p: p["target"]["features"][0].update(existing_spec="other/x"), "target.features[0].existing_spec"),
+        (lambda p: p["target"]["features"][0].update(spec_dir="specs/001-x"), "target.features[0].spec_dir"),
+        (lambda p: p["target"]["features"][0].update(reviewed=True), "target.features[0].reviewed"),
+        (lambda p: p["discards"].append({"id": "x", "text": "", "reason": None}), "discards[0].text"),
+        (lambda p: p["adjustments"].append({"lesson": "atomic-write", "change": "x", "adopted": "yes"}),
+         "adjustments[0].adopted"),
+        (lambda p: p["adjustments"].append({"lesson": "nothing", "change": "x", "adopted": None}),
+         "adjustments[0].lesson"),
+        (lambda p: p["deferred"].append({"item": "x", "reason": "y", "feature": "nothing"}), "deferred[0].feature"),
+        (lambda p: p["for_plan"].append({"item": "x"}), "for_plan[0].feature"),
+        (lambda p: p["generation"].update(constitution="written"), "generation.constitution"),
+        (lambda p: p.update(old_project="relative/path"), "old_project"),
+    ],
+)
+def test_save_rule_violations(sdd_rebuild, tmp_path, sdd_export, change, path):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    before = tree_snapshot(new)
+    change(progress)
+
+    assert invalid_at(sdd_rebuild, new, progress) == path
+    assert tree_snapshot(new) == before
+
+
+def test_save_rejects_text_that_is_not_json(sdd_rebuild, tmp_path):
+    new = make_rebuild_new(tmp_path)
+    result = run_rebuild(sdd_rebuild, new, "save", stdin="not json")
+
+    assert (result.code, result.out["reason"]) == (1, "invalid")
+    assert not (new / ".specify/sdd-rebuild").exists()
+
+
+def test_save_keeps_the_old_project(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    other = gen1(tmp_path, sdd_export, name="other")
+    progress["old_project"] = os.path.realpath(other)
+
+    assert invalid_at(sdd_rebuild, new, progress) == "old_project"
+
+
+@pytest.mark.parametrize(
+    "lineage_setup, generation, allowed",
+    [
+        ("present", 2, "used"),
+        ("none", 1, "not-needed"),
+        ("none", 2, "skipped"),
+        ("mismatch", 2, "skipped"),
+        ("unreadable", 2, "skipped"),
+        ("invalid", 2, "skipped"),
+        ("newer", 2, "skipped"),
+        ("conflict", 2, "skipped"),
+    ],
+)
+def test_save_old_lineage_must_match_the_snapshot(sdd_rebuild, tmp_path, sdd_export, lineage_setup, generation, allowed):
+    if generation == 1:
+        old = gen1(tmp_path, sdd_export)
+    else:
+        old = gen2(tmp_path, sdd_export, lineage=False)
+        content = {
+            "present": export_fixture_bytes("lineage-gen2.json"), "none": None,
+            "mismatch": export_fixture_bytes("lineage-gen3.json"), "unreadable": b"x",
+            "invalid": b'{"tool": "sdd-rebuild", "schema": 1}', "newer": b'{"tool": "sdd-rebuild", "schema": 3}',
+            "conflict": b'{"tool": "other"}',
+        }[lineage_setup]
+        if content is not None:
+            write_tree(old, {".sdd-rebuild/lineage.json": content})
+    new = make_rebuild_new(tmp_path)
+    for value in ("used", "not-needed", "skipped"):
+        progress = keep_all_progress(os.path.realpath(old), nutrients_of(old), value)
+        result = save(sdd_rebuild, new, progress)
+        if value == allowed:
+            assert result.code == 0, result.out
+            assert saved(new)["source"]["lineage_state"] == lineage_setup
+        else:
+            assert (result.out["reason"], result.out["path"]) == ("invalid", "old_lineage"), value
+
+
+def test_save_secret(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    token = "ghp_" + "a1B2" * 6
+    progress["deferred"].append({"item": f"token = {token}", "reason": "later", "feature": None})
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", "deferred[0].item")
+    assert token not in result.raw.decode("utf-8") and token not in result.err
+
+
+def test_confirm_records_baseline_and_rebuilt_at(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress.update(phase="confirmed", stage="summary")
+    out = ok(save(sdd_rebuild, new, progress))
+    data = saved(new)
+
+    assert (out["phase"], out["baseline"]) == ("confirmed", True)
+    assert data["rebuilt_at"] == TODAY
+    assert data["baseline"] == {"constitution": None, "specs": {}}
+    assert ok(save(sdd_rebuild, new, progress))["baseline"] is False  # kept, not recorded again
+
+
+def test_confirm_needs_language_and_decided_adjustments_and_passing_checks(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    for change, path in (
+        (dict(language=None), "language"),
+        (dict(adjustments=[{"lesson": "atomic-write", "change": "x", "adopted": None}]), "adjustments[0].adopted"),
+        (dict(stage="lessons"), "stage"),
+    ):
+        candidate = {**copy.deepcopy(progress), "phase": "confirmed", "stage": "summary", **change}
+        assert invalid_at(sdd_rebuild, new, candidate) == path
+    candidate = {**copy.deepcopy(progress), "phase": "confirmed", "stage": "summary"}
+    candidate["target"]["lessons"] = []
+    result = save(sdd_rebuild, new, candidate)
+    assert (result.out["reason"], [e["check"] for e in result.out["errors"]]) == ("invalid", ["unaccounted"])
+
+
+def test_back_to_deciding_before_anything_was_generated(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    progress.update(phase="deciding", stage="items")
+    out = ok(save(sdd_rebuild, new, progress))
+
+    assert out["phase"] == "deciding"
+    assert (saved(new)["baseline"], saved(new)["rebuilt_at"]) == (None, None)
+
+
+@pytest.mark.parametrize("generated", ["constitution", "spec"])
+def test_no_going_back_once_something_was_generated(sdd_rebuild, tmp_path, sdd_export, generated):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    if generated == "constitution":
+        simulate_constitution(new)
+        progress["generation"]["constitution"] = "written"
+        ok(save(sdd_rebuild, new, progress))
+    else:
+        simulate_specify(new, "deploy")
+        progress["target"]["features"][0]["spec_dir"] = ok(run_rebuild(sdd_rebuild, new, "claim", "deploy"))["spec_dir"]
+    before = tree_snapshot(new)
+    progress.update(phase="deciding", stage="items")
+    if generated == "constitution":
+        progress["generation"]["constitution"] = "pending"
+    else:
+        progress["target"]["features"][0]["spec_dir"] = None
+
+    assert save(sdd_rebuild, new, progress).out["reason"] == "frozen"
+    assert tree_snapshot(new) == before
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda p: p["target"]["principles"][0].update(title="改了"),
+        lambda p: p.update(discards=[{"id": "json-format", "text": None, "reason": None}]),
+        lambda p: p.update(language="en"),
+        lambda p: p["constitution"].update(action="amend"),
+        lambda p: p.update(pending_decided=["x"]),
+        lambda p: p.update(adjustments=[{"lesson": "atomic-write", "change": "x", "adopted": True}]),
+        lambda p: p["constitution"].update(governance=[]),
+        lambda p: p.update(deferred=[]),
+        lambda p: p["deferred"][0].update(item="changed"),
+    ],
+)
+def test_confirmed_content_is_frozen(sdd_rebuild, tmp_path, sdd_export, change):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress["constitution"]["governance"] = ["規則一"]
+    progress["deferred"] = [{"item": "延後", "reason": "之後", "feature": None}]
+    ok(save(sdd_rebuild, new, progress))
+    progress = confirm(sdd_rebuild, new, progress)
+    change(progress)
+
+    assert save(sdd_rebuild, new, progress).out["reason"] == "frozen"
+
+
+def test_confirmed_append_only_fields_may_grow(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    progress["constitution"]["governance"].append("維護者同意保留的規則")
+    progress["deferred"].append({"item": "澄清後延後的事", "reason": "之後", "feature": "deploy"})
+    progress["for_plan"].append({"item": "選用的工具", "feature": None})
+    ok(save(sdd_rebuild, new, progress))
+
+    assert saved(new)["constitution"]["governance"] == ["維護者同意保留的規則"]
+
+
+def test_confirmed_generation_and_reviewed_only_move_forward(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    simulate_constitution(new)
+    progress["generation"]["constitution"] = "reviewed"
+    ok(save(sdd_rebuild, new, progress))
+    progress["generation"]["constitution"] = "written"
+    assert save(sdd_rebuild, new, progress).out["reason"] == "frozen"
+    progress["generation"]["constitution"] = "reviewed"
+    simulate_specify(new, "deploy")
+    progress["target"]["features"][0]["spec_dir"] = ok(run_rebuild(sdd_rebuild, new, "claim", "deploy"))["spec_dir"]
+    progress["target"]["features"][0]["reviewed"] = True
+    ok(save(sdd_rebuild, new, progress))
+    progress["target"]["features"][0]["reviewed"] = False
+    assert save(sdd_rebuild, new, progress).out["reason"] == "frozen"
+
+
+def test_spec_dir_is_written_by_claim_only(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    simulate_specify(new, "deploy")
+    ok(run_rebuild(sdd_rebuild, new, "claim", "deploy"))
+    progress["target"]["features"][0]["spec_dir"] = None  # not carried over from claim
+
+    assert invalid_at(sdd_rebuild, new, progress) == "target.features[0].spec_dir"
+    progress["target"]["features"][0]["spec_dir"] = "specs/009-elsewhere"
+    assert invalid_at(sdd_rebuild, new, progress) == "target.features[0].spec_dir"
+
+
+def test_reviewed_needs_a_spec_dir(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    progress["target"]["features"][0]["reviewed"] = True
+
+    assert invalid_at(sdd_rebuild, new, progress) == "target.features[0].reviewed"
+
+
+def test_save_after_the_lineage_is_written(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    progress = generate_all(sdd_rebuild, new, progress)
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+
+    assert save(sdd_rebuild, new, progress).out["reason"] == "finished"
+
+
+def test_save_refuses_a_folder_with_strangers(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    write_tree(new, {".specify/sdd-rebuild/mine.txt": "x"})
+    before = tree_snapshot(new)
+
+    assert save(sdd_rebuild, new, progress).out["reason"] == "conflict"
+    assert tree_snapshot(new) == before
+
+
+def test_save_os_error_leaves_the_progress_as_it_was(sdd_rebuild, sdd_grill, tmp_path, sdd_export, monkeypatch):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    before = tree_snapshot(new)
+    real_replace = os.replace
+
+    def failing_replace(source, target):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+    progress["stage"] = "new"
+    result = save(sdd_rebuild, new, progress)
+    monkeypatch.setattr(os, "replace", real_replace)
+
+    assert (result.code, result.out["reason"]) == (1, "os-error")
+    assert tree_snapshot(new) == before
+
+
+def test_existing_spec_feature_spec_dir_and_reviewed(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path, specs={"001-deploy": "# d\n"})
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export, new=new)
+    progress["target"]["features"][0].update(existing_spec="specs/001-deploy", reviewed=False)
+    ok(save(sdd_rebuild, new, progress))
+    assert saved(new)["target"]["features"][0]["reviewed"] is True
+    assert saved(new)["target"]["features"][0]["spec_dir"] is None
+    progress = confirm(sdd_rebuild, new, progress)
+
+    assert saved(new)["target"]["features"][0]["spec_dir"] == "specs/001-deploy"
+    progress["target"]["features"][0]["spec_dir"] = "specs/001-deploy"
+    ok(save(sdd_rebuild, new, progress))
+
+
+# ------------------------------------------------------- (T016) preview
+
+
+def test_preview_keep_all(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    before_old, before_new = tree_snapshot(old), tree_snapshot(new)
+    out = ok(run_rebuild(sdd_rebuild, new, "preview"))
+
+    assert list(out) == ["ok", "errors", "generation", "lineage", "summary", "counts"]
+    assert (out["ok"], out["errors"], out["generation"]) == (True, [], 2)
+    assert list(out["summary"]) == ["kept", "modified", "merged", "split", "added", "discarded", "pending_decided",
+                                    "adjustments", "order"]
+    summary = out["summary"]
+    assert [e["id"] for e in summary["kept"]] == ["cross-platform", "deploy", "deploy-no-overwrite", "deploy-symlink",
+                                                  "status", "status-list", "atomic-write", "json-format"]
+    assert summary["kept"][1] == {"section": "features", "id": "deploy", "title": nutrients_of(old)["features"][0]["title"]}
+    assert all(summary[key] == [] for key in ("modified", "merged", "split", "added", "discarded"))
+    assert summary["order"] == [
+        {"id": "deploy", "title": nutrients_of(old)["features"][0]["title"], "depends_on": [], "existing_spec": None},
+        {"id": "status", "title": nutrients_of(old)["features"][1]["title"], "depends_on": ["deploy"], "existing_spec": None},
+    ]
+    assert out["counts"] == {"principles": 1, "features": 2, "requirements": 3, "lessons": 2, "discarded": 0}
+    assert out["lineage"]["rebuilt_at"] is None
+    assert [f["spec_dir"] for f in out["lineage"]["features"]] == [None, None]
+    assert tree_snapshot(old) == before_old and tree_snapshot(new) == before_new
+
+
+def test_preview_when_the_decisions_are_incomplete(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress["target"]["lessons"] = progress["target"]["lessons"][:1]
+    ok(save(sdd_rebuild, new, progress))
+    before = tree_snapshot(new)
+    result = run_rebuild(sdd_rebuild, new, "preview")
+
+    assert (result.code, result.out["reason"], result.out["error"]) == (1, "invalid", PREVIEW_ERROR)
+    assert [e["check"] for e in result.out["errors"]] == ["unaccounted"]
+    assert result.out["summary"]["kept"] and result.out["counts"]["lessons"] == 1
+    assert tree_snapshot(new) == before
+
+
+def test_preview_works_on_confirmed_progress(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    out = ok(run_rebuild(sdd_rebuild, new, "preview"))
+
+    assert out["lineage"]["rebuilt_at"] == TODAY
+
+
+def test_preview_without_progress(sdd_rebuild, tmp_path):
+    result = run_rebuild(sdd_rebuild, make_rebuild_new(tmp_path), "preview")
+
+    assert (result.code, result.out["reason"]) == (1, "no-progress")
+
+
+# --------------------------------------------------------- (T017) claim
+
+
+def test_claim_records_the_new_spec(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    folder = simulate_specify(new, "deploy")
+    before = tree_snapshot(new)
+    out = ok(run_rebuild(sdd_rebuild, new, "claim", "deploy"))
+
+    assert out == {"feature": "deploy", "spec_dir": folder, "feature_directory": folder, "candidates": [folder],
+                   "incomplete": []}
+    assert saved(new)["target"]["features"][0]["spec_dir"] == folder
+    assert tree_changes(before, tree_snapshot(new))["changed"] == [".specify/sdd-rebuild/progress.json"]
+    assert tree_changes(before, tree_snapshot(new))["added"] == []
+
+
+def test_claim_without_a_new_spec(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    (new / "specs" / "001-half").mkdir(parents=True)
+    before = tree_snapshot(new)
+    result = run_rebuild(sdd_rebuild, new, "claim", "deploy")
+
+    assert (result.code, result.out["reason"]) == (1, "none")
+    assert (result.out["candidates"], result.out["incomplete"]) == ([], ["specs/001-half"])
+    assert tree_snapshot(new) == before
+
+
+def test_claim_ambiguous_and_dir(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    write_tree(new, {"specs/001-mine/spec.md": "# mine\n"})
+    folder = simulate_specify(new, "deploy")
+    result = run_rebuild(sdd_rebuild, new, "claim", "deploy")
+
+    assert (result.code, result.out["reason"], result.out["candidates"]) == (1, "ambiguous", ["specs/001-mine", folder])
+    assert saved(new)["target"]["features"][0]["spec_dir"] is None
+    bad = run_rebuild(sdd_rebuild, new, "claim", "deploy", "--dir", "specs/009-none")
+    assert bad.out["reason"] == "usage"
+    out = ok(run_rebuild(sdd_rebuild, new, "claim", "deploy", "--dir", folder))
+    assert out["spec_dir"] == folder and saved(new)["target"]["features"][0]["spec_dir"] == folder
+
+
+def test_claim_mismatch(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    simulate_specify(new, "deploy")
+    write_tree(new, {".specify/feature.json": '{"feature_directory": "specs/elsewhere"}'})
+    result = run_rebuild(sdd_rebuild, new, "claim", "deploy")
+
+    assert (result.code, result.out["reason"], result.out["feature_directory"]) == (1, "mismatch", "specs/elsewhere")
+
+
+@pytest.mark.parametrize("case", ["second-first", "unknown", "already", "existing"])
+def test_claim_not_next(sdd_rebuild, tmp_path, sdd_export, case):
+    new = make_rebuild_new(tmp_path, specs={"001-deploy": "# d\n"}) if case == "existing" else None
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export, new=new)
+    if case == "existing":
+        progress["target"]["features"][0]["existing_spec"] = "specs/001-deploy"
+        ok(save(sdd_rebuild, new, progress))
+    progress = confirm(sdd_rebuild, new, progress)
+    simulate_specify(new, "x")
+    feature = {"second-first": "status", "unknown": "nothing", "already": "deploy", "existing": "deploy"}[case]
+    if case == "already":
+        ok(run_rebuild(sdd_rebuild, new, "claim", "deploy"))
+        simulate_specify(new, "y")
+    before = tree_snapshot(new)
+    result = run_rebuild(sdd_rebuild, new, "claim", feature)
+
+    assert (result.code, result.out["reason"]) == (1, "not-next")
+    assert tree_snapshot(new) == before
+
+
+def test_claim_needs_confirmed_progress(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path)
+    assert run_rebuild(sdd_rebuild, new, "claim", "deploy").out["reason"] == "no-progress"
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export, new=new)
+    assert run_rebuild(sdd_rebuild, new, "claim", "deploy").out["reason"] == "no-progress"
+
+
+def test_claim_ignores_baseline_specs_and_claimed_ones(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path, specs={"001-before": "# b\n"})
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export, new=new)
+    progress = confirm(sdd_rebuild, new, progress)
+    first = simulate_specify(new, "deploy")
+    ok(run_rebuild(sdd_rebuild, new, "claim", "deploy"))
+    second = simulate_specify(new, "status")
+    out = ok(run_rebuild(sdd_rebuild, new, "claim", "status"))
+
+    assert out["candidates"] == [second] and first != second
+
+
+def test_claim_conflict(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    simulate_specify(new, "deploy")
+    write_tree(new, {".specify/sdd-rebuild/mine.txt": "x"})
+
+    assert run_rebuild(sdd_rebuild, new, "claim", "deploy").out["reason"] == "conflict"
+
+
+# -------------------------------------------------------- (T018) verify
+
+
+def verify(module, new):
+    return run_rebuild(module, new, "verify")
+
+
+def test_verify_ok(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    generate_all(sdd_rebuild, new, progress)
+    before = tree_snapshot(new)
+    out = ok(verify(sdd_rebuild, new))
+
+    assert list(out) == ["ok", "failures", "constitution", "specs", "unexpected"]
+    assert (out["ok"], out["failures"], out["constitution"], out["unexpected"]) == (True, [], "written", [])
+    assert out["specs"] == [
+        {"feature": "deploy", "dir": "specs/001-deploy", "depends_on": [], "existing": False},
+        {"feature": "status", "dir": "specs/002-status", "depends_on": ["specs/001-deploy"], "existing": False},
+    ]
+    assert tree_snapshot(new) == before
+
+
+def test_verify_with_an_existing_spec(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path, specs={"001-deploy": "# d\n"})
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export, new=new)
+    progress["target"]["features"][0]["existing_spec"] = "specs/001-deploy"
+    ok(save(sdd_rebuild, new, progress))
+    progress = confirm(sdd_rebuild, new, progress)
+    progress["target"]["features"][0]["spec_dir"] = "specs/001-deploy"
+    progress = generate_all(sdd_rebuild, new, progress)
+    out = ok(verify(sdd_rebuild, new))
+
+    assert out["specs"] == [
+        {"feature": "deploy", "dir": "specs/001-deploy", "depends_on": [], "existing": True},
+        {"feature": "status", "dir": "specs/002-status", "depends_on": ["specs/001-deploy"], "existing": False},
+    ]
+    shutil.rmtree(new / "specs" / "001-deploy")
+    result = verify(sdd_rebuild, new)
+    assert (result.code, result.out["reason"]) == (1, "mismatch-documents")
+    assert "existing-spec-missing" in [f["check"] for f in result.out["failures"]]
+
+
+def failures(module, new) -> list[str]:
+    result = verify(module, new)
+    assert result.code == 1 and result.out["reason"] == "mismatch-documents"
+    return [f["check"] for f in result.out["failures"]]
+
+
+def test_verify_failures_from_sdd_grill(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path, specs={"001-before": "# b\n"})
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export, new=new)
+    assert "constitution-not-written" in failures(sdd_rebuild, new)
+    assert "spec-missing" in failures(sdd_rebuild, new)
+    progress = generate_all(sdd_rebuild, new, progress)
+    assert ok(verify(sdd_rebuild, new))["ok"] is True
+
+    write_tree(new, {"specs/001-before/spec.md": "# changed\n"})
+    assert "existing-spec-changed" in failures(sdd_rebuild, new)
+    write_tree(new, {"specs/001-before/spec.md": "# b\n"})
+    (new / "specs" / "002-deploy" / "spec.md").unlink()
+    assert "spec-missing" in failures(sdd_rebuild, new)
+
+
+def test_verify_order_and_dependency_order(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    simulate_constitution(new)
+    progress["generation"]["constitution"] = "reviewed"
+    ok(save(sdd_rebuild, new, progress))
+    # the maintainer's own spec slipped in between, and the first feature got a later number
+    write_tree(new, {"specs/005-deploy/spec.md": "# d\n", ".specify/feature.json": '{"feature_directory": "specs/005-deploy"}'})
+    ok(run_rebuild(sdd_rebuild, new, "claim", "deploy"))
+    write_tree(new, {"specs/003-status/spec.md": "# s\n", ".specify/feature.json": '{"feature_directory": "specs/003-status"}'})
+    ok(run_rebuild(sdd_rebuild, new, "claim", "status"))
+    progress["target"]["features"][0].update(spec_dir="specs/005-deploy", reviewed=True)
+    progress["target"]["features"][1].update(spec_dir="specs/003-status", reviewed=True)
+    ok(save(sdd_rebuild, new, progress))
+
+    assert {"order", "dependency-order"} <= set(failures(sdd_rebuild, new))
+
+
+def test_verify_constitution_changed_and_spec_not_new(sdd_rebuild, sdd_grill, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path, constitution=WRITTEN_CONSTITUTION, specs={"001-old": "# o\n"})
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export, new=new)
+    progress["constitution"]["action"] = "keep"
+    progress["generation"]["constitution"] = "not-needed"
+    ok(save(sdd_rebuild, new, progress))
+    progress = confirm(sdd_rebuild, new, progress)
+    progress = generate_all(sdd_rebuild, new, progress)
+    write_tree(new, {".specify/memory/constitution.md": WRITTEN_CONSTITUTION + "more\n"})
+    assert "constitution-changed" in failures(sdd_rebuild, new)
+    # spec-not-new comes from sdd-grill's rule; the progress points a feature at a baseline spec by hand
+    data = saved(new)
+    data["target"]["features"][0]["spec_dir"] = "specs/001-old"
+    write_tree(new, {".specify/memory/constitution.md": WRITTEN_CONSTITUTION,
+                     ".specify/sdd-rebuild/progress.json": json.dumps(data, ensure_ascii=False)})
+    assert "spec-not-new" in failures(sdd_rebuild, new)
+
+
+def test_verify_not_reviewed(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    simulate_constitution(new)
+    progress["generation"]["constitution"] = "written"
+    ok(save(sdd_rebuild, new, progress))
+    for feature in progress["target"]["features"]:
+        simulate_specify(new, feature["id"])
+        feature["spec_dir"] = ok(run_rebuild(sdd_rebuild, new, "claim", feature["id"]))["spec_dir"]
+    ok(save(sdd_rebuild, new, progress))
+    result = verify(sdd_rebuild, new)
+
+    assert [f["check"] for f in result.out["failures"]].count("not-reviewed") == 3
+
+
+def test_verify_lists_unexpected_folders_without_failing(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    generate_all(sdd_rebuild, new, progress)
+    write_tree(new, {"specs/009-mine/spec.md": "# m\n"})
+    out = ok(verify(sdd_rebuild, new))
+
+    assert out["unexpected"] == ["specs/009-mine"]
+
+
+def test_verify_needs_confirmed_progress(sdd_rebuild, tmp_path, sdd_export):
+    assert verify(sdd_rebuild, make_rebuild_new(tmp_path)).out["reason"] == "no-progress"
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    assert verify(sdd_rebuild, new).out["reason"] == "no-progress"
+
+
+# ------------------------------------------------------- (T019) lineage
+
+
+def ready(module, tmp_path, sdd_export, **kwargs):
+    old, new, progress = confirmed(module, tmp_path, sdd_export, **kwargs)
+    return old, new, generate_all(module, new, progress)
+
+
+def test_lineage_writes_the_lineage(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    before_old, before_new = tree_snapshot(old), tree_snapshot(new)
+    out = ok(run_rebuild(sdd_rebuild, new, "lineage"))
+
+    assert out == {"written": [".sdd-rebuild/lineage.json", ".sdd-rebuild/.gitattributes"], "unchanged": False,
+                   "lineage": ".sdd-rebuild/lineage.json", "generation": 2,
+                   "counts": {"principles": 1, "features": 2, "requirements": 3, "lessons": 2, "discarded": 0}}
+    raw = (new / ".sdd-rebuild" / "lineage.json").read_bytes()
+    state, data, problems = sdd_export.load_lineage(new / ".sdd-rebuild" / "lineage.json")
+    assert (state, problems) == ("present", [])
+    assert raw == sdd_export.serialize(data, "lineage")
+    assert not raw.startswith(b"\xef\xbb\xbf") and b"\r" not in raw
+    assert (new / ".sdd-rebuild" / ".gitattributes").read_bytes() == LINEAGE_GITATTRIBUTES
+    assert saved(new)["lineage_written"] == sdd_export.content_hash(raw)
+    changes = tree_changes(before_new, tree_snapshot(new))
+    assert changes["added"] == [".sdd-rebuild", ".sdd-rebuild/.gitattributes", ".sdd-rebuild/lineage.json"]
+    assert changes["changed"] == [".specify/sdd-rebuild/progress.json"] and changes["removed"] == []
+    assert tree_snapshot(old) == before_old
+    assert [f["spec_dir"] for f in data["features"]] == ["specs/001-deploy", "specs/002-status"]
+    assert data["rebuilt_at"] == TODAY
+
+
+def test_lineage_keeps_hand_edited_gitattributes(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    write_tree(new, {".sdd-rebuild/.gitattributes": "mine\n"})
+    out = ok(run_rebuild(sdd_rebuild, new, "lineage"))
+
+    assert out["written"] == [".sdd-rebuild/lineage.json"]
+    assert (new / ".sdd-rebuild/.gitattributes").read_text() == "mine\n"
+
+
+def test_lineage_is_idempotent_after_an_interruption(sdd_rebuild, tmp_path, sdd_export, monkeypatch):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    real = sdd_rebuild.record_lineage_written
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(sdd_rebuild, "record_lineage_written", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run_rebuild(sdd_rebuild, new, "lineage")
+    monkeypatch.setattr(sdd_rebuild, "record_lineage_written", real)
+    assert saved(new)["lineage_written"] is None
+    path = new / ".sdd-rebuild" / "lineage.json"
+    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    out = ok(run_rebuild(sdd_rebuild, new, "lineage"))
+
+    assert (out["unchanged"], out["written"]) == (True, [])
+    assert saved(new)["lineage_written"] == sdd_export.content_hash(path.read_bytes())
+
+
+def test_lineage_refuses_a_different_existing_lineage(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+    data = json.loads((new / ".sdd-rebuild/lineage.json").read_bytes())
+    data["features"][0]["title"] = "別的"
+    (new / ".sdd-rebuild/lineage.json").write_bytes(sdd_export.serialize(data, "lineage"))
+    progress_data = saved(new)
+    progress_data["lineage_written"] = None
+    write_tree(new, {".specify/sdd-rebuild/progress.json": json.dumps(progress_data, ensure_ascii=False)})
+    before = tree_snapshot(new)
+    result = run_rebuild(sdd_rebuild, new, "lineage")
+
+    assert (result.code, result.out["reason"]) == (1, "lineage-changed")
+    assert tree_snapshot(new) == before
+
+
+@pytest.mark.parametrize("content", [b"x", None])
+def test_lineage_rebuild_conflict(sdd_rebuild, tmp_path, sdd_export, content):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    write_tree(new, {".sdd-rebuild/lineage.json": content} if content else {".sdd-rebuild/other": "x"})
+    before = tree_snapshot(new)
+    result = run_rebuild(sdd_rebuild, new, "lineage")
+
+    assert (result.code, result.out["reason"]) == (3, "rebuild-conflict")
+    assert tree_snapshot(new) == before
+
+
+def test_lineage_needs_verify_to_pass(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export)
+    result = run_rebuild(sdd_rebuild, new, "lineage")
+
+    assert (result.code, result.out["reason"]) == (1, "mismatch-documents")
+    assert not (new / ".sdd-rebuild").exists()
+
+
+def test_lineage_invalid_when_the_progress_was_edited(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    data = saved(new)
+    data["pending_decided"] = []
+    data["source"]["nutrients"]["features"][0]["requirements"][0]["status"] = "pending"
+    write_tree(new, {".specify/sdd-rebuild/progress.json": json.dumps(data, ensure_ascii=False)})
+    result = run_rebuild(sdd_rebuild, new, "lineage")
+
+    assert (result.code, result.out["reason"]) == (1, "invalid")
+    assert [e["check"] for e in result.out["errors"]] == ["pending-undecided"]
+    assert not (new / ".sdd-rebuild").exists()
+
+
+@pytest.mark.parametrize("which", ["lineage_problems", "generation_problems"])
+def test_lineage_internal_when_006_disagrees(sdd_rebuild, tmp_path, sdd_export, monkeypatch, which):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    monkeypatch.setattr(sdd_export, which, lambda *args: [sdd_export.Problem("field", "features[0].id", "no")])
+    result = run_rebuild(sdd_rebuild, new, "lineage")
+
+    assert (result.code, result.out["reason"]) == (1, "internal")
+    assert result.out["errors"][0]["check"] in ("lineage-format", "next-export")
+    assert not (new / ".sdd-rebuild").exists()
+
+
+def test_lineage_os_error(sdd_rebuild, tmp_path, sdd_export, monkeypatch):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    (new / ".sdd-rebuild").mkdir()
+
+    def failing_replace(source, target):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+    result = run_rebuild(sdd_rebuild, new, "lineage")
+    monkeypatch.undo()
+
+    assert (result.code, result.out["reason"]) == (1, "os-error")
+    assert list((new / ".sdd-rebuild").iterdir()) == []
+    assert saved(new)["lineage_written"] is None
+
+
+def test_lineage_needs_confirmed_progress(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+
+    assert run_rebuild(sdd_rebuild, new, "lineage").out["reason"] == "no-progress"
+
+
+# ---------------------------------------------------- (T020) focus, clear
+
+
+def test_focus_points_at_the_first_generated_spec(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    assert run_rebuild(sdd_rebuild, new, "focus").out["reason"] == "no-progress"  # before the lineage
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+    before = tree_snapshot(new)
+    out = ok(run_rebuild(sdd_rebuild, new, "focus"))
+
+    assert out == {"feature_directory": "specs/001-deploy", "previous": "specs/002-status", "changed": True}
+    assert json.loads((new / ".specify/feature.json").read_bytes()) == {"feature_directory": "specs/001-deploy"}
+    assert tree_changes(before, tree_snapshot(new))["changed"] == [".specify/feature.json"]
+    again = ok(run_rebuild(sdd_rebuild, new, "focus"))
+    assert again == {"feature_directory": "specs/001-deploy", "previous": "specs/001-deploy", "changed": False}
+
+
+def test_focus_skips_existing_specs_and_may_have_nothing_to_point_at(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path, specs={"001-deploy": "# d\n", "002-status": "# s\n"})
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export, new=new)
+    for feature, folder in zip(progress["target"]["features"], ("specs/001-deploy", "specs/002-status")):
+        feature["existing_spec"] = folder
+    progress["constitution"]["action"] = "keep"
+    progress["generation"]["constitution"] = "not-needed"
+    ok(save(sdd_rebuild, new, progress))
+    confirm(sdd_rebuild, new, progress)
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+    out = ok(run_rebuild(sdd_rebuild, new, "focus"))
+
+    assert out == {"feature_directory": None, "previous": None, "changed": False}
+    assert not (new / ".specify/feature.json").exists()
+
+
+def test_focus_refuses_when_verify_fails_or_feature_json_is_odd(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+    (new / "specs" / "001-deploy" / "spec.md").unlink()
+    result = run_rebuild(sdd_rebuild, new, "focus")
+    assert (result.code, result.out["reason"]) == (1, "mismatch-documents")
+    write_tree(new, {"specs/001-deploy/spec.md": "# Feature Specification: deploy\n"})
+    (new / ".specify/feature.json").unlink()
+    (new / ".specify/feature.json").mkdir()
+    result = run_rebuild(sdd_rebuild, new, "focus")
+    assert (result.code, result.out["reason"]) == (1, "not-regular")
+
+
+def test_clear(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    write_tree(new, {".sdd-rebuild/lineage.json": "keep me"})
+    out = ok(run_rebuild(sdd_rebuild, new, "clear"))
+
+    assert out == {"cleared": True}
+    assert not (new / ".specify/sdd-rebuild").exists()
+    assert (new / ".sdd-rebuild/lineage.json").read_text() == "keep me"
+    assert ok(run_rebuild(sdd_rebuild, new, "clear")) == {"cleared": False}
+
+
+def test_clear_unreadable_progress_and_conflict(sdd_rebuild, tmp_path, sdd_export):
+    new = make_rebuild_new(tmp_path)
+    write_tree(new, {".specify/sdd-rebuild/progress.json": "broken", ".specify/sdd-rebuild/.gitignore": OWN_GITIGNORE})
+    assert ok(run_rebuild(sdd_rebuild, new, "clear")) == {"cleared": True}
+    write_tree(new, {".specify/sdd-rebuild/progress.json": "broken", ".specify/sdd-rebuild/mine": "x"})
+    before = tree_snapshot(new)
+    result = run_rebuild(sdd_rebuild, new, "clear")
+
+    assert (result.code, result.out["reason"]) == (1, "conflict")
+    assert tree_snapshot(new) == before
