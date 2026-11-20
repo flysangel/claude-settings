@@ -266,3 +266,65 @@ def test_saving_progress():
     has_any(saving, "retry", "try again", "save again")
     has_all(saving, "secret", ".specify/sdd-grill/")
     has_any(saving, "only through `save`", "only through save", "only with `save`")
+
+
+def test_summary_and_confirmation():
+    summary = section(SUMMARY)
+
+    has_all(summary, "decided", "deferred", "reason", "left for the plan", "order", "depend")
+    has_all(summary, "one question", "confirm", "again")
+    has_any(summary, "do not write or change", "must not write or change", "nothing is written to")
+    has_all(summary, "constitution", "spec")
+
+
+def test_generating_the_documents():
+    generate = section(GENERATE)
+
+    has_all(generate, '"confirmed"', "skill tool", "speckit-constitution", "speckit-specify")
+    has_all(generate, "`keep`", "spec_dir", "assumptions", "one at a time", "clarif")
+    has_any(generate, "do not infer", "not to infer", "must not infer")
+    has_any(generate, "remove", "delete")
+    has_all(generate, "ask the maintainer")
+    has_any(generate, "never write the constitution or a spec by hand", "do not write the constitution or a spec by hand")
+    has_any(generate, "never choose", "do not choose")
+    has_all(generate, "number", "feature.json", "focus")
+    assert generate.index("speckit-constitution") < generate.index("speckit-specify")
+
+
+def test_failure_keeps_the_progress_and_writes_nothing_more():
+    failure = section(FAILURE)
+
+    has_all(failure, "generated", "not generated", "progress", "stop", "verify", "focus", "clear")
+    has_any(failure, "do not write the missing", "never write the missing", "do not fill in")
+    has_any(failure, "do not delete", "never delete")
+
+
+def test_finishing():
+    finish = section(FINISH)
+
+    for command in (VERIFY, FOCUS, CLEAR):
+        assert command.lower() in finish
+    assert finish.index(VERIFY.lower()) < finish.index(FOCUS.lower()) < finish.index(CLEAR.lower())
+    has_all(finish, "feature_directory", "feature.json", "/sdd-drive", "/speckit-plan", "depend", "order")
+    has_all(finish, "stop", "plan", "tasks", "implement", "push")
+    has_any(finish, "do not push", "never push")
+    has_any(finish, "do not start", "never start")
+
+
+def test_summary_comes_before_generating_and_check_before_questions():
+    content = body()
+
+    assert content.index("## " + SUMMARY) < content.index("## " + GENERATE)
+    assert content.index(CHECK) < content.index("## " + RULES)
+    assert content.index(VERIFY) < content.index(FOCUS) < content.index(CLEAR, content.index(VERIFY))
+
+
+def test_skill_never_edits_feature_json_itself():
+    generate = section(GENERATE)
+
+    has_any(
+        generate,
+        "never edit `.specify/feature.json` yourself",
+        "do not edit `.specify/feature.json` yourself",
+        "do not change `.specify/feature.json` yourself",
+    )
