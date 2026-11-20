@@ -353,6 +353,17 @@ When `lineage` is `"present"`, `lineage_content` is the lineage the rebuild left
 - If the lineage has lessons, ask whether they still apply, in one question with multiSelect. Lessons that still
   apply keep their `id` and `origin`; the others go to `discarded`.
 - Copy every entry of the lineage's `discarded` into the draft's `discarded` exactly as it is, unchanged.
+- A kept item of the lineage keeps its `id`, `origin`, `revised` and `derived_from`, but two of the lineage's
+  values describe the rebuild, not this project, and are never copied into the draft. A feature's `spec` in the
+  lineage is the old project's path, kept only for tracing: a kept feature's `spec` is always the `spec` of its
+  `in_lineage` entry in `specs` from `check` (the spec file in its `spec_dir`). Copying the lineage's value could
+  point the feature at another feature's spec, and `validate` cannot tell, because it only checks that the file
+  exists. `source` may be `"rebuild"` in the lineage, which the draft does not accept: decide `source` from where
+  the item comes from in this project now (`spec` or `mixed` for a feature with a spec, `constitution` for a
+  principle the constitution states, and so on).
+- An item kept only from the lineage's content (a feature of `lineage_missing_specs` the maintainer keeps, or any
+  other item of the lineage that matches nothing in the project now) has `source` `maintainer` and
+  `.sdd-rebuild/lineage.json` as its evidence; such a feature's `spec` is `null`.
 - Any other item of the lineage that you cannot match to anything in the project now: ask whether to keep it
   (from the lineage's content) or discard it. Never let an item of the lineage disappear silently: the script
   refuses a draft where it is neither kept, merged into another item (listed in that item's `derived_from`) nor
@@ -365,11 +376,16 @@ it is; keep items outside the chosen scope exactly as they are; copy existing `d
 item back. When `nutrients` was `"edited"` or `"unknown"` in stage 1, the
 file holds the maintainer's own edits: before changing any existing content, ask about each change, one by one.
 
-When an item from the lineage or from earlier generations is dropped, it moves to `discarded` with `discarded_in`
-equal to `generation` (a dropped feature takes its requirements to `discarded` too). An item new in this generation
-that the maintainer removes is simply deleted, unless they want it recorded. When the maintainer merges or splits
-items, the result gets a new `id`, `origin` equal to `generation` and `derived_from` listing the original `id`s;
-the originals then need no `discarded` entry.
+When the maintainer drops an item, look at where the item is, not at its `origin`. An item that is in the lineage
+(`lineage_content`) or in the existing nutrients (`existing`) moves to `discarded`, with its own `origin` and
+`discarded_in` equal to `generation` (a dropped feature takes its requirements to `discarded` too). That includes
+the items the rebuild created, added, merged or split: their `origin` in the lineage already equals `generation`,
+yet they are the lineage's items, and `validate` refuses a draft in which one of them is gone without a trace
+(`lineage-item-missing`). Only an item that first appeared in this conversation, in neither the lineage nor the
+existing nutrients, is deleted without a record, unless the maintainer wants it recorded.
+
+When the maintainer merges or splits items, the result gets a new `id`, `origin` equal to `generation` and
+`derived_from` listing the original `id`s; the originals then need no `discarded` entry.
 
 Outcomes:
 
@@ -394,10 +410,11 @@ For every item show its source (spec, code, document or maintainer), its generat
 mark items without evidence as pending. Show requirements as text the maintainer can judge, not as raw JSON.
 
 The generation section only informs; continue unless the maintainer objects. After each later section (except
-doubts) ask whether to accept it all, change some items, or delete some. A deleted item that came from an earlier
-generation, or one the maintainer wants recorded, moves to `discarded` with their reason, or the default reason from
-"The draft" when they gave none (stage 4 explains how). After each section is decided, write a short list of what
-was decided, so that the decisions survive if the conversation is compacted.
+doubts) ask whether to accept it all, change some items, or delete some. A deleted item that is in the lineage or
+in the existing nutrients, whatever its `origin` (the rebuild's own items included), or one the maintainer wants
+recorded, moves to `discarded` with their reason, or the default reason from "The draft" when they gave none; only
+an item first proposed in this conversation is deleted without a record (stage 4 explains how). After each section
+is decided, write a short list of what was decided, so that the decisions survive if the conversation is compacted.
 
 Doubts: one question per doubt, never several in one. The choices are: include it (it becomes a requirement or a
 lesson, and the maintainer may change the wording), keep it as a requirement or lesson marked `pending`, or discard
@@ -445,14 +462,15 @@ Outcomes:
     not a valid commit. Add correct evidence, or make the item `pending`; tell the maintainer which items became
     pending.
   - Generation rules: `generation` (use the number from `check`), `lineage-item-missing` (an item of the lineage is
-    neither kept, merged nor discarded), `origin-changed` (an inherited item must keep its `origin`),
-    `origin-unknown` (an item claims an earlier generation that neither the lineage nor the existing nutrients
-    know), `revision-unmarked` (an inherited item changed: add `generation` to its `revised`), `discard-lost` (an
-    earlier `discarded` entry must stay unchanged), `discarded-active` (an `id` is both kept and discarded),
-    `derived-unknown` (a `derived_from` names an unknown item), `id-reused` (a new item took an `id` the lineage
-    already used: choose a new one). Fix each as its description says. When the fix needs a decision, such as
-    whether an item of the lineage is kept or discarded, ask the maintainer one question per item, then validate
-    again.
+    neither kept, merged nor discarded; if the maintainer already deleted it, whatever its `origin`, move it to
+    `discarded` as stage 4 says, without asking again), `origin-changed` (an inherited item must keep its
+    `origin`), `origin-unknown` (an item claims an earlier generation that neither the lineage nor the existing
+    nutrients know), `revision-unmarked` (an inherited item changed: add `generation` to its `revised`),
+    `discard-lost` (an earlier `discarded` entry must stay unchanged), `discarded-active` (an `id` is both kept and
+    discarded), `derived-unknown` (a `derived_from` names an unknown item), `id-reused` (a new item took an `id` the
+    lineage already used: choose a new one). Fix each as its description says. When the fix needs a decision the
+    maintainer has not made yet, such as whether an item of the lineage is kept or discarded, ask the maintainer one
+    question per item, then validate again.
   - If the same error comes back after you fixed it twice and you cannot see why, show the maintainer the error and
     ask how to proceed (or stop, rule 7).
 - Exit code 3: the project's state changed during the conversation. Handle `reason` as the same outcome of stage 1.

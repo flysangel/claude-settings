@@ -2632,6 +2632,40 @@ def test_three_generations_refuse_a_broken_link(sdd_export, tmp_path):
     assert {"origin-changed", "discard-lost"} <= set(checks(result))
 
 
+def test_an_item_the_rebuild_created_is_discarded_not_deleted(sdd_export, tmp_path):
+    """T058: an item of the lineage whose origin equals this generation is still the lineage's item."""
+    third = generation_project(tmp_path, "gen3", ["001-deploy", "002-overview"], "lineage-gen3.json")
+    data = fixture("gen3-draft.json")
+    data["features"] = [feature for feature in data["features"] if feature["id"] != "overview"]
+
+    deleted = validate(sdd_export, third, data)
+    assert deleted.code == 1 and "lineage-item-missing" in checks(deleted), deleted.out
+
+    for item_id, kind in (("overview", "feature"), ("overview-list", "requirement")):
+        data["discarded"].append({"id": item_id, "kind": kind, "origin": 3, "discarded_in": 3, "text": "重建時建立的項目。",
+                                  "reason": "維護者決定捨棄"})
+    recorded = validate(sdd_export, third, data)
+    assert recorded.code == 0, recorded.out
+
+
+def test_lineage_only_values_are_not_draft_values(sdd_export, tmp_path):
+    """T058: the lineage's `source` "rebuild" is refused; its `spec` is the old project's path."""
+    third = generation_project(tmp_path, "gen3", ["001-deploy", "002-overview", "003-report"], "lineage-gen3.json")
+    lineage = fixture("lineage-gen3.json")
+    overview = next(feature for feature in lineage["features"] if feature["id"] == "overview")
+    assert overview["spec_dir"] == "specs/002-overview" and overview["spec"] == "specs/003-report/spec.md"
+
+    data = fixture("gen3-draft.json")
+    data["features"][1]["source"] = "rebuild"
+    assert "field" in checks(validate(sdd_export, third, data))
+
+    data = fixture("gen3-draft.json")
+    data["features"][1]["spec"] = overview["spec"]
+    # validate only checks that the file exists, so a copied spec points the feature at another feature unnoticed:
+    # SKILL.md has to say where the spec comes from.
+    assert validate(sdd_export, third, data).code == 0
+
+
 # ============================================================== re-export
 
 

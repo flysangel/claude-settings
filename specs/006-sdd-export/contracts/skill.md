@@ -121,7 +121,11 @@
 23. `lineage` 為 `present` 時：世代紀錄中 `in_lineage` 的 spec 對應的功能沿用紀錄的 `id` 與 `origin`；內容與紀錄不同時在 `revised`
     加上這一代；不在紀錄中的 spec 成為 `origin` 為這一代的新功能；`lineage_missing_specs` 中的每個功能，以一題詢問保留（依紀錄的內容）
     或捨棄；紀錄中的教訓詢問是否仍然適用（可複選），仍適用的沿用 `id` 與 `origin`，不適用的移到 `discarded`；
-    紀錄中的 `discarded` 全部原樣保留（FR-012、FR-013、US4；字樣：`lineage`、`origin`、`discarded`）。
+    紀錄中的 `discarded` 全部原樣保留。沿用紀錄的項目時，紀錄中只描述重建的兩個值 MUST NOT 照抄進草稿：功能的 `spec` 在紀錄中是
+    舊專案的路徑，一律改用 `check` 的 `specs` 中對應 `in_lineage` 那一筆的 `spec`（`spec_dir` 下的 `spec.md`）；紀錄中的
+    `source: "rebuild"` 草稿不接受，依項目在這個專案目前的來源重新決定；只依紀錄內容保留的項目（`lineage_missing_specs` 中選擇
+    保留的功能等），`source` 為 `maintainer`、依據為 `.sdd-rebuild/lineage.json`，功能的 `spec` 為 `null`
+    （FR-012、FR-013、US4；字樣：`lineage`、`origin`、`discarded`）。
 24. `export_dir` 為 `ours` 時（再次匯出）：以 `existing` 為起點；既有項目沿用 `id`；依據沒有改變的項目不改寫文字；
     範圍外的既有項目原樣保留；`nutrients` 為 `edited` 或 `unknown` 時，要改動既有內容 MUST 逐項詢問（R4；字樣：`existing`）。
 25. 新項目的 `id` 不與世代紀錄或既有養分中的任何 `id`（含 `discarded`）重複。
@@ -135,7 +139,9 @@
 
 26. 依區段逐段呈現：世代資訊（世代、繼承與新增的數量）→ 原則 → 功能、需求與相依關係（依相依順序）→ 疑點 → 經驗教訓。
     每項標出來源（spec、程式碼、文件、維護者）、來源世代與依據；待確認的標為待確認（字樣：`pending`）。順序：各區段的先後。
-27. 每段呈現後請維護者決定：全部接受、修改某些項目、或刪除某些項目；被刪除的項目，若是前代的或維護者希望記錄，移到 `discarded` 並記下理由。
+27. 每段呈現後請維護者決定：全部接受、修改某些項目、或刪除某些項目；被刪除的項目，若在世代紀錄（`lineage_content`）或既有養分
+    （`existing`）中——不論 `origin`，包括重建時建立、`origin` 等於這一代的項目——或維護者希望記錄，移到 `discarded` 並記下理由；
+    只有這次對話中才提出、不在兩者之中的項目直接刪除（FR-012、Edge Cases：不讓前代項目無聲消失）。
 28. 疑點 MUST 一題一項：納入（成為需求或教訓，可修改文字）、標為待確認、或捨棄（以 `doubt` 記入 `discarded`）（FR-007；字樣：`doubt`）。
 29. 找不到任何可作為教訓的依據時，說明沒有找到，並詢問維護者是否口頭補充；口頭補充的依據記為 `maintainer`；MUST NOT 自行編造（US3-3；字樣：`maintainer`）。
 30. 每段決定之後，在對話中以簡短清單留下該段的結論（讓 context 壓縮後仍能接續）。

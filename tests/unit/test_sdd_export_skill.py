@@ -632,6 +632,42 @@ def test_stage_4_re_export():
     has_any(four, "outside the scope", "outside this scope", "outside the chosen scope")
 
 
+def test_stage_4_drops_by_where_an_item_is_not_by_its_origin():
+    """T058: an item the rebuild created has origin equal to this generation and still goes to discarded."""
+    four = stage(4)
+    dropping = part(four, "when the maintainer drops an item", "when the maintainer merges or splits")
+
+    has_all(dropping, "not at its `origin`", "`lineage_content`", "`existing`", "moves to `discarded`",
+            "the items the rebuild created", "`lineage-item-missing`", "first appeared in this conversation")
+    assert "an item new in this generation that the maintainer removes is simply deleted" not in four
+
+
+def test_stage_5_drops_by_where_an_item_is_not_by_its_origin():
+    five = stage(5)
+    deleting = part(five, "a deleted item", "after each section is decided")
+
+    has_all(deleting, "in the lineage", "existing nutrients", "whatever its `origin`", "moves to `discarded`",
+            "first proposed in this conversation")
+    assert "a deleted item that came from an earlier generation" not in five
+
+
+def test_stage_4_never_copies_lineage_only_values():
+    """T058: the lineage's `spec` is the old project's path and its `source` may be "rebuild"."""
+    four = stage(4)
+    kept = part(four, "a kept item of the lineage", "when `export_dir`")
+
+    has_all(kept, "never copied", "old project's path", "`in_lineage` entry in `specs`", "`spec_dir`",
+            '`"rebuild"`', "does not accept", "`maintainer`", ".sdd-rebuild/lineage.json", "`spec` is `null`")
+
+
+def test_stage_6_does_not_ask_again_about_a_deleted_item_of_the_lineage():
+    six = stage(6)
+    missing = part(six, "`lineage-item-missing`", "`origin-changed`")
+
+    has_all(missing, "already deleted", "`discarded`", "without asking again")
+    has_any(six, "has not made yet")
+
+
 # ---------------------------------------------------------------- stage 5
 
 
@@ -811,11 +847,12 @@ COVERAGE = {
     ("item", 20): (STAGES[3], ["suspected bug", "both sides", "do not pick one"]),
     ("item", 21): (STAGES[3], ["never contain plans, tasks or code", "only as evidence for lessons"]),
     ("item", 22): (STAGES[4], ["do not compute the generation yourself"]),
-    ("item", 23): (STAGES[4], ["in_lineage", "lineage_missing_specs", "still apply", "exactly as it is, unchanged"]),
+    ("item", 23): (STAGES[4], ["in_lineage", "lineage_missing_specs", "still apply", "exactly as it is, unchanged",
+                               "never copied into the draft", '`"rebuild"`']),
     ("item", 24): (STAGES[4], ["export_dir", "starting point", "one by one", "outside the chosen scope"]),
     ("item", 25): (STAGES[4], ["never reused", "discarded items included"]),
     ("item", 26): (STAGES[5], ["generation", "principles", "features", "doubts", "lessons", "pending"]),
-    ("item", 27): (STAGES[5], ["accept it all", "moves to `discarded`"]),
+    ("item", 27): (STAGES[5], ["accept it all", "moves to `discarded`", "whatever its `origin`"]),
     ("item", 28): (STAGES[5], ["one question per doubt", "`doubt`"]),
     ("item", 29): (STAGES[5], ["found none", "`maintainer` as evidence", "never invent"]),
     ("item", 30): (STAGES[5], ["short list"]),
