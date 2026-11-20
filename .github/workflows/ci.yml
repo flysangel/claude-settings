@@ -18,7 +18,8 @@ jobs:
       - name: Run tests
         run: uv run --with pytest pytest -v
 
-  # Each platform initializes a new repository with sdd-init and uploads it as a git bundle.
+  # Each platform initializes a new repository with sdd-init and uploads it as a git bundle;
+  # it also brings an older Spec Kit in, updates it with sdd-update, and adds that bundle to the same artifact.
   cross-platform-produce:
     strategy:
       fail-fast: false
@@ -36,13 +37,18 @@ jobs:
           SDD_CROSS_PLATFORM: produce
           SDD_CROSS_PLATFORM_OWN: ${{ runner.temp }}/sdd-init-own
         run: uv run --with pytest pytest -v -rs tests/e2e/test_cross_platform.py
+      - name: Update an older repository and bundle it
+        env:
+          SDD_CROSS_PLATFORM: produce
+          SDD_CROSS_PLATFORM_OWN: ${{ runner.temp }}/sdd-init-own
+        run: uv run --with pytest pytest -v -rs tests/e2e/test_cross_platform_update.py
       - uses: actions/upload-artifact@v4
         with:
           name: sdd-init-${{ matrix.os }}
           path: ${{ runner.temp }}/sdd-init-own
           if-no-files-found: error
 
-  # Each platform clones the repository the other platform initialized and runs Spec Kit's scripts in it.
+  # Each platform clones the repositories the other platform initialized and updated, and runs Spec Kit's scripts in them.
   cross-platform:
     needs: cross-platform-produce
     strategy:
@@ -74,3 +80,9 @@ jobs:
           SDD_CROSS_PLATFORM_OTHER: ${{ runner.temp }}/sdd-init-other
           SDD_CROSS_PLATFORM_OWN: ${{ runner.temp }}/sdd-init-own
         run: uv run --with pytest pytest -v -rs tests/e2e/test_cross_platform.py
+      - name: Use the repository updated on ${{ matrix.other }}
+        env:
+          SDD_CROSS_PLATFORM: verify
+          SDD_CROSS_PLATFORM_OTHER: ${{ runner.temp }}/sdd-init-other
+          SDD_CROSS_PLATFORM_OWN: ${{ runner.temp }}/sdd-init-own
+        run: uv run --with pytest pytest -v -rs tests/e2e/test_cross_platform_update.py
