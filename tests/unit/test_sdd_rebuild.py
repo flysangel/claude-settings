@@ -2095,9 +2095,10 @@ def test_lineage_os_error(sdd_rebuild, tmp_path, sdd_export, monkeypatch):
     def failing_replace(source, target):
         raise PermissionError(13, "denied")
 
+    real_replace = os.replace
     monkeypatch.setattr(os, "replace", failing_replace)
     result = run_rebuild(sdd_rebuild, new, "lineage")
-    monkeypatch.undo()
+    monkeypatch.setattr(os, "replace", real_replace)
 
     assert (result.code, result.out["reason"]) == (1, "os-error")
     assert list((new / ".sdd-rebuild").iterdir()) == []
@@ -2468,3 +2469,77 @@ def test_preview_catches_a_disabled_rule(sdd_rebuild, tmp_path, sdd_export, monk
     progress["target"]["lessons"] = []
     ok(save(sdd_rebuild, new, progress))
     assert run_rebuild(sdd_rebuild, new, "preview").out["ok"] is False
+
+
+# ------------------------------------------------ (T064) US4, no nutrients yet
+
+
+def bare_old(tmp_path: Path) -> Path:
+    from conftest import files_for_draft, make_old_project
+
+    files = {"README.md": "# old\n", **files_for_draft(export_fixture("gen1-draft.json"))}
+    return make_old_project(tmp_path, "bare-old", files=files)
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_us4_check_without_nutrients_writes_nothing(sdd_rebuild, tmp_path, empty):
+    old = bare_old(tmp_path)
+    if empty:
+        (old / ".sdd-export").mkdir()
+    new = make_rebuild_new(tmp_path)
+    before_old, before_new = tree_snapshot(old), tree_snapshot(new)
+    out = ok(check(sdd_rebuild, new, old))
+
+    assert (out["export_dir"], out["nutrients"], out["next"]["step"]) == ("empty" if empty else "none", None, "start")
+    assert out["export_skill"] is True
+    assert tree_snapshot(old) == before_old and tree_snapshot(new) == before_new
+
+
+def test_us4_export_skill_missing(tmp_path):
+    skills = copy_skills(tmp_path)
+    (skills / "sdd-export" / "SKILL.md").unlink()
+    module = load_copy(skills / "sdd-rebuild" / "scripts" / "sdd_rebuild.py", "sdd_rebuild_no_export_skill")
+    out = ok(run_rebuild(module, make_rebuild_new(tmp_path), "check", "--old", str(bare_old(tmp_path))))
+
+    assert out["export_skill"] is False
+
+
+def test_us4_export_with_006_project_option_writes_only_the_export_folder(sdd_rebuild, sdd_export, tmp_path):
+    from conftest import run_export
+
+    old = bare_old(tmp_path)
+    new = make_rebuild_new(tmp_path)
+    before_old, before_new = tree_snapshot(old), tree_snapshot(new)
+    state = run_export(sdd_export, new, "check", "--project", str(old)).out
+    assert state["export_dir"] == "none"
+    result = run_export(sdd_export, new, "write", "--project", str(old), "--expect", state["state"],
+                        stdin=json.dumps(export_fixture("gen1-draft.json"), ensure_ascii=False))
+
+    assert result.code == 0, result.out
+    changes = tree_changes(before_old, tree_snapshot(old))
+    assert changes == {"added": [".sdd-export", ".sdd-export/.gitattributes", ".sdd-export/README.md",
+                                 ".sdd-export/nutrients.json"], "removed": [], "changed": []}
+    assert tree_snapshot(new) == before_new
+    assert not (new / ".specify" / "sdd-rebuild").exists()
+    out = ok(check(sdd_rebuild, new, old))
+    assert (out["export_dir"], out["next"]["step"]) == ("ours", "start")
+
+
+def test_us4_a_failed_export_leaves_no_half_file(sdd_rebuild, sdd_export, tmp_path, monkeypatch):
+    from conftest import run_export
+
+    old = bare_old(tmp_path)
+    new = make_rebuild_new(tmp_path)
+
+    def failing_replace(source, target):
+        raise PermissionError(13, "denied")
+
+    real_replace = os.replace
+    monkeypatch.setattr(os, "replace", failing_replace)
+    result = run_export(sdd_export, new, "write", "--project", str(old), "--expect", "none",
+                        stdin=json.dumps(export_fixture("gen1-draft.json"), ensure_ascii=False))
+    monkeypatch.setattr(os, "replace", real_replace)
+
+    assert result.out["reason"] == "os-error"
+    assert not (old / ".sdd-export").exists()
+    assert ok(check(sdd_rebuild, new, old))["export_dir"] == "none"
