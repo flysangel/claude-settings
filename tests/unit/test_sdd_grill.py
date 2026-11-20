@@ -1225,3 +1225,153 @@ def test_focus_without_features_changes_nothing(sdd_grill, grill_project):
     assert result.code == 0
     assert result.out == {"feature_directory": None, "previous": "specs/009-x", "changed": False}
     assert (root / FEATURE_JSON).read_bytes() == feature_json("specs/009-x")
+
+
+# ======================================================= check: progress
+
+
+def test_check_reports_saved_progress(sdd_grill, grill_project):
+    root = grill_project()
+    assert run_grill(sdd_grill, root, "check").out["saved"] is None
+    save(sdd_grill, root, minimal_progress())
+
+    result = run_grill(sdd_grill, root, "check")
+
+    assert result.out["progress"] == "present"
+    assert result.out["saved"] == read_progress(root)
+    assert result.out["changed"] == []
+
+
+def test_check_lists_what_changed_in_a_fixed_order(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION, specs={"001-a": "a\n"})
+    git_commit_all(root)
+    save(sdd_grill, root, minimal_progress())
+
+    git_commit_all(root, "another")
+    assert run_grill(sdd_grill, root, "check").out["changed"] == ["head"]
+
+    write_tree(root, {"specs/002-b/spec.md": "b\n"})
+    assert run_grill(sdd_grill, root, "check").out["changed"] == ["specs", "head"]
+
+    write_tree(root, {".specify/memory/constitution.md": "# Other\n"})
+    assert run_grill(sdd_grill, root, "check").out["changed"] == ["constitution", "specs", "head"]
+
+
+def test_check_sees_an_edited_spec(sdd_grill, grill_project):
+    root = grill_project(specs={"001-a": "a\n"})
+    save(sdd_grill, root, minimal_progress())
+
+    write_tree(root, {"specs/001-a/spec.md": b"a\r\n"})
+    assert run_grill(sdd_grill, root, "check").out["changed"] == []
+    write_tree(root, {"specs/001-a/spec.md": "edited\n"})
+    assert run_grill(sdd_grill, root, "check").out["changed"] == ["specs"]
+
+
+def test_check_ignores_head_outside_git(sdd_grill, grill_project, monkeypatch):
+    root = grill_project(git=False)
+    save(sdd_grill, root, minimal_progress())
+    assert run_grill(sdd_grill, root, "check").out["changed"] == []
+
+    repo = grill_project()
+    git_commit_all(repo)
+    save(sdd_grill, repo, minimal_progress())
+    monkeypatch.setenv("PATH", str(repo / "no-such-dir"))
+    assert run_grill(sdd_grill, repo, "check").out["changed"] == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"{not json",
+        json.dumps(minimal_progress(schema=2)).encode(),
+        json.dumps(minimal_progress(tool="other")).encode(),
+        json.dumps(minimal_progress(stage="nowhere")).encode(),
+        json.dumps(minimal_progress()).encode(),  # no fingerprint
+        b"\xff\xfe",
+    ],
+)
+def test_check_reports_unreadable_progress(sdd_grill, grill_project, content):
+    root = grill_project()
+    save(sdd_grill, root, minimal_progress())
+    (root / PROGRESS).write_bytes(content)
+    before = snapshot(root)
+
+    result = run_grill(sdd_grill, root, "check")
+
+    assert result.code == 0
+    assert result.out["progress"] == "unreadable"
+    assert result.out["saved"] is None and result.out["changed"] == []
+    assert snapshot(root) == before
+
+
+def test_check_reports_a_conflict(sdd_grill, grill_project):
+    root = grill_project()
+    save(sdd_grill, root, minimal_progress())
+    write_tree(root, {OWN + "/notes.txt": "mine\n"})
+    before = snapshot(root)
+
+    result = run_grill(sdd_grill, root, "check")
+
+    assert result.out["progress"] == "conflict"
+    assert result.out["saved"] is None
+    assert snapshot(root) == before
+
+
+# ================================================================== clear
+
+
+def test_clear_removes_the_progress_and_the_folder(sdd_grill, grill_project):
+    root = grill_project()
+    save(sdd_grill, root, minimal_progress())
+
+    result = run_grill(sdd_grill, root, "clear")
+
+    assert result.code == 0 and result.out == {"cleared": True}
+    assert not (root / OWN).exists()
+    assert (root / ".specify").is_dir()
+
+
+def test_clear_without_progress(sdd_grill, grill_project):
+    root = grill_project()
+    before = snapshot(root)
+
+    first = run_grill(sdd_grill, root, "clear")
+    second = run_grill(sdd_grill, root, "clear")
+
+    assert first.code == second.code == 0
+    assert first.out == second.out == {"cleared": False}
+    assert snapshot(root) == before
+
+
+def test_clear_removes_unreadable_progress(sdd_grill, grill_project):
+    root = grill_project()
+    save(sdd_grill, root, minimal_progress())
+    (root / PROGRESS).write_bytes(b"{broken")
+
+    assert run_grill(sdd_grill, root, "clear").out == {"cleared": True}
+    assert not (root / OWN).exists()
+
+
+@pytest.mark.parametrize("files", [{"notes.txt": "mine\n"}, {".gitignore": "*.log\n"}])
+def test_clear_deletes_nothing_on_a_conflict(sdd_grill, grill_project, files):
+    root = grill_project()
+    save(sdd_grill, root, minimal_progress())
+    write_tree(root / OWN, files)
+    before = snapshot(root)
+
+    result = run_grill(sdd_grill, root, "clear")
+
+    assert result.code == 1
+    assert result.out["error"] == CONFLICT
+    assert snapshot(root) == before
+
+
+def test_clear_touches_nothing_outside_its_folder(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION)
+    two_generated(sdd_grill, root)
+    write_tree(root, {FEATURE_JSON: feature_json("specs/001-a")})
+    before = {k: v for k, v in snapshot(root).items() if not k.startswith(OWN)}
+
+    run_grill(sdd_grill, root, "clear")
+
+    assert snapshot(root) == before
