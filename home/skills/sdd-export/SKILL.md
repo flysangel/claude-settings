@@ -54,9 +54,31 @@ These apply at every stage.
 1. **Stay read-only.** Read the project only with read tools (Read, Grep, Glob), and only the files that `files`
    lists plus what `check` prints. Two narrow exceptions: Glob may list folder names when you help the maintainer
    pick a scope in stage 2, and you may read `.sdd-export/README.md` when stage 7 asks you to merge the
-   maintainer's edits to it. Neither makes other files readable. The only commands you may run are this skill's
-   script and read-only git commands: `git --no-pager log`, `git --no-pager show`, `git --no-pager ls-files` and
-   `git --no-pager blame`. Never
+   maintainer's edits to it. Neither makes other files readable. Give Read and Grep one path from `files` at a
+   time, and never run Grep on the project root or on a folder: a search there also prints matching lines of the
+   secret files and of the excluded folders, which would bring their values into the conversation.
+
+   The only commands you may run are this skill's script and these read-only git commands, exactly in these forms
+   (`<n>` is a number, `<commit>` a commit hash that one of these commands printed, `<path>` a path that `files`
+   lists; the parts in brackets are optional):
+
+   ```text
+   git --no-pager log --oneline -n <n> [-- <path>]
+   git --no-pager log --stat -n <n> [<commit>] [-- <path>]
+   git --no-pager ls-files
+   git --no-pager blame -- <path>
+   ```
+
+   They show commit messages, which files each commit changed and by how many lines, the names of the tracked
+   files, and who last changed each line of a file you may read anyway. That is enough to find decisions, pitfalls
+   and reversed approaches, and none of them prints the content of any other file. Add no other option and run no
+   other git command: most of them print file contents, the secret files and the excluded folders included, and
+   the value is then in the conversation before you can avoid it. In particular, never run `git show` in any form:
+   given a file's hash or `<commit>:<path>`, it prints the whole file even with `--stat`, and
+   `git --no-pager log --stat -n 1 <commit>` already shows a commit's message and files. Never run `git diff`,
+   `git grep`, `git cat-file`, `git format-patch`, `git stash show`, `git whatchanged` or `git reflog`, and never
+   give `git log` an option that prints changes (`-p`, `--patch`, `-u`, `--patch-with-stat`, `--cc`, `-L`). Never
+   run `git blame` on a file that `files` does not list: it prints every line of the file. Never
    run a build, a test, a package install, a formatter, a code generator or any of the project's own scripts, even
    when it would answer a question quickly: they create files, and the maintainer was promised an untouched project.
    Never create or change a file in the project with Write, Edit or any other way, not even a temporary file. You
@@ -77,7 +99,11 @@ These apply at every stage.
 4. **Secrets stay out.** Never open the files in `secret_files` (from `check` or `files`). The lines that
    `secret_hits` points at may hold credentials: never quote or repeat their values in the conversation, the draft
    or the nutrients. If a secret matters, record only its location (for example a doubt saying that a given file
-   and line hold a hard-coded credential). No secret value may ever appear in the conversation.
+   and line hold a hard-coded credential). No secret value may ever appear in the conversation. Rule 1 keeps the
+   secret files out of git output and Grep results too. Commit messages are free text and can hold a credential
+   as well: when a message looks like it holds one (a token, a password, a key), never quote, repeat or paraphrase
+   that part, refer to the commit only as `commit:<hash>`, and, if it matters, raise a doubt that names only that
+   commit.
 5. **Questions.** When the maintainer has to decide, use AskUserQuestion. Put the option you recommend first and say
    why. Ask one decision per question. Yes-or-no questions of the same kind (such as "which earlier lessons no
    longer apply") may be one question with multiSelect, so the maintainer can select several answers; each doubt
@@ -283,8 +309,10 @@ How to find the features and requirements:
   changelogs) are read only as evidence for lessons; never copy their content into requirements.
 
 How to find the lessons: from the project's documents, from specs and plan-like documents, and, when `check`
-reported `git` as `true`, from the history with read-only git commands (for example
-`git --no-pager log --oneline -n 200` and `git --no-pager show --stat <hash>`). Sort them into important decisions
+reported `git` as `true`, from the history, using only the git commands that rule 1 lists, in exactly those forms
+(for example `git --no-pager log --oneline -n 200` for the messages, then `git --no-pager log --stat -n 1 <hash>`
+for the files a commit changed). The history gives you what was decided and when; the reasons come from the
+messages and from the files `files` lists, never from a diff. Sort them into important decisions
 with their reasons (`decision`), pitfalls the project ran into (`pitfall`), and approaches that were tried and
 reversed (`reversed`). Each lesson names its evidence: a file, or `commit:<hash>` with the hash as git prints it in
 lowercase. A lesson without evidence is `pending`. If you find no lesson at all, note that; stage 5 asks the

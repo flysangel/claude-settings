@@ -35,8 +35,14 @@
 
 ### 通則（任何階段都適用）
 
-1. **只讀**：讀取只用讀取工具（Read、Grep、Glob），範圍限於 `files` 的清單與 `check` 輸出的內容；允許的指令只有本 skill 的腳本
-   與只讀的 git 指令（`git --no-pager log`、`show`、`ls-files`、`blame`）。MUST NOT 執行建置、測試、安裝套件、格式化、產生程式碼
+1. **只讀**：讀取只用讀取工具（Read、Grep、Glob），範圍限於 `files` 的清單與 `check` 輸出的內容；Read 與 Grep 一次指定 `files`
+   中的一個路徑，MUST NOT 對專案根目錄或資料夾執行 Grep（搜尋結果會帶出機密檔案與排除範圍中相符的行）。允許的指令只有本 skill 的腳本
+   與下列確切形式的只讀 git 指令（允許清單，不會輸出任何檔案的內容）：`git --no-pager log --oneline -n <n> [-- <path>]`、
+   `git --no-pager log --stat -n <n> [<commit>] [-- <path>]`、`git --no-pager ls-files`、`git --no-pager blame -- <path>`
+   （`<path>` 為 `files` 列出的路徑）；MUST NOT 加上其他選項或使用其他 git 指令，明確禁止 `git show` 的任何形式（對 blob 的 hash
+   或 `<commit>:<path>` 即使加 `--stat` 也會印出整個檔案）、`git diff`、`git grep`、`git cat-file`、`git format-patch`、
+   `git stash show`、`git whatchanged`、`git reflog`，以及 `git log` 輸出變更內容的選項（`-p`、`--patch`、`-u`、`--patch-with-stat`、
+   `--cc`、`-L`）；MUST NOT 對 `files` 未列出的檔案執行 `git blame`（FR-015、FR-017、原則 V）。MUST NOT 執行建置、測試、安裝套件、格式化、產生程式碼
    或專案自己的任何腳本；MUST NOT 以 Write、Edit 或其他方式在專案內建立或修改檔案，**包括暫存檔**；草稿只經 stdin 交給腳本
    （FR-008、US2-5；字樣：`read-only`、`build`、`test`、`stdin`）。
 2. **寫入只有一次**：唯一的寫入是確認後的 `write`；MUST NOT 以其他方式建立或修改 `.sdd-export/` 的檔案，
@@ -44,7 +50,7 @@
 3. **不需要 Spec Kit**：MUST NOT 呼叫任何 `speckit-*` skill，MUST NOT 要求或建議先執行 `/sdd-init`；
    專案有 `.specify/memory/constitution.md` 與 `specs/` 時只是讀取它們（FR-001；字樣：`speckit-`、`/sdd-init`）。
 4. **機密**：MUST NOT 讀取 `secret_files` 中的檔案；`secret_hits` 指出的行 MUST NOT 在對話、草稿與養分中引用其值；
-   需要時只記錄位置（例如寫成改進建議的疑點）。任何機密值都 MUST NOT 出現在對話中（FR-015；字樣：`secret_files`、`secret_hits`）。
+   需要時只記錄位置（例如寫成改進建議的疑點）。任何機密值都 MUST NOT 出現在對話中。commit 訊息看起來含有機密值時，MUST NOT 引用、重複或改寫該部分，只以 `commit:<hash>` 指出位置，需要時記為只指出該 commit 的疑點（FR-015；字樣：`secret_files`、`secret_hits`）。
 5. **提問**：需要維護者決定時使用 AskUserQuestion，建議的選項排第一並附理由；一次一個決定。性質相同的是非題（例如「哪些前代教訓
    已不適用」）MAY 以一題複選呈現；疑點 MUST 一題一項。工具不能用時改用文字，仍一次一題並附建議（字樣：`AskUserQuestion`）。
 6. **語言**：與維護者對話的語言依全域設定；草稿與養分的字串內容使用繁體中文，MUST、SHOULD 等規範詞保留英文，
@@ -96,7 +102,7 @@
     部分涵蓋時功能的 `source` 為 `mixed`，各需求標明自己的來源（FR-005、US2-4；字樣：`mixed`）。
 17. 從程式碼導出的需求只描述程式碼**目前實際**的行為，每項附上依據的檔案；無法確定的標為待確認（FR-006）。
 18. 需求只描述使用者需求與可驗收的行為，MUST NOT 描述現行的實作方式（FR-004）。
-19. 經驗教訓從專案的文件、spec 與 plan 類文件、git 歷史（只讀的 git 指令）整理，分為重要決定與理由、踩過的坑、被推翻的做法；
+19. 經驗教訓從專案的文件、spec 與 plan 類文件、git 歷史（只用通則第 1 項允許清單中的 git 指令，不看 diff）整理，分為重要決定與理由、踩過的坑、被推翻的做法；
     每項附依據（檔案或 `commit:<hash>`），沒有依據的標為待確認（FR-009、US3-1；字樣：`decision`、`pitfall`、`reversed`）。
 20. 讀取時發現的疑似 bug、文件與程式碼的矛盾、spec 與程式碼的矛盾、改進建議記為**疑點**，不混入需求；
     spec 與程式碼矛盾時兩邊的說法都要記下，不自行選擇（FR-007、Edge Cases）。

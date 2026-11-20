@@ -269,6 +269,77 @@ def test_rule_1_read_only():
     has_all(rules, "write", "edit")
 
 
+# T059: the git commands and Grep searches that rule 1 allows never print the content of a file outside `files`.
+GIT_ALLOWED = [
+    "git --no-pager log --oneline -n <n> [-- <path>]",
+    "git --no-pager log --stat -n <n> [<commit>] [-- <path>]",
+    "git --no-pager ls-files",
+    "git --no-pager blame -- <path>",
+]
+# Every git command SKILL.md writes out, placeholders or examples filled in, matches one of these.
+GIT_FORMS = [
+    re.compile(r"git --no-pager log --oneline -n (\d+|<n>)( \[?-- <path>\]?)?"),
+    re.compile(r"git --no-pager log --stat -n (\d+|<n>)( \[?<(commit|hash)>\]?)?( \[?-- <path>\]?)?"),
+    re.compile(r"git --no-pager ls-files"),
+    re.compile(r"git --no-pager blame -- <path>"),
+]
+
+
+def git_commands() -> list[str]:
+    """Every `git --no-pager ...` that SKILL.md writes out, up to the closing backtick or the end of the line."""
+    return [match.group(0).strip() for line in body().split("\n")
+            for match in re.finditer(r"git --no-pager [^`\n]*", line)]
+
+
+def test_rule_1_lists_the_allowed_git_commands_exactly():
+    raw = body()
+    block = "\n".join("   " + line for line in GIT_ALLOWED)
+
+    assert f"```text\n{block}\n   ```" in raw
+    has_all(section(RULES), "exactly in these forms", "add no other option", "run no other git command")
+
+
+def test_every_git_command_skill_md_writes_is_an_allowed_form():
+    commands = git_commands()
+
+    assert len(commands) >= len(GIT_ALLOWED)
+    for command in commands:
+        assert any(form.fullmatch(command) for form in GIT_FORMS), command
+    assert "git --no-pager show" not in flat_body()
+
+
+@pytest.mark.parametrize("printing", ["git show", "git diff", "git grep", "git cat-file", "git format-patch",
+                                      "git stash show", "git whatchanged", "git reflog", "`-p`", "`--patch`", "`-u`",
+                                      "`--patch-with-stat`", "`--cc`", "`-L`", "<commit>:<path>"])
+def test_rule_1_forbids_git_that_prints_file_contents(printing):
+    rules = section(RULES)
+    window = rules[rules.index("add no other option"): rules.index("never run a build")]
+
+    assert printing.lower() in window
+    has_all(window, "secret files", "excluded folders")
+
+
+def test_rule_1_keeps_grep_off_folders_and_blame_on_listed_files():
+    rules = section(RULES)
+
+    has_all(rules, "one path from `files` at a time", "never run grep on the project root or on a folder")
+    has_all(rules, "never run `git blame` on a file that `files` does not list")
+
+
+def test_rule_4_commit_messages_may_hold_secrets():
+    rules = section(RULES)
+    secrets = part(rules, "secrets stay out", "questions.")
+
+    has_all(secrets, "commit messages", "never quote", "commit:<hash>", "doubt")
+
+
+def test_stage_3_lessons_use_only_the_allowed_git_commands():
+    three = stage(3)
+
+    has_all(three, "only the git commands that rule 1 lists", "git --no-pager log --stat -n 1 <hash>",
+            "never from a diff")
+
+
 def test_rule_2_the_only_write():
     rules = section(RULES)
 
@@ -836,7 +907,7 @@ def cli_vocabulary() -> str:
 # Backticked words in SKILL.md that are not fields or values of the script: tools, commands and placeholders.
 NOT_FIELDS = {
     "uv", "git", "true", "false", "null", "check", "files", "validate", "write", "--scope", "--expect",
-    "git --no-pager log", "git --no-pager show", "git --no-pager ls-files", "git --no-pager blame", "nutrients.json",
+    "git --no-pager log", "git --no-pager ls-files", "git --no-pager blame", "nutrients.json",
 }
 
 
@@ -846,8 +917,9 @@ def test_every_field_and_value_skill_md_names_exists_in_the_contracts():
     unknown = []
     for word in sorted(set(re.findall(r"`([^`\n]+)`", body()))):
         candidate = re.sub(r"\[\d+\]", "", word.strip('"'))
-        if candidate in NOT_FIELDS or " " in candidate or "/" in candidate or candidate.startswith(("speckit-", "[", "{", "commit:")):
-            continue  # commands, file paths, placeholders and examples, not fields of the script
+        if candidate in NOT_FIELDS or " " in candidate or "/" in candidate \
+                or candidate.startswith(("speckit-", "[", "{", "<", "-", "commit:")):
+            continue  # commands, git options, file paths, placeholders and examples, not fields of the script
         for part_name in candidate.split("."):
             if f"`{part_name}`" not in vocabulary and f'"{part_name}"' not in vocabulary:
                 unknown.append(word)
