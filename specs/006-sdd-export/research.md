@@ -414,7 +414,8 @@ CI 證明腳本的行為與「必要的指示存在於 SKILL.md」。
   理由：003 的 cross-platform job 交換的是「一個平台執行 Spec Kit 腳本後產生的整個 repository」，
   其中有檔案模式與 shell 腳本的行為只能實際交換才驗證得到。養分是腳本以固定規則寫出的純文字，
   「兩個平台的輸出都等於同一份固定的位元組」比交換 artifact 更直接，也不增加 CI 的時間與複雜度。
-  固定的測試資料本身以 `.gitattributes` 標成 `-text`，避免 Windows runner 的 checkout 改變它。
+  固定的測試資料放在 `tests/unit/fixtures/sdd_export/`；repo 根目錄既有的 `.gitattributes`（`* text=auto eol=lf`）已讓它在 Windows runner 上 checkout 為 LF，
+  測試另外以位元組比對前先確認檔案不含 CR，避免 checkout 設定改變時誤判。
 - **Alternatives considered**：
   - 加入 cross-platform job：一個平台匯出、另一個平台讀取。驗證的內容與上面的第 1 點相同，代價是兩個 job 與 artifact。
   - 在 CI 以非互動模式執行 Claude Code 跑對話：同 005 R3，需要付費呼叫、結果不穩定、沒有 AskUserQuestion，不採用。
