@@ -105,20 +105,41 @@ resuming is that the maintainer never has to answer a decided question twice.
      questioning") and ask only about that point. If the maintainer gave new text with `/sdd-grill` this time,
      discuss what it adds as part of the resumed discussion.
 4. If the `phase` is `"confirmed"`, the summary was confirmed and generation had started when the session ended.
-   Skip step 3: do not offer to start over and do not reopen the discussion. Run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" verify` (it only reads) to see
-   where generation stopped: `constitution-not-written` means the constitution step is still to do, and a
-   `spec-missing` whose `detail` says that no spec folder is recorded yet names a feature whose spec is not generated
-   yet. Tell the maintainer which documents were
-   generated and which were not, and mention any folder in `unexpected` (often a spec that `speckit-specify` created
-   just before the interruption, without its `spec_dir` being saved). Then ask one question: continue with the
-   documents not generated yet (recommended), or stop. To continue, go to "Generating the documents" and do only
-   the steps that are still open, in the same order.
-   - If `verify` also reports other failures (for example `existing-spec-changed`, `order`, or a `spec-missing` for
-     a feature whose recorded folder has lost its `spec.md`), do not continue; report them as in "When something
-     fails" and stop.
-   - If a folder in `unexpected` looks like the interrupted spec of the next feature, ask the maintainer whether to
-     record it as that feature's `spec_dir` (after you check that its content matches the summary) or to generate the
-     spec again and leave that folder for them to handle. Never delete it yourself.
+   Skip step 3 and do not reopen the discussion: the confirmed decisions are not changed in this progress, because
+   documents may already have been generated from them. The maintainer can still start over (see below), which
+   replaces the progress rather than changing it.
+
+   Run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" verify` (it only reads) to see where generation stopped.
+   Tell the maintainer which documents were generated and which were not, and mention any folder in `unexpected`
+   (often a spec that `speckit-specify` created just before the interruption, without its `spec_dir` being saved).
+   Then look at `failures`:
+   - Only `constitution-not-written`, `spec-missing` whose `detail` says that no spec folder is recorded yet, or no
+     failures at all: generation was simply interrupted. `constitution-not-written` means the constitution step is
+     still to do, and each such `spec-missing` names a feature whose spec is not generated yet. Ask one question:
+     continue with what is not done yet (recommended), start over, or stop.
+   - Any other failure (for example `existing-spec-changed`, `constitution-changed`, `order`, or a `spec-missing`
+     for a feature whose recorded folder has lost its `spec.md`): something changed that running `/sdd-grill` again
+     will not repair, so do not continue generating. Explain each failure as in "When something fails", then ask one
+     question: stop so that the maintainer can restore what the `detail` names and run `/sdd-grill` again
+     (recommended when the change was accidental), or start over (recommended when the change was intended).
+
+   What each answer means:
+   - **Continue**: go to "Generating the documents" and do only the steps that are still open, in the same order.
+     If the constitution was to be created or amended and `verify` did not report `constitution-not-written`, the
+     constitution was already written, but the last session may have ended before checking it. So first compare it
+     rule by rule with the summary, exactly as in step 2 of "Generating the documents" (remove rules without a
+     basis, ask about any you would keep, one question per rule), and save. Then continue with the specs that are
+     not generated yet; if none are missing, go straight to "Finishing".
+   - **Start over**: run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" clear`. It removes only the saved
+     progress. The constitution and the specs that were already generated, including any folder in `unexpected`,
+     stay as they are: do not delete or undo them, and tell the maintainer they are theirs to keep, edit or remove.
+     Then continue as for a new discussion (step 5 of "Start"). Those documents now count as existing ones: their
+     decisions are already decided, and new specs are numbered after them.
+   - **Stop**: keep the progress and stop. Running `/sdd-grill` again comes back to this question.
+
+   If a folder in `unexpected` looks like the interrupted spec of the next feature and the maintainer chose to
+   continue, ask whether to record it as that feature's `spec_dir` (after you check that its content matches the
+   summary) or to generate the spec again and leave that folder for them to handle. Never delete it yourself.
 
 ## Rules for questioning
 
@@ -320,11 +341,23 @@ If any step fails (a Spec Kit skill reports an error or does not produce its doc
 - which documents were generated (the constitution if it was written, and every feature whose `spec_dir` is set,
   with its folder) and which were not generated yet;
 - what failed, in the words of the error or of `verify`'s `failures` (see "Finishing" for what each check means);
-- that the progress is kept, and that running `/sdd-grill` again continues with the documents not generated yet.
+- that the progress is kept, and what the maintainer can do next, which depends on the kind of failure.
 
-Keep the progress: do not run `clear`, and do not run `focus` either when `verify` has not passed. Do not write the
-missing documents by hand, and do not delete or undo documents that were already generated; they came from Spec Kit
-and the maintainer decides what happens to them. Then stop.
+Some failures go away by themselves: the session was interrupted, the maintainer stopped, or a Spec Kit skill failed
+for a reason that does not stay (it was cancelled, or a tool was briefly unavailable). Tell the maintainer that
+running `/sdd-grill` again continues with the documents not generated yet.
+
+Other failures stay until someone changes the files, and running `/sdd-grill` again would only report them again:
+`existing-spec-changed`, `constitution-changed`, `spec-not-new`, `order`, `dependency-order`, and a `spec-missing`
+for a feature whose recorded `spec_dir` has lost its `spec.md`. For these, tell the maintainer the two ways out:
+restore the files that the `detail` names (for example with git) and run `/sdd-grill` again to continue, or run
+`/sdd-grill` again and choose to start over, which removes the saved progress and keeps every document already
+generated (see "Resume").
+
+Keep the progress: do not run `clear` yourself, and do not run `focus` either when `verify` has not passed;
+removing the progress is the maintainer's choice when they start over. Do not write the missing documents by hand,
+and do not delete or undo documents that were already generated; they came from Spec Kit and the maintainer decides
+what happens to them. Then stop.
 
 ## Finishing
 

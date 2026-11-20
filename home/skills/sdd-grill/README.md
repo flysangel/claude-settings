@@ -41,6 +41,8 @@
   裡面有一份它自己寫的 `.gitignore`（內容是 `*`），所以進度不會出現在 `git status`，也不會被提交；
   不修改 Spec Kit 的 `.specify/.gitignore` 與專案的 `.gitignore`，也不登記在 `.specify/sdd-init.json`。
 - 中途結束、產生失敗或檢查不通過時保留進度，再次執行 `/sdd-grill` 會從上次的地方接續；文件成功產生後清除。
+  確認摘要之後接續時，同樣可以選擇重新開始：只清除進度，已產生的 constitution 與 spec 原樣保留給你處理。
+  檢查不通過的原因若是既有 spec 或 constitution 在期間被修改，重跑也會停在同一處：把它還原後再執行，或選擇重新開始。
 - 不記錄機密：Claude 只記下「需要什麼」，腳本也會拒絕寫入看起來像密碼、金鑰、權杖的值（樣式比對，無法涵蓋所有情況）。
 - 「專案在上次討論之後有變更」只看三件事：constitution、每份 `spec.md` 的內容，以及 git 的 `HEAD`。
   未 commit 的程式碼變更不會被偵測（constitution 與 spec 的未 commit 修改會）。

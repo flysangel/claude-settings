@@ -1377,6 +1377,31 @@ def test_clear_touches_nothing_outside_its_folder(sdd_grill, grill_project):
     assert snapshot(root) == before
 
 
+def test_clear_after_confirmation_keeps_every_generated_document(sdd_grill, grill_project):
+    # Starting over from a confirmed progress whose verify keeps failing: only the progress goes.
+    root = existing_project(grill_project)
+    generated(
+        sdd_grill,
+        root,
+        [feature("a"), feature("b", ["a"])],
+        {"a": "specs/004-a"},
+        action="amend",
+        constitution=WRITTEN_CONSTITUTION + "\n- Every change MUST be reviewed.\n",
+    )
+    write_tree(root, {"specs/001-deploy/spec.md": "deploy, edited by hand\n"})
+    write_tree(root, {FEATURE_JSON: feature_json("specs/004-a")})
+    assert read_progress(root)["phase"] == "confirmed"
+    assert failures(run_grill(sdd_grill, root, "verify")) == ["existing-spec-changed", "spec-missing"]
+    assert sorted(p.name for p in (root / OWN).iterdir()) == [".gitignore", "progress.json"]
+    before = {k: v for k, v in snapshot(root).items() if not k.startswith(OWN)}
+
+    result = run_grill(sdd_grill, root, "clear")
+
+    assert result.code == 0 and result.out == {"cleared": True}
+    assert not (root / OWN).exists()
+    assert snapshot(root) == before
+
+
 # ====================================================== an existing project
 
 EXISTING = {"001-deploy": "deploy\n", "002-claude-md": "claude md\n", "003-sdd-init": "sdd init\n"}

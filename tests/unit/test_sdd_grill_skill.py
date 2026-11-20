@@ -299,6 +299,15 @@ def test_failure_keeps_the_progress_and_writes_nothing_more():
     has_any(failure, "do not delete", "never delete")
 
 
+def test_failure_gives_a_way_out_of_failures_that_stay():
+    failure = section(FAILURE)
+
+    has_all(failure, "existing-spec-changed", "constitution-changed", "spec-missing", "lost its `spec.md`")
+    has_all(failure, "restore", "start over", "/sdd-grill")
+    has_any(failure, "go away by themselves", "go away on their own")
+    assert failure.index("go away by themselves") < failure.index("existing-spec-changed")
+
+
 def test_finishing():
     finish = section(FINISH)
 
@@ -316,7 +325,8 @@ def test_summary_comes_before_generating_and_check_before_questions():
 
     assert content.index("## " + SUMMARY) < content.index("## " + GENERATE)
     assert content.index(CHECK) < content.index("## " + RULES)
-    assert content.index(VERIFY) < content.index(FOCUS) < content.index(CLEAR, content.index(VERIFY))
+    finishing = content.index("## " + FINISH)
+    assert content.index(VERIFY, finishing) < content.index(FOCUS, finishing) < content.index(CLEAR, finishing)
 
 
 def test_skill_never_edits_feature_json_itself():
@@ -339,6 +349,27 @@ def test_resume():
     has_any(resume, "do not ask about it again", "do not ask again", "never ask again", "do not ask about them again")
     has_all(resume, '"confirmed"', "not generated")
     has_any(resume, "do not reopen", "without reopening", "not reopen")
+
+
+def confirmed_branch(resume: str) -> str:
+    start = resume.index('if the `phase` is `"confirmed"`')
+    return resume[start:]
+
+
+def test_resume_confirmed_can_start_over_and_keeps_the_documents():
+    confirmed = confirmed_branch(section(RESUME))
+
+    has_all(confirmed, "verify", "continue", "start over", "stop", CLEAR, "unexpected")
+    has_any(confirmed, "do not delete or undo", "never delete", "do not delete")
+    has_all(confirmed, "step 5 of \"start\"")
+    has_any(confirmed, "numbered after them", "after the existing ones")
+
+
+def test_resume_confirmed_does_not_continue_over_lasting_failures():
+    confirmed = confirmed_branch(section(RESUME))
+
+    has_all(confirmed, "existing-spec-changed", "constitution-changed", "lost its `spec.md`")
+    has_all(confirmed, "do not continue generating", "restore")
 
 
 def test_resume_comes_after_start_and_before_the_rules():

@@ -42,7 +42,13 @@ MUST NOT 有 `disable-model-invocation`（FR-001：Claude MAY 主動使用）。
 5. `progress` 為 `"present"` 時，先列出已決定的事項；`changed` 不是空的時先說明哪些改變了；
    再以一題詢問接續或重新開始。重新開始時執行 `clear`（字樣：`changed`、`clear`）。
 6. 接續時從 `stage` 與 `current_feature` 繼續，MUST NOT 重問已決定的事項（SC-004）。
-   `phase` 為 `"confirmed"` 時，詢問是否從尚未產生的文件繼續，不重新討論。
+   `phase` 為 `"confirmed"` 時不重新討論（不在這份進度上修改已確認的決定），先以 `verify` 判斷產生到哪裡，
+   再以一題詢問：從尚未產生的文件繼續（建議）、重新開始、或停止（FR-010、US3-3）。
+   `verify` 回報重跑也不會消失的失敗（例如 `existing-spec-changed`、`constitution-changed`）時不繼續產生，
+   改為詢問停止（讓維護者還原 `detail` 指出的檔案後再執行）或重新開始。
+   重新開始時執行 `clear`，只清除進度；已產生的 constitution 與 spec MUST NOT 被刪除或還原，交給維護者處理，
+   之後的新討論把它們視為既有文件（字樣：`start over`、`clear`、`do not delete`）。
+   繼續時若 constitution 已寫入（`create` 或 `amend`），先依第 23 項與摘要逐條比對一次再繼續（FR-014）。
 
 ### 追問的規則（集中在一個段落，R6）
 
@@ -88,6 +94,10 @@ MUST NOT 有 `disable-model-invocation`（FR-001：Claude MAY 主動使用）。
 ### 失敗（Edge Cases、FR-018）
 
 26. 任何一步失敗時，回報已產生與未產生的文件，保留進度，停止；MUST NOT 補寫、MUST NOT 刪除已產生的文件。
+    區分兩種失敗：重跑後會自行消失的（中斷、Spec Kit skill 暫時失敗），告訴維護者再執行 `/sdd-grill` 就會接續；
+    不會自行消失的（`existing-spec-changed`、`constitution-changed`、`spec-not-new`、`order`、`dependency-order`、
+    已記錄的 `spec_dir` 失去 `spec.md` 的 `spec-missing`），告訴維護者兩條出路：還原 `detail` 指出的檔案後再執行，
+    或再執行並選擇重新開始（FR-010、FR-018；字樣：`restore`、`start over`）。
 
 ### 收尾（FR-017、FR-018）
 
