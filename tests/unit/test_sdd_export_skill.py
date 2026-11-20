@@ -940,3 +940,44 @@ def test_readme_what_it_never_does():
 
     for needle in (".sdd-export/", "建置", "測試", "Spec Kit", "提交", "刪除"):
         assert needle in never, needle
+
+
+# ------------------------------------------- found in the read-through (T053)
+
+
+def test_unlisted_fields_need_no_action_only_unlisted_results_stop():
+    intro = flat_body()[: flat_body().index("## " + RULES.lower())]
+
+    has_any(intro, "exit code or a `reason` that no outcome mentions")
+    has_any(intro, "need no action")
+    has_all(intro, "`view`", "`gitattributes`")
+
+
+def test_stage_1_outcomes_hold_when_later_stages_return_to_them():
+    one = stage(1)
+
+    has_any(one, "later stages send you here")
+    assert "you have read nothing" not in one
+
+
+def test_evidence_outside_the_current_scope_stays_valid():
+    draft = section(DRAFT)
+
+    has_any(draft, "outside the current scope are fine")
+    assert "is in the `files` list" not in draft
+
+
+def test_a_full_export_stays_full_when_a_scope_is_given():
+    two = stage(2)
+
+    has_any(two, "already `full`")
+    has_any(two, "together with the areas already listed")
+
+
+def test_stage_8_keeps_every_path_open():
+    eight = stage(8)
+
+    has_any(list_item(STAGES[8], '`reason` is `"changed"`'), "handle them as in stage 6")
+    has_any(list_item(STAGES[8], '`reason` is `"os-error"`'), "may already hold the confirmed")
+    has_any(list_item(STAGES[8], "wants to change the draft"), "go back to stage 5")
+    assert "wants to change the draft" in eight

@@ -41,8 +41,11 @@ says why). On failure the JSON has `error`, one English sentence, and `reason`; 
 sentence.
 
 The work goes through nine stages in order. Each stage below lists every outcome and what to do next. No outcome
-leaves you without a next step; if something happens that no outcome describes, tell the maintainer what happened,
-say that nothing was written, and stop.
+leaves you without a next step. If the script ever gives an exit code or a `reason` that no outcome mentions, tell
+the maintainer what happened, say that nothing was written, and stop. Output fields that an outcome does not mention
+need no action at that point (for example `view` and `gitattributes` in stage 1: `write` regenerates
+`.sdd-export/README.md` and leaves an existing `.sdd-export/.gitattributes` alone; stage 7 deals with a hand-edited
+README).
 
 ## Rules for the whole run
 
@@ -51,8 +54,9 @@ These apply at every stage.
 1. **Stay read-only.** Read the project only with read tools (Read, Grep, Glob), and only the files that `files`
    lists plus what `check` prints. Two narrow exceptions: Glob may list folder names when you help the maintainer
    pick a scope in stage 2, and you may read `.sdd-export/README.md` when stage 7 asks you to merge the
-   maintainer's edits to it. Neither makes other files readable. The only commands you may run are this skill's script and read-only git
-   commands: `git --no-pager log`, `git --no-pager show`, `git --no-pager ls-files` and `git --no-pager blame`. Never
+   maintainer's edits to it. Neither makes other files readable. The only commands you may run are this skill's
+   script and read-only git commands: `git --no-pager log`, `git --no-pager show`, `git --no-pager ls-files` and
+   `git --no-pager blame`. Never
    run a build, a test, a package install, a formatter, a code generator or any of the project's own scripts, even
    when it would answer a question quickly: they create files, and the maintainer was promised an untouched project.
    Never create or change a file in the project with Write, Edit or any other way, not even a temporary file. You
@@ -122,9 +126,9 @@ Principles, requirements and lessons also have `status` (`"confirmed"` or `"pend
 A `confirmed` item needs at least one piece of evidence; a `pending` one may have none. Each piece of evidence is
 one of:
 
-- a path relative to the project root, with `/` (a file or a folder that exists, is in the `files` list or contains
-  listed files, and is not a secret file); `.specify/memory/constitution.md` and `.sdd-rebuild/lineage.json` are
-  allowed;
+- a path relative to the project root, with `/`: a file or folder that exists and is not excluded from reading
+  (the kind of file `files` lists; files outside the current scope are fine, so existing items keep their evidence),
+  and never a secret file; `.specify/memory/constitution.md` and `.sdd-rebuild/lineage.json` are allowed;
 - `commit:<hash>`, with 7 to 40 lowercase hexadecimal characters, a commit that exists (only in a git repository);
 - `maintainer`, when the maintainer told you in this conversation.
 
@@ -163,8 +167,9 @@ whether nutrients were exported before, which constitution and specs exist, and 
 files first would waste effort if the project cannot be exported, and could even mean reading a folder the
 maintainer keeps their own files in.
 
-Outcomes when the command fails or exits with 3. In all of them you have read nothing and written nothing; say so,
-and do not try to work around the problem by writing or deleting anything yourself:
+Outcomes when the command fails or exits with 3. Later stages send you here too when the project's state changes
+during the conversation. In all of them nothing has been written; say so, and do not try to work around the problem
+by writing or deleting anything yourself:
 
 - `uv` is not installed, or the script cannot run (the command is not found, or the output is not JSON): tell the
   maintainer the skill needs `uv` installed and on the PATH, show the error, say that nothing was written, and stop.
@@ -197,7 +202,10 @@ When `check` exits with 0, go through these in order; more than one may apply:
 - `existing_generation` is not `null` and differs from `generation`: the existing nutrients were exported as another
   generation than the one this project is now. Show both numbers and the likely causes: the lineage was removed, or
   this project was copied from another project together with its `.sdd-export/`. Ask: stop and check first
-  (recommended), or continue with `generation` from `check`. Stop means rule 7.
+  (recommended), or continue with `generation` from `check`. Stop means rule 7. When continuing, the existing
+  nutrients are still the starting point, but every `origin`, `revised` and `discarded_in` must fit the new
+  `generation`; stage 6 reports those that do not, and the maintainer sees each adjustment at the final
+  confirmation.
 - `nutrients` is `"edited"` or `"unknown"`: the existing nutrients were changed after the last export (or that
   cannot be told, because `.sdd-export/README.md` is missing or was changed). Tell the maintainer. Treat whatever
   the file says now as the maintainer's decisions: stage 4 asks before changing any of it.
@@ -223,12 +231,16 @@ uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_export.py" files --scope <path> --scope 
 ```
 
 `files` lists the readable files of the scope; the constitution and every `specs/*/spec.md` are always included,
-because they are the first source of requirements. When the scope is not the whole project, the draft's `scope` is
-`partial` and `included` lists the scope paths (as `files` reports them in `scope`). In a re-export whose existing
-nutrients are already `partial`, `included` lists the earlier areas together with the new ones, and becomes
-`{"coverage": "full", "included": []}` when the maintainer says the batches now cover the whole project. Tell the
-maintainer that they can run `/sdd-export` again later for other areas, and that items outside the chosen scope are
-kept as they are.
+because they are the first source of requirements. The draft's `scope` records what the nutrients cover:
+
+- the whole project was read, or the existing nutrients are already `full` (a scoped run then only refreshes part
+  of them): `{"coverage": "full", "included": []}`;
+- otherwise `partial`, with `included` listing the scope paths as `files` reports them in `scope`, together with the
+  areas already listed in the existing nutrients' `included`; when the maintainer says these batches now cover the
+  whole project, it becomes `full`.
+
+Tell the maintainer that they can run `/sdd-export` again later for other areas, and that items outside the chosen
+scope are kept as they are.
 
 Outcomes:
 
@@ -238,6 +250,7 @@ Outcomes:
   use.
 - `too_large` is still `true` for the chosen scope: the scope is still too large to read. Say so and ask the
   maintainer for a smaller scope; you may list the folder names inside the chosen area with Glob to offer choices.
+  Then run `files` again with the new scope.
 - The maintainer refuses to narrow the scope: explain that the whole project cannot be read in one conversation
   and recommend exporting in batches: each confirmed batch is written and kept, and the next run adds to it. If they
   still decline, say that nothing was written and stop.
@@ -246,9 +259,9 @@ Outcomes:
 
 ## Stage 3: Reading
 
-Read only the files in the `files` list. Always read the constitution and the specs it includes (`check` listed
-them in `constitution` and `specs`). Never open a file in `secret_files`, and never repeat the values on the lines
-in `secret_hits`. Read efficiently: the list may be long, so start with the constitution, specs, README and other
+Read only the files in the `files` list. Always read the constitution and the specs the list includes (`check`
+listed them in `constitution` and `specs`). Never open a file in `secret_files`, and never repeat the values on the
+lines in `secret_hits`. Read efficiently: the list may be long, so start with the constitution, specs, README and other
 documents, then configuration, tests and the structure of the code.
 
 How to find the features and requirements:
@@ -301,15 +314,16 @@ has `origin` 1.
 When `lineage` is `"present"`, `lineage_content` is the lineage the rebuild left. Carry it on:
 
 - A spec marked `in_lineage` in `specs` belongs to a feature of the lineage (its `spec_dir` is that spec's folder):
-  keep that feature's `id` and `origin`, and the `id` and `origin` of its requirements, principles and lessons
-  that you can match. When an inherited item's `title`, `text` or `summary` now differs from the lineage, add
-  `generation` to its `revised` (only for items whose `origin` is lower than `generation`).
+  keep that feature's `id` and `origin`, and the `id` and `origin` of each of its requirements you can match to the
+  spec now. Principles of the lineage that the constitution still states keep their `id` and `origin` the same way.
+  When an inherited item's `title`, `text` or `summary` now differs from the lineage, add `generation` to its
+  `revised` (only for items whose `origin` is lower than `generation`).
 - A spec that is not `in_lineage` is a feature new in this generation: `origin` is `generation`.
 - For each feature in `lineage_missing_specs` (its spec folder is gone), ask with AskUserQuestion: keep it, based on
   the lineage's content with `.sdd-rebuild/lineage.json` as evidence, or discard it (recommend what the project's
   current state suggests).
-- Ask whether the lineage's lessons still apply, in one question with multiSelect. Lessons that still apply keep
-  their `id` and `origin`; the others go to `discarded`.
+- If the lineage has lessons, ask whether they still apply, in one question with multiSelect. Lessons that still
+  apply keep their `id` and `origin`; the others go to `discarded`.
 - Copy every entry of the lineage's `discarded` into the draft's `discarded` exactly as it is, unchanged.
 - Any other item of the lineage that you cannot match to anything in the project now: ask whether to keep it
   (from the lineage's content) or discard it. Never let an item of the lineage disappear silently: the script
@@ -319,7 +333,8 @@ When `lineage` is `"present"`, `lineage_content` is the lineage the rebuild left
 When `export_dir` is `"ours"`, this is a re-export and `existing` holds the current nutrients. Use them as the
 starting point: keep every existing item's `id`; leave the text of items whose evidence has not changed exactly as
 it is; keep items outside the chosen scope exactly as they are; copy existing `discarded` entries whose
-`discarded_in` is lower than `generation` unchanged. When `nutrients` was `"edited"` or `"unknown"` in stage 1, the
+`discarded_in` is lower than `generation` unchanged, and keep the others too unless the maintainer now wants such an
+item back. When `nutrients` was `"edited"` or `"unknown"` in stage 1, the
 file holds the maintainer's own edits: before changing any existing content, ask about each change, one by one.
 
 When an item from the lineage or from earlier generations is dropped, it moves to `discarded` with `discarded_in`
@@ -350,15 +365,16 @@ this order, and let the maintainer decide each section before moving on:
 For every item show its source (spec, code, document or maintainer), its generation of origin and its evidence, and
 mark items without evidence as pending. Show requirements as text the maintainer can judge, not as raw JSON.
 
-After each section (except doubts) ask whether to accept it all, change some items, or delete some. A deleted item
-that came from an earlier generation, or one the maintainer wants recorded, moves to `discarded` with their reason
-(stage 4 explains how). After each section is decided, write a short list of what was decided, so that the
-decisions survive if the conversation is compacted.
+The generation section only informs; continue unless the maintainer objects. After each later section (except
+doubts) ask whether to accept it all, change some items, or delete some. A deleted item that came from an earlier
+generation, or one the maintainer wants recorded, moves to `discarded` with their reason, or the default reason from
+"The draft" when they gave none (stage 4 explains how). After each section is decided, write a short list of what
+was decided, so that the decisions survive if the conversation is compacted.
 
 Doubts: one question per doubt, never several in one. The choices are: include it (it becomes a requirement or a
-lesson, and the maintainer may change the wording), keep it as a `pending` item, or discard it (it goes to
-`discarded` with `kind` `doubt`, a new `id`, `origin` equal to `generation` and the maintainer's reason, so later
-exports do not raise it again).
+lesson, and the maintainer may change the wording), keep it as a requirement or lesson marked `pending`, or discard
+it (it goes to `discarded` with `kind` `doubt`, a new `id`, `origin` equal to `generation` and the maintainer's
+reason, so later exports do not raise it again).
 
 Lessons: when you found no lesson with any evidence, say that you found none and ask with AskUserQuestion whether
 the maintainer wants to tell you some. Lessons they tell you have `maintainer` as evidence. If they add none,
@@ -368,7 +384,7 @@ Outcomes:
 
 - The maintainer accepts, changes or deletes items: update the draft and go on to the next section.
 - The maintainer adds a requirement, a lesson or another item: add it to the draft with `maintainer` as evidence (or
-  the file they point to, after checking it is in the `files` list) and continue.
+  the file they point to; `validate` checks that it exists and may be cited) and continue.
 - The maintainer wants to change an earlier section that was already decided: rule 8.
 - Every section has been decided: go to stage 6.
 - The maintainer asks to stop: rule 7 (nothing is saved).
@@ -460,9 +476,10 @@ Outcomes:
 - `reason` is `"changed"`: the nutrients were changed while you were talking (for example the maintainer edited the
   file in another window). Tell the maintainer and run `check` again
   (`uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_export.py" check`); if it exits with 3, follow the next two outcomes.
-  Otherwise run `validate` with the confirmed draft, which now compares it with the new `existing`; show the new
-  differences (they include anything the draft would undo of the new edit, and stage 4's rule applies: ask about
-  each such change), and go back to stage 7 to confirm again with the new `state`.
+  Otherwise run `validate` with the confirmed draft, which now compares it with the new `existing` (if it reports
+  errors, handle them as in stage 6); show the new differences (they include anything the draft would undo of the
+  new edit, and stage 4's rule applies: ask about each such change), and go back to stage 7 to confirm again with
+  the new `state`.
 - `reason` is `"conflict"` (exit code 3): something that is not this skill's now occupies `.sdd-export/`. Stop.
   List the paths in `conflicts`, say nothing was overwritten, and show the whole confirmed draft in the conversation
   so the maintainer can keep it. Do not write it anywhere else.
@@ -471,7 +488,9 @@ Outcomes:
 - `reason` is `"os-error"`: the files could not be written (`error` says why, for example a read-only folder or
   missing permission). Report the cause and show the whole confirmed draft in the conversation. Explain that no
   half-written file was left in `.sdd-export/`. Ask with AskUserQuestion: stop (recommended), or retry after the
-  maintainer has fixed the cause.
+  maintainer has fixed the cause. If they stop, add that `.sdd-export/nutrients.json` may already hold the confirmed
+  nutrients while `.sdd-export/README.md` is out of date (the failure can come between the two files); running
+  `/sdd-export` again regenerates it.
 - The maintainer fixed the cause and asks to retry: run `check` again. If it exits with 3, handle it as in stage 1.
   If its `state` is the same as before, run `write` again with the same confirmed draft and that state. If the state
   is different (this also happens when the first file was already written before the failure), handle it as
@@ -480,6 +499,8 @@ Outcomes:
   through stage 7 again.
 - Exit code 1 with `reason` `"usage"`: the command was malformed (for example `--expect` was missing). Fix the
   command and run it again with the same draft.
+- The maintainer wants to change the draft at this point (instead of retrying): go back to stage 5 as for "change
+  something" in stage 7.
 
 ## Stage 9: Final report
 
