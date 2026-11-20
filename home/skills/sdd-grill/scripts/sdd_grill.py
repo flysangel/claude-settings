@@ -623,7 +623,7 @@ def _sort_key(number: str | None, mode: str):
 
 
 def verify_generated(root: Path, progress: dict) -> dict:
-    """The checks of data-model.md "驗證產生的結果"; every failure is listed, in a fixed order."""
+    """Check the generated documents against the confirmed progress; every failure is listed, in a fixed order."""
     baseline = progress["baseline"] or {"constitution": None, "specs": {}}
     features = progress["features"]
     action = progress["constitution"]["action"]

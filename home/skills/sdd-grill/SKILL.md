@@ -196,3 +196,120 @@ On success the output is `{"saved": ".specify/sdd-grill/progress.json", ...}`. I
 If you cannot get a save to succeed, tell the maintainer what the error says and stop rather than continue with
 progress that is not saved. Write the progress only through `save`: never create, edit or delete files in
 `.specify/sdd-grill/` in any other way, because the script is what keeps that folder valid and out of git.
+
+## Summary and confirmation
+
+When every open point is decided or deferred, set `stage` to `"summary"`, save, and present the summary. It is the
+only basis for the documents, so it must contain everything they will say:
+
+1. **Decided**: the constitution principles and governance rules (or, for an existing constitution, the additions
+   and changes, or that it is kept as it is), and for each feature its decisions on usage scenarios, scope and edge
+   cases.
+2. **Deferred**: each deferred item with the reason, and the feature it belongs to.
+3. **Left for the plan**: the technology choices and other items recorded in `for_plan`.
+4. **Feature order**: the features in dependency order, numbered, with what each one depends on. Say that this is
+   the order in which the specs will be generated and numbered, after any existing specs.
+
+Then ask one question: confirm the summary as it is, or change something. If the maintainer wants a change, make it,
+save, present the updated summary, and ask for confirmation again. Repeat until it is confirmed.
+
+Until the maintainer confirms, do not write or change the constitution or any spec, in any way: do not call the
+`speckit-*` skills and do not edit those files. The progress file is the only thing written during the discussion.
+
+## Generating the documents
+
+Once the maintainer confirms, follow these steps in order. Save after each one, so that an interruption can be
+resumed from the right place.
+
+1. **Mark the summary as confirmed.** Save with `phase` set to `"confirmed"` (this requires `stage` `"summary"`,
+   every feature `"decided"`, and `language` set). The first confirmed save outputs `"baseline": true`: the script
+   has recorded the current constitution and existing specs, so that `verify` can later prove they were not touched.
+2. **The constitution**, only when `constitution.action` is `"create"` or `"amend"`. Invoke the `speckit-constitution`
+   skill with the Skill tool. As its argument, give the confirmed principles (title, rules, rationale) and governance
+   rules in full, in the documents' language, and tell it to use only these and not to infer other principles from
+   the repository. For `"amend"`, give only the additions and changes and say that everything else stays as it is.
+   When it finishes, read `.specify/memory/constitution.md` and compare it rule by rule with the summary. Remove any
+   rule the summary does not contain. If you think such a rule is worth keeping, ask the maintainer (one question per
+   rule) and keep it only if they agree. Then save again, unchanged, so the saved progress reflects the new
+   constitution. When the action is `keep`, do not invoke `speckit-constitution` at all.
+3. **The specs**, one at a time, in the order of `features`. For each feature, invoke the `speckit-specify` skill with
+   the Skill tool. As its argument, describe that feature only, from the summary: its title, usage scenarios, scope
+   and edge cases, what it depends on (by name, and by spec folder for features already generated or existing specs),
+   and its deferred items with their reasons, asking for those to be written in the spec's Assumptions section.
+   Write it in the documents' language.
+   - When `speckit-specify` finishes, it reports the folder it created. Record it as the feature's `spec_dir`, in the
+     form `specs/<folder name>`, and save before moving to the next feature.
+   - If `speckit-specify` asks clarifying questions, answer them from the summary. If the summary has no answer, ask
+     the maintainer one question (with your recommendation), add the answer to that feature's `decisions`, and save.
+   - Afterwards, read the spec and compare it with the summary. Spec Kit fills in sections the template requires,
+     such as success criteria, and may infer details. Remove statements that have no basis in the summary, or mark
+     them as to be confirmed when the section must not be empty. Do not present guesses as decisions.
+4. **Then go to "Finishing".**
+
+What you never do while generating:
+
+- Never write the constitution or a spec by hand, and never create a spec folder yourself. If a Spec Kit skill does
+  not produce its document, that is a failure (see below), not a gap for you to fill.
+- Never choose spec numbers or folder names. `speckit-specify` numbers each spec after the existing ones; calling it
+  one feature at a time in dependency order is what makes the numbers follow the order of work.
+- Never edit `.specify/feature.json` yourself. `speckit-specify` points it at each spec it creates, and the script's
+  `focus` command points it at the first spec of this batch at the end.
+
+If the maintainer wants to change a decision after the summary was confirmed: before any spec exists, you can save
+with `phase` back to `"discussing"`, adjust, and confirm again. Once a spec has been generated, `save` refuses that
+("specs were already generated from the confirmed summary; it can no longer go back to discussing"). Explain that
+the generated specs already follow the confirmed summary, and ask whether to finish generating the rest as
+confirmed (the change can be made in the spec afterwards) or to stop here (see "When something fails").
+
+## When something fails
+
+If any step fails (a Spec Kit skill reports an error or does not produce its document, a save cannot be fixed,
+`verify` or `focus` reports failures, or the maintainer stops in the middle), stop and report:
+
+- which documents were generated (the constitution if it was written, and every feature whose `spec_dir` is set,
+  with its folder) and which were not generated yet;
+- what failed, in the words of the error or of `verify`'s `failures` (see "Finishing" for what each check means);
+- that the progress is kept, and that running `/sdd-grill` again continues with the documents not generated yet.
+
+Keep the progress: do not run `clear`, and do not run `focus` either when `verify` has not passed. Do not write the
+missing documents by hand, and do not delete or undo documents that were already generated; they came from Spec Kit
+and the maintainer decides what happens to them. Then stop.
+
+## Finishing
+
+When every document has been generated, run these three commands in this order, each only if the previous one
+succeeded:
+
+1. `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" verify` checks the result against the confirmed summary. It
+   passes when `ok` is `true` (exit code 0). Otherwise each entry of `failures` names a `check` and gives a `detail`:
+
+   | `check` | Meaning |
+   |---|---|
+   | `existing-spec-changed` | A spec that existed before generation was changed or removed. |
+   | `constitution-changed` | The constitution was to be kept, but it changed. |
+   | `constitution-not-written` | The constitution was to be created but is missing or still the template, or was to be amended but did not change. |
+   | `spec-missing` | A feature has no `spec_dir`, or its `spec.md` does not exist. |
+   | `spec-not-new` | A `spec_dir` existed before generation, or two features record the same folder. |
+   | `order` | The new specs are not numbered in the order of the summary, or not after the existing specs. |
+   | `dependency-order` | A spec is not numbered after a spec it depends on. |
+
+   Any failure: go to "When something fails". `unexpected` lists new spec folders that belong to no feature (for
+   example left behind by an interrupted `speckit-specify`); they are not a failure, but mention them to the
+   maintainer and leave them alone.
+2. `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" focus` points `.specify/feature.json` at the first spec of this
+   batch, so that Spec Kit's own commands start from the first feature rather than the last one generated. It
+   repeats `verify`'s checks first and changes nothing if any of them fails. Its output gives the
+   `feature_directory` it now points at. If it fails, go to "When something fails".
+3. `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" clear` removes the progress, which is no longer needed. If it
+   fails, the documents are still complete; tell the maintainer that the progress could not be removed and why.
+
+Then report to the maintainer, using `verify`'s `specs` list:
+
+- each spec's folder, what it depends on, and the suggested order of work (the order of the list);
+- whether the constitution was created, amended, or kept;
+- that `.specify/feature.json` now points at the `feature_directory` from `focus`;
+- the next step: the maintainer types `/sdd-drive` to have the specs planned and implemented, or uses Spec Kit's own
+  `/speckit-plan` one spec at a time in the suggested order, starting with the one `.specify/feature.json` points at.
+
+Then stop. Do not start a plan, tasks, or any implementation; that is the maintainer's call. Commit the generated
+documents only if the maintainer's own instructions say to, and do not push.
