@@ -599,3 +599,1164 @@ def lineage_record(**overrides) -> dict:
     }
     data.update(overrides)
     return data
+
+
+# ================================================================== check
+
+SPEC_TEXT = "# Feature Specification\n\n需求。\n"
+THREE_SPECS = {"002-status": SPEC_TEXT, "001-deploy": SPEC_TEXT, "003-remove": SPEC_TEXT}
+
+
+def spec_project(tmp_path: Path, **kwargs) -> Path:
+    return project(tmp_path, constitution="# Constitution\n\n原則。\n", specs=THREE_SPECS, **kwargs)
+
+
+def spec_draft() -> dict:
+    features = [
+        feature("deploy", source="spec", spec="specs/001-deploy/spec.md",
+                requirements=[requirement("deploy-one", source="spec", evidence=["specs/001-deploy/spec.md"])]),
+        feature("status", source="spec", spec="specs/002-status/spec.md", depends_on=["deploy"],
+                requirements=[requirement("status-one", source="spec", evidence=["specs/002-status/spec.md"])]),
+        feature("remove", source="spec", spec="specs/003-remove/spec.md", depends_on=["deploy"],
+                requirements=[requirement("remove-one", source="spec", evidence=["specs/003-remove/spec.md"])]),
+    ]
+    principles = [principle("keep-small", source="constitution", evidence=[".specify/memory/constitution.md"])]
+    return draft(principles=principles, features=features)
+
+
+def test_check_without_spec_kit_or_git(sdd_export, tmp_path):
+    root = project(tmp_path)
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 0
+    out = result.out
+    assert out["project"] == "my-tool"
+    assert out["git"] is False
+    assert out["writable"] is True
+    assert (out["export_dir"], out["nutrients"], out["view"], out["gitattributes"]) == ("none", "none", "none", "missing")
+    assert out["state"] == "none"
+    assert (out["lineage"], out["generation"], out["existing_generation"]) == ("none", 1, None)
+    assert out["constitution"] is None
+    assert out["specs"] == [] and out["lineage_missing_specs"] == []
+    assert out["existing"] is None and out["lineage_content"] is None
+    assert "error" not in out and "reason" not in out
+
+
+def test_check_lists_constitution_and_specs_by_name(sdd_export, tmp_path):
+    root = spec_project(tmp_path)
+    out = run_export(sdd_export, root, "check").out
+
+    assert out["constitution"] == ".specify/memory/constitution.md"
+    assert out["specs"] == [
+        {"dir": "specs/001-deploy", "spec": "specs/001-deploy/spec.md", "in_lineage": False},
+        {"dir": "specs/002-status", "spec": "specs/002-status/spec.md", "in_lineage": False},
+        {"dir": "specs/003-remove", "spec": "specs/003-remove/spec.md", "in_lineage": False},
+    ]
+
+
+def test_check_ignores_spec_folders_without_spec_md(sdd_export, tmp_path):
+    root = project(tmp_path, files={"specs/004-x/plan.md": "plan\n", "specs/notes.md": "x\n"})
+
+    assert run_export(sdd_export, root, "check").out["specs"] == []
+
+
+def test_export_dir_empty(sdd_export, tmp_path):
+    root = project(tmp_path)
+    (root / ".sdd-export").mkdir()
+    out = run_export(sdd_export, root, "check").out
+
+    assert out["export_dir"] == "empty"
+    assert out["state"] == "none"
+
+
+def test_export_dir_ours_after_write(sdd_export, tmp_path, fixed_day):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 0
+    out = result.out
+    assert (out["export_dir"], out["nutrients"], out["view"], out["gitattributes"]) == ("ours", "unchanged", "current", "ok")
+    assert out["existing"]["tool"] == "sdd-export"
+    assert out["existing"]["features"][0]["id"] == "deploy"
+    assert out["existing_generation"] == 1
+    assert len(out["state"]) == 64
+
+
+def test_export_dir_ours_without_readme_and_gitattributes(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    (root / ".sdd-export" / "README.md").unlink()
+    (root / ".sdd-export" / ".gitattributes").unlink()
+    out = run_export(sdd_export, root, "check").out
+
+    assert out["export_dir"] == "ours"
+    assert (out["nutrients"], out["view"], out["gitattributes"]) == ("unknown", "missing", "missing")
+
+
+def make_conflict(root: Path, how: str) -> None:
+    folder = root / ".sdd-export"
+    if how == "file":
+        folder.write_text("not a folder\n")
+        return
+    folder.mkdir(exist_ok=True)
+    if how == "extra-file":
+        (folder / "notes.txt").write_text("mine\n")
+    elif how == "readme-only":
+        (folder / "README.md").write_text("# my own notes\n")
+    elif how == "other-tool":
+        (folder / "nutrients.json").write_text('{"tool": "someone-else", "schema": 1}\n')
+    elif how == "subfolder":
+        (folder / "nutrients.json").mkdir()
+
+
+@pytest.mark.parametrize("how", ["file", "extra-file", "readme-only", "other-tool", "subfolder"])
+def test_export_dir_conflict(sdd_export, tmp_path, how):
+    root = project(tmp_path)
+    make_conflict(root, how)
+    before = tree_snapshot(root)
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 3
+    out = result.out
+    assert out["export_dir"] == "conflict"
+    assert out["reason"] == "conflict"
+    assert out["error"] == CONFLICT_ERROR
+    assert CONFLICT_ERROR in result.err
+    assert out["conflicts"]
+    assert out["project"] == "my-tool"
+    for key in ("nutrients", "view", "state", "lineage", "generation", "inventory", "existing", "specs"):
+        assert out[key] is None, key
+    assert tree_snapshot(root) == before
+
+
+def test_conflict_lists_what_is_not_ours(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    (root / ".sdd-export" / "notes.txt").write_text("mine\n")
+    (root / ".sdd-export" / "old").mkdir()
+
+    out = run_export(sdd_export, root, "check").out
+
+    assert out["conflicts"] == [".sdd-export/notes.txt", ".sdd-export/old"]
+
+
+def test_conflict_when_the_path_is_a_file(sdd_export, tmp_path):
+    root = project(tmp_path)
+    (root / ".sdd-export").write_text("x\n")
+
+    assert run_export(sdd_export, root, "check").out["conflicts"] == [".sdd-export"]
+
+
+def test_export_dir_unreadable(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    (root / ".sdd-export" / "nutrients.json").write_bytes(b"\xff\xfe not utf-8")
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 3
+    assert (result.out["export_dir"], result.out["reason"]) == ("unreadable", "nutrients-unreadable")
+    assert result.out["existing"] is None
+
+
+@pytest.mark.parametrize("content", [b"[1, 2]\n", b"\xef\xbb\xbf{}\n", b"{not json\n"])
+def test_export_dir_unreadable_variants(sdd_export, tmp_path, content):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    (root / ".sdd-export" / "nutrients.json").write_bytes(content)
+
+    assert run_export(sdd_export, root, "check").out["reason"] == "nutrients-unreadable"
+
+
+def test_export_dir_newer(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    path = root / ".sdd-export" / "nutrients.json"
+    data = json.loads(path.read_text("utf-8"))
+    data["schema"] = 2
+    data["something_new"] = True
+    path.write_text(json.dumps(data), "utf-8")
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 3
+    assert (result.out["export_dir"], result.out["reason"]) == ("newer", "nutrients-newer")
+
+
+def test_export_dir_invalid_lists_field_paths(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    path = root / ".sdd-export" / "nutrients.json"
+    data = json.loads(path.read_text("utf-8"))
+    data["features"][0]["requirements"][0]["kind"] = "wish"
+    data["plan"] = "copied plan"
+    path.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 3
+    assert (result.out["export_dir"], result.out["reason"]) == ("invalid", "nutrients-invalid")
+    paths = [error["path"] for error in result.out["errors"]]
+    assert "features[0].requirements[0].kind" in paths
+    assert "plan" in paths
+    assert result.out["existing"] is None
+
+
+def test_existing_nutrients_are_not_checked_against_the_files(sdd_export, tmp_path):
+    """Evidence that later disappears does not make the exported nutrients invalid."""
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    (root / "src" / "app.py").unlink()
+
+    assert run_export(sdd_export, root, "check").out["export_dir"] == "ours"
+
+
+def edit_nutrients(root: Path, change) -> None:
+    path = root / ".sdd-export" / "nutrients.json"
+    data = json.loads(path.read_text("utf-8"))
+    change(data)
+    path.write_bytes(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8") + b"\n")
+
+
+def test_nutrients_and_view_values(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    readme = root / ".sdd-export" / "README.md"
+
+    edit_nutrients(root, lambda d: d["features"][0]["requirements"][0].update(text="改過的文字。"))
+    out = run_export(sdd_export, root, "check").out
+    assert (out["nutrients"], out["view"]) == ("edited", "stale")
+
+    content = readme.read_text("utf-8")
+    readme.write_text(content + "\nmy own line\n", "utf-8")
+    out = run_export(sdd_export, root, "check").out
+    assert (out["nutrients"], out["view"]) == ("edited", "edited")
+
+    readme.write_text("no marker\n" + content.split("\n", 1)[1], "utf-8")
+    out = run_export(sdd_export, root, "check").out
+    assert (out["nutrients"], out["view"]) == ("unknown", "edited")
+
+    readme.unlink()
+    out = run_export(sdd_export, root, "check").out
+    assert (out["nutrients"], out["view"]) == ("unknown", "missing")
+
+
+def test_gitattributes_values(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    attributes = root / ".sdd-export" / ".gitattributes"
+    assert run_export(sdd_export, root, "check").out["gitattributes"] == "ok"
+
+    attributes.write_text("* text eol=lf\n*.md diff\n")
+    assert run_export(sdd_export, root, "check").out["gitattributes"] == "edited"
+
+    attributes.unlink()
+    assert run_export(sdd_export, root, "check").out["gitattributes"] == "missing"
+
+
+def test_state_follows_the_content(sdd_export, tmp_path):
+    root = project(tmp_path)
+    assert run_export(sdd_export, root, "check").out["state"] == "none"
+    write_ok(sdd_export, root, draft())
+    first = run_export(sdd_export, root, "check").out["state"]
+
+    edit_nutrients(root, lambda d: d.update(project="other"))
+    second = run_export(sdd_export, root, "check").out["state"]
+    assert second != first
+
+    for name in ("nutrients.json", "README.md"):
+        path = root / ".sdd-export" / name
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    assert run_export(sdd_export, root, "check").out["state"] == second
+
+    (root / ".sdd-export" / "README.md").unlink()
+    assert run_export(sdd_export, root, "check").out["state"] not in (second, "none")
+
+
+@pytest.mark.skipif(sys.platform == "win32" or IS_ROOT, reason="needs POSIX permissions and a non-root user")
+def test_writable_false_in_a_read_only_project(sdd_export, tmp_path):
+    root = project(tmp_path)
+    root.chmod(0o555)
+    try:
+        out = run_export(sdd_export, root, "check").out
+    finally:
+        root.chmod(0o755)
+
+    assert out["writable"] is False
+
+
+def test_writable_uses_os_access(sdd_export, tmp_path, monkeypatch):
+    root = project(tmp_path)
+    monkeypatch.setattr(sdd_export.os, "access", lambda path, mode: False)
+
+    assert run_export(sdd_export, root, "check").out["writable"] is False
+
+
+def test_writable_looks_at_the_existing_export_folder(sdd_export, tmp_path, monkeypatch):
+    root = project(tmp_path)
+    (root / ".sdd-export").mkdir()
+    seen = []
+    monkeypatch.setattr(sdd_export.os, "access", lambda path, mode: seen.append(Path(path)) or True)
+
+    run_export(sdd_export, root, "check")
+
+    assert root / ".sdd-export" in [p if p.is_absolute() else root / p for p in seen]
+
+
+def test_check_reads_only(sdd_export, tmp_path):
+    root = spec_project(tmp_path, files={"pyproject.toml": "[project]\nname='x'\ndependencies=['requests']\n"})
+    before = tree_snapshot(root)
+    parent_before = sorted(p.name for p in tmp_path.iterdir())
+
+    for _ in range(2):
+        assert run_export(sdd_export, root, "check").code == 0
+
+    assert tree_snapshot(root) == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == parent_before
+    for name in (".venv", "uv.lock", ".sdd-export"):
+        assert not (root / name).exists()
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="uv is not installed")
+def test_check_through_uv_matches_main(sdd_export, tmp_path, export_env):
+    root = spec_project(tmp_path, files={"pyproject.toml": "[project]\nname='x'\ndependencies=['requests']\n"})
+    script_copy = tmp_path / "skill-copy" / "sdd_export.py"
+    script_copy.parent.mkdir()
+    script_copy.write_bytes(SDD_EXPORT_PY.read_bytes())
+    before = tree_snapshot(root)
+
+    done = run_export_real(root, real_run_env(export_env), "check", script=script_copy)
+    direct = run_export(sdd_export, root, "check")
+
+    assert done.returncode == 0, done.stderr.decode("utf-8", "replace")
+    assert json.loads(done.stdout.decode("utf-8")) == direct.out
+    assert tree_snapshot(root) == before
+
+
+# =============================================================== validate
+
+
+def validate(module, root: Path, data) -> object:
+    return run_export(module, root, "validate", stdin=data if isinstance(data, (str, bytes)) else dump(data))
+
+
+def test_valid_draft(sdd_export, tmp_path):
+    root = project(tmp_path)
+    result = validate(sdd_export, root, draft())
+
+    assert result.code == 0, result.out
+    assert result.out["ok"] is True
+    assert result.out["errors"] == []
+    assert "error" not in result.out
+    assert list(result.out) == ["ok", "errors", "counts", "diff"]
+
+
+@pytest.mark.parametrize("stdin", [b"", b"not json", b"[1]", b"\xff\xfe", b"\xef\xbb\xbf{}"])
+def test_json_check(sdd_export, tmp_path, stdin):
+    root = project(tmp_path)
+    result = validate(sdd_export, root, stdin)
+
+    assert result.code == 1
+    assert checks(result) == ["json"]
+    assert result.out["diff"] is None
+
+
+def test_missing_and_extra_keys(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft()
+    del data["lessons"]
+    data["plan"] = "the plan"
+    data["features"][0]["tasks"] = ["t1"]
+    data["features"][0]["requirements"][0]["code"] = "x = 1"
+    result = validate(sdd_export, root, data)
+
+    assert result.code == 1
+    assert result.out["reason"] == "invalid"
+    assert result.out["error"] == INVALID_ERROR
+    paths = {error["path"] for error in errors_for(result, "field")}
+    assert {"lessons", "plan", "features[0].tasks", "features[0].requirements[0].code"} <= paths
+    assert result.out["diff"] is None
+
+
+@pytest.mark.parametrize("key", ["tool", "schema", "exported_at"])
+def test_script_fields_are_refused_in_a_draft(sdd_export, tmp_path, key):
+    root = project(tmp_path)
+    data = draft()
+    data[key] = {"tool": "sdd-export", "schema": 1, "exported_at": "2026-11-20"}[key]
+
+    result = validate(sdd_export, root, data)
+
+    assert [e["path"] for e in errors_for(result, "field")] == [key]
+
+
+@pytest.mark.parametrize(
+    "change, path",
+    [
+        (lambda d: d.update(language="en"), "language"),
+        (lambda d: d.update(generation=0), "generation"),
+        (lambda d: d.update(generation="1"), "generation"),
+        (lambda d: d.update(generation=True), "generation"),
+        (lambda d: d.update(project=""), "project"),
+        (lambda d: d.update(project="my/tool"), "project"),
+        (lambda d: d.update(project="my\\tool"), "project"),
+        (lambda d: d["scope"].update(coverage="most"), "scope.coverage"),
+        (lambda d: d["features"][0].update(source="guess"), "features[0].source"),
+        (lambda d: d["features"][0]["requirements"][0].update(kind="wish"), "features[0].requirements[0].kind"),
+        (lambda d: d["features"][0]["requirements"][0].update(source="spec-ish"), "features[0].requirements[0].source"),
+        (lambda d: d["features"][0]["requirements"][0].update(status="maybe"), "features[0].requirements[0].status"),
+        (lambda d: d["principles"][0].update(source="code-ish"), "principles[0].source"),
+        (lambda d: d["lessons"][0].update(kind="tip"), "lessons[0].kind"),
+        (lambda d: d["lessons"][0].update(title=""), "lessons[0].title"),
+        (lambda d: d["lessons"][0].update(evidence="README.md"), "lessons[0].evidence"),
+        (lambda d: d["features"][0].update(requirements=[]), "features[0].requirements"),
+        (lambda d: d.update(features=[]), "features"),
+        (lambda d: d.update(discarded=[discarded("old", kind="idea")]), "discarded[0].kind"),
+        (lambda d: d.update(discarded=[discarded("old", reason="")]), "discarded[0].reason"),
+        (lambda d: d["features"][0].update(revised="2"), "features[0].revised"),
+        (lambda d: d["features"][0].update(spec=3), "features[0].spec"),
+    ],
+)
+def test_field_check(sdd_export, tmp_path, change, path):
+    root = project(tmp_path)
+    data = draft()
+    change(data)
+    result = validate(sdd_export, root, data)
+
+    assert result.code == 1
+    assert path in [e["path"] for e in errors_for(result, "field")], result.out["errors"]
+
+
+@pytest.mark.parametrize("kind", ["principle", "feature", "requirement", "lesson", "doubt"])
+def test_discarded_kinds(sdd_export, tmp_path, kind):
+    root = project(tmp_path)
+
+    assert validate(sdd_export, root, draft(discarded=[discarded("old-thing", kind=kind)])).code == 0
+
+
+@pytest.mark.parametrize("kind", ["story", "functional", "edge-case", "success-criterion", "assumption"])
+def test_requirement_kinds(sdd_export, tmp_path, kind):
+    root = project(tmp_path)
+    data = draft()
+    data["features"][0]["requirements"][0]["kind"] = kind
+
+    assert validate(sdd_export, root, data).code == 0
+
+
+def test_empty_sections_are_allowed(sdd_export, tmp_path):
+    root = project(tmp_path)
+
+    assert validate(sdd_export, root, draft(principles=[], lessons=[], discarded=[])).code == 0
+
+
+def test_id_check(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft(
+        principles=[principle("Bad_Id")],
+        features=[feature("deploy"), feature("deploy", requirements=[requirement("deploy-two")])],
+    )
+    result = validate(sdd_export, root, data)
+
+    paths = [e["path"] for e in errors_for(result, "id")]
+    assert "principles[0].id" in paths
+    assert "features[1].id" in paths
+
+
+def test_ids_are_unique_across_sections(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft(lessons=[lesson("deploy")])
+
+    assert "lessons[0].id" in [e["path"] for e in errors_for(validate(sdd_export, root, data), "id")]
+
+
+@pytest.mark.parametrize(
+    "change, path",
+    [
+        (lambda d: d["principles"][0].update(origin=2), "principles[0].origin"),
+        (lambda d: d["principles"][0].update(origin=0), "principles[0].origin"),
+        (lambda d: d["principles"][0].update(revised=[1]), "principles[0].revised"),
+        (lambda d: d["principles"][0].update(origin=1, revised=[3]), "principles[0].revised"),
+        (lambda d: d["lessons"][0].update(revised=[2, 2]), "lessons[0].revised"),
+        (lambda d: d.update(discarded=[discarded("x", origin=1, discarded_in=2)]), "discarded[0].discarded_in"),
+    ],
+)
+def test_range_check(sdd_export, tmp_path, change, path):
+    root = project(tmp_path)
+    data = draft()
+    change(data)
+
+    assert path in [e["path"] for e in errors_for(validate(sdd_export, root, data), "range")]
+
+
+def test_revised_strictly_increasing_is_accepted(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft(generation=1)
+    data["principles"][0]["revised"] = []
+
+    assert validate(sdd_export, root, data).code == 0
+
+
+@pytest.mark.parametrize("block", ["```", "```python", "~~~", "  ````", "~~~~ text"])
+def test_code_blocks_are_refused(sdd_export, tmp_path, block):
+    root = project(tmp_path)
+    data = draft()
+    data["features"][0]["requirements"][0]["text"] = f"說明\n{block}\nx = 1\n"
+
+    result = validate(sdd_export, root, data)
+
+    assert [e["path"] for e in errors_for(result, "code-block")] == ["features[0].requirements[0].text"]
+
+
+def test_inline_backticks_are_fine(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft()
+    data["features"][0]["requirements"][0]["text"] = "執行 `uv run` 之後顯示結果；``雙反引號``也可以。"
+
+    assert validate(sdd_export, root, data).code == 0
+
+
+def test_secret_in_a_string(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft()
+    data["features"][0]["requirements"][0]["text"] = "以 password=abc123 登入"
+    result = validate(sdd_export, root, data)
+
+    assert result.code == 1
+    assert result.out["reason"] == "secret"
+    assert result.out["error"] == SECRET_ERROR
+    assert [e["path"] for e in errors_for(result, "secret")] == ["features[0].requirements[0].text"]
+    assert "abc123" not in result.raw.decode("utf-8")
+    assert "abc123" not in result.err
+
+
+def test_secret_wins_over_other_errors(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft(language="en")
+    data["lessons"][0]["text"] = "token: zzz-value"
+    result = validate(sdd_export, root, data)
+
+    assert result.out["reason"] == "secret"
+    assert {"secret", "field"} <= set(checks(result))
+    assert "zzz-value" not in result.raw.decode("utf-8")
+
+
+def test_details_never_repeat_a_secret(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft()
+    data["features"][0]["requirements"][0]["evidence"] = ["password=abc123"]
+    data["features"][0]["source"] = "password=abc123"
+    result = validate(sdd_export, root, data)
+
+    assert "abc123" not in result.raw.decode("utf-8")
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    ["src/app.py", "src", "README.md", "maintainer", ".specify/memory/constitution.md", ".sdd-rebuild/lineage.json"],
+)
+def test_good_evidence(sdd_export, tmp_path, evidence):
+    root = project(tmp_path, files={".specify/memory/constitution.md": "c\n", ".sdd-rebuild/lineage.json": "{}\n"})
+    data = draft()
+    data["lessons"][0]["evidence"] = [evidence]
+
+    assert validate(sdd_export, root, data).code == 0
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    ["src/missing.py", "/etc/passwd", "../outside.txt", "src/../README.md", "commit:abcdef1", "commit:ABCDEF1",
+     "commit:abc", "C:/x", ".specify/templates/x.md", "maintainers", ""],
+)
+def test_bad_evidence(sdd_export, tmp_path, evidence):
+    root = project(tmp_path, files={".specify/templates/x.md": "t\n", "../outside.txt": "x\n"})
+    data = draft()
+    data["lessons"][0]["evidence"] = [evidence]
+    result = validate(sdd_export, root, data)
+
+    assert result.code == 1
+    assert [e["path"] for e in result.out["errors"]] == ["lessons[0].evidence[0]"]
+    assert set(checks(result)) <= {"evidence", "field"}
+
+
+def test_evidence_to_a_secret_file_is_refused_as_a_secret(sdd_export, tmp_path):
+    root = project(tmp_path, files={".env": "API_KEY=dummy\n"})
+    data = draft()
+    data["lessons"][0]["evidence"] = [".env"]
+    result = validate(sdd_export, root, data)
+
+    assert result.code == 1
+    assert result.out["reason"] == "secret"
+    assert [e["path"] for e in errors_for(result, "evidence")] == ["lessons[0].evidence[0]"]
+    assert "dummy" not in result.raw.decode("utf-8")
+
+
+@needs_git
+def test_commit_evidence(sdd_export, tmp_path):
+    root = project(tmp_path, git=True)
+    git_run(root, "add", "-A")
+    git_run(root, "commit", "--quiet", "-m", "first")
+    head = git_run(root, "rev-parse", "HEAD").strip()
+
+    for good in (head, head[:7], head[:12]):
+        data = draft(lessons=[lesson("atomic-write", evidence=[f"commit:{good}"])])
+        assert validate(sdd_export, root, data).code == 0, good
+    for bad in ("0" * 40, head.upper()[:10], head[:6], head + "0"):
+        data = draft(lessons=[lesson("atomic-write", evidence=[f"commit:{bad}"])])
+        assert checks(validate(sdd_export, root, data)) == ["evidence"], bad
+
+
+def test_unsupported(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft()
+    data["features"][0]["requirements"][0]["evidence"] = []
+    data["principles"][0]["evidence"] = []
+    result = validate(sdd_export, root, data)
+
+    paths = [e["path"] for e in errors_for(result, "unsupported")]
+    assert paths == ["features[0].requirements[0]", "principles[0]"]
+
+
+def test_pending_without_evidence_is_fine(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft()
+    data["features"][0]["requirements"][0].update(status="pending", evidence=[])
+    result = validate(sdd_export, root, data)
+
+    assert result.code == 0
+    assert result.out["counts"]["pending"] == 1
+
+
+def test_spec_check(sdd_export, tmp_path):
+    root = spec_project(tmp_path)
+    ok = spec_draft()
+    assert validate(sdd_export, root, ok).code == 0
+
+    for source in ("spec", "mixed"):
+        data = spec_draft()
+        data["features"][0].update(source=source, spec="specs/009-gone/spec.md")
+        assert [e["path"] for e in errors_for(validate(sdd_export, root, data), "spec")] == ["features[0].spec"]
+        data["features"][0]["spec"] = None
+        assert "features[0].spec" in [e["path"] for e in validate(sdd_export, root, data).out["errors"]]
+        data["features"][0]["spec"] = "specs/001-deploy"
+        assert [e["path"] for e in errors_for(validate(sdd_export, root, data), "spec")] == ["features[0].spec"]
+
+    for source in ("code", "maintainer"):
+        data = spec_draft()
+        data["features"][0].update(source=source, spec=None)
+        assert validate(sdd_export, root, data).code == 0
+
+
+def test_dependency_check(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft(features=[
+        feature("a", depends_on=["b"]),
+        feature("b", depends_on=["b"], requirements=[requirement("b-one")]),
+        feature("c", depends_on=["a", "nowhere"], requirements=[requirement("c-one")]),
+    ])
+    result = validate(sdd_export, root, data)
+
+    paths = [e["path"] for e in errors_for(result, "dependency")]
+    assert paths == ["features[0].depends_on[0]", "features[1].depends_on[0]", "features[2].depends_on[1]"]
+
+
+def test_scope_check(sdd_export, tmp_path):
+    root = project(tmp_path)
+
+    assert validate(sdd_export, root, draft(scope={"coverage": "partial", "included": ["src"]})).code == 0
+    assert validate(sdd_export, root, draft(scope={"coverage": "partial", "included": ["src", "README.md"]})).code == 0
+    for scope, path in (
+        ({"coverage": "partial", "included": []}, "scope.included"),
+        ({"coverage": "partial", "included": ["lib"]}, "scope.included[0]"),
+        ({"coverage": "partial", "included": ["/abs"]}, "scope.included[0]"),
+        ({"coverage": "full", "included": ["src"]}, "scope.included"),
+    ):
+        result = validate(sdd_export, root, draft(scope=scope))
+        assert path in [e["path"] for e in errors_for(result, "scope")], scope
+
+
+def test_all_errors_at_once_sorted_by_path(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft(features=[feature("a"), feature("b", requirements=[requirement("b-one")])])
+    data["lessons"][0]["kind"] = "tip"
+    data["features"][1]["requirements"][0]["evidence"] = []
+    data["features"][0]["summary"] = ""
+    data["principles"][0]["origin"] = 5
+    data["features"] += [feature(f"f{n}", requirements=[requirement(f"f{n}-one")]) for n in range(2, 11)]
+    data["features"][10]["source"] = "guess"
+    result = validate(sdd_export, root, data)
+
+    paths = [e["path"] for e in result.out["errors"]]
+    assert paths == ["features[0].summary", "features[1].requirements[0]", "features[10].source",
+                     "lessons[0].kind", "principles[0].origin"]
+
+
+def test_counts(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft(
+        features=[feature("deploy", requirements=[requirement("r1"), requirement("r2", status="pending", evidence=[])])],
+        discarded=[discarded("old")],
+    )
+    counts = validate(sdd_export, root, data).out["counts"]
+
+    assert counts == {"principles": 1, "features": 1, "requirements": 2, "lessons": 1, "discarded": 1,
+                      "pending": 1, "inherited": 0, "new": 5}
+
+
+def test_validate_writes_nothing(sdd_export, tmp_path):
+    root = spec_project(tmp_path)
+    before = tree_snapshot(root)
+
+    validate(sdd_export, root, spec_draft())
+    validate(sdd_export, root, "garbage")
+
+    assert tree_snapshot(root) == before
+
+
+def test_validate_stops_on_project_state(sdd_export, tmp_path):
+    root = project(tmp_path)
+    (root / ".sdd-export").mkdir()
+    (root / ".sdd-export" / "notes.txt").write_text("x\n")
+    result = validate(sdd_export, root, draft())
+
+    assert result.code == 3
+    assert result.out["reason"] == "conflict"
+
+
+# =================================================================== diff
+
+
+def nutrients_of(data: dict) -> dict:
+    return {"tool": "sdd-export", "schema": 1, "exported_at": "2026-11-20", **data}
+
+
+def test_diff_without_existing_nutrients(sdd_export, tmp_path):
+    root = project(tmp_path)
+    data = draft(discarded=[discarded("old")])
+    diff = validate(sdd_export, root, data).out["diff"]
+
+    assert diff["base"] == "none"
+    assert diff["generation"] is None and diff["scope"] is None
+    assert diff["removed"] == [] and diff["changed"] == [] and diff["order_changed"] is False
+    assert [(a["section"], a["id"]) for a in diff["added"]] == [
+        ("principles", "keep-small"), ("features", "deploy"), ("requirements", "deploy-one"),
+        ("lessons", "atomic-write"), ("discarded", "old"),
+    ]
+    assert diff["added"][1]["title"] == "功能 deploy"
+    assert diff["added"][2]["title"] == "需求 deploy-one 的可驗收行為。"
+    assert list(diff) == ["base", "generation", "scope", "added", "removed", "changed", "order_changed"]
+
+
+def test_diff_is_a_pure_function(sdd_export):
+    old = nutrients_of(draft())
+    new = copy.deepcopy(old)
+    new["features"][0]["requirements"].append(requirement("deploy-two", text="第一行\n第二行"))
+    new["lessons"] = []
+    new["principles"][0]["text"] = "新的原則文字。"
+    new["scope"] = {"coverage": "partial", "included": ["src"]}
+    new["generation"] = 2
+
+    diff = sdd_export.compute_diff(old, new)
+
+    assert diff["base"] == "nutrients"
+    assert diff["generation"] == {"from": 1, "to": 2}
+    assert diff["scope"] == {"from": {"coverage": "full", "included": []}, "to": {"coverage": "partial", "included": ["src"]}}
+    assert diff["added"] == [{"section": "requirements", "id": "deploy-two", "title": "第一行"}]
+    assert diff["removed"] == [{"section": "lessons", "id": "atomic-write", "title": "教訓 atomic-write"}]
+    assert diff["changed"] == [
+        {"section": "principles", "id": "keep-small",
+         "fields": [{"field": "text", "from": "每個功能 MUST 簡單。", "to": "新的原則文字。"}]},
+    ]
+    assert sdd_export.compute_diff(None, new)["base"] == "none"
+
+
+def test_diff_title_is_cut_at_80_characters(sdd_export):
+    old = nutrients_of(draft())
+    new = copy.deepcopy(old)
+    new["features"][0]["requirements"].append(requirement("long", text="長" * 100 + "\n第二行"))
+
+    assert sdd_export.compute_diff(old, new)["added"][0]["title"] == "長" * 80
+
+
+def test_diff_requirement_moved_to_another_feature(sdd_export):
+    old = nutrients_of(draft(features=[feature("a", requirements=[requirement("r1"), requirement("r2")]),
+                                       feature("b", requirements=[requirement("r3")])]))
+    new = copy.deepcopy(old)
+    moved = new["features"][0]["requirements"].pop(1)
+    new["features"][1]["requirements"].append(moved)
+
+    diff = sdd_export.compute_diff(old, new)
+
+    assert diff["changed"] == [{"section": "requirements", "id": "r2", "fields": [{"field": "feature", "from": "a", "to": "b"}]}]
+    assert diff["added"] == [] and diff["removed"] == []
+
+
+def test_diff_order_changed(sdd_export):
+    old = nutrients_of(draft(features=[feature("a"), feature("b", requirements=[requirement("b-one")])]))
+    new = copy.deepcopy(old)
+    new["features"].reverse()
+
+    diff = sdd_export.compute_diff(old, new)
+
+    assert diff["order_changed"] is True
+    assert diff["changed"] == []
+
+
+def test_diff_lists_changes_of_features_and_discarded(sdd_export):
+    old = nutrients_of(draft(discarded=[discarded("old")]))
+    new = copy.deepcopy(old)
+    new["features"][0]["depends_on"] = []
+    new["features"][0]["summary"] = "新的摘要。"
+    new["discarded"][0]["reason"] = "新的理由"
+
+    diff = sdd_export.compute_diff(old, new)
+
+    assert diff["changed"] == [
+        {"section": "features", "id": "deploy", "fields": [{"field": "summary", "from": "維護者可以使用 deploy。", "to": "新的摘要。"}]},
+        {"section": "discarded", "id": "old", "fields": [{"field": "reason", "from": "維護者決定捨棄", "to": "新的理由"}]},
+    ]
+
+
+def test_diff_with_no_difference(sdd_export):
+    old = nutrients_of(draft())
+
+    diff = sdd_export.compute_diff(old, copy.deepcopy(old))
+
+    assert (diff["added"], diff["removed"], diff["changed"], diff["order_changed"]) == ([], [], [], False)
+    assert diff["generation"] is None and diff["scope"] is None
+
+
+def test_validate_diffs_against_the_existing_nutrients(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    changed = draft()
+    changed["lessons"] = []
+    diff = validate(sdd_export, root, changed).out["diff"]
+
+    assert diff["base"] == "nutrients"
+    assert diff["removed"] == [{"section": "lessons", "id": "atomic-write", "title": "教訓 atomic-write"}]
+
+
+# ================================================================== write
+
+
+def read_export(root: Path, name: str) -> bytes:
+    return (root / ".sdd-export" / name).read_bytes()
+
+
+def test_write_touches_only_the_export_folder(sdd_export, tmp_path, fixed_day):
+    root = spec_project(tmp_path, git=HAS_GIT)
+    before = tree_snapshot(root)
+    result = write_ok(sdd_export, root, spec_draft(), expect="none")
+
+    changes = tree_changes(before, tree_snapshot(root))
+    assert changes["removed"] == [] and changes["changed"] == []
+    assert changes["added"] == [".sdd-export", ".sdd-export/.gitattributes", ".sdd-export/README.md",
+                                ".sdd-export/nutrients.json"]
+    out = result.out
+    assert list(out) == ["written", "created", "state", "generation", "counts", "diff"]
+    assert out["written"] == [".sdd-export/nutrients.json", ".sdd-export/README.md", ".sdd-export/.gitattributes"]
+    assert out["created"] is True
+    assert out["generation"] == 1
+    assert out["counts"]["features"] == 3
+    assert out["diff"]["base"] == "none"
+    assert out["state"] == run_export(sdd_export, root, "check").out["state"]
+
+
+def test_only_write_creates_files(sdd_export, tmp_path):
+    root = spec_project(tmp_path)
+    before = tree_snapshot(root)
+    run_export(sdd_export, root, "check")
+    run_export(sdd_export, root, "files")
+    run_export(sdd_export, root, "files", "--scope", "src")
+    validate(sdd_export, root, spec_draft())
+    assert tree_snapshot(root) == before
+
+    run_export(sdd_export, root, "write", "--expect", "none", stdin=dump(spec_draft()))
+    assert tree_snapshot(root) != before
+
+
+def test_written_nutrients(sdd_export, tmp_path, fixed_day):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    raw = read_export(root, "nutrients.json")
+
+    assert not raw.startswith(b"\xef\xbb\xbf") and b"\r" not in raw
+    parsed = json.loads(raw)
+    assert list(parsed)[:6] == ["tool", "schema", "generation", "project", "exported_at", "language"]
+    assert (parsed["tool"], parsed["schema"], parsed["exported_at"]) == ("sdd-export", 1, "2026-11-20")
+    assert raw == sdd_export.serialize(parsed, "nutrients")
+    assert read_export(root, ".gitattributes") == GITATTRIBUTES.encode("utf-8")
+
+
+def test_existing_gitattributes_is_left_alone(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    attributes = root / ".sdd-export" / ".gitattributes"
+    attributes.write_text("* text eol=lf\n# mine\n")
+
+    result = write_ok(sdd_export, root, draft())
+
+    assert attributes.read_text() == "* text eol=lf\n# mine\n"
+    assert result.out["written"] == [".sdd-export/nutrients.json", ".sdd-export/README.md"]
+    assert result.out["created"] is False
+    assert run_export(sdd_export, root, "check").out["gitattributes"] == "edited"
+
+
+MARKER = __import__("re").compile(
+    r"^<!-- Generated by sdd-export from nutrients\.json; do not edit\. source-sha256: ([0-9a-f]{64}) view-sha256: ([0-9a-f]{64}) -->$"
+)
+
+
+def test_readme_marker_and_hashes(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    readme = read_export(root, "README.md").decode("utf-8")
+    first, rest = readme.split("\n", 1)
+    match = MARKER.match(first)
+
+    assert match, first
+    assert match.group(1) == hashlib.sha256(read_export(root, "nutrients.json")).hexdigest()
+    assert match.group(2) == hashlib.sha256(rest.encode("utf-8")).hexdigest()
+
+
+def full_draft() -> dict:
+    features = [
+        feature("deploy", requirements=[
+            requirement("deploy-story", kind="story"),
+            requirement("deploy-one"),
+            requirement("deploy-edge", kind="edge-case", status="pending", evidence=[]),
+            requirement("deploy-sc", kind="success-criterion"),
+            requirement("deploy-assume", kind="assumption", source="maintainer", evidence=["maintainer"]),
+        ]),
+        feature("status", depends_on=["deploy"], requirements=[requirement("status-one")]),
+    ]
+    lessons = [lesson("why-json"), lesson("atomic-write", kind="pitfall"), lesson("no-symlink", kind="reversed")]
+    return draft(features=features, lessons=lessons, discarded=[discarded("old-idea", kind="doubt", reason="不是問題 | 沒影響")])
+
+
+def test_readme_structure(sdd_export, tmp_path, fixed_day):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, full_draft())
+    readme = read_export(root, "README.md").decode("utf-8")
+    lines = readme.split("\n")
+
+    assert lines[1] == "# Nutrients: my-tool"
+    order = [readme.index(h) for h in ("\n## Principles\n", "\n## Features\n", "\n## Lessons\n", "\n## Discarded\n")]
+    assert order == sorted(order)
+    for needle in ("2026-11-20", "Generation", "Scope", "full"):
+        assert needle in readme.split("## Principles")[0], needle
+    features = readme[readme.index("\n## Features\n"):readme.index("\n## Lessons\n")]
+    assert features.index("功能 deploy") < features.index("功能 status")
+    for rid in ("deploy-story", "deploy-one", "deploy-edge", "deploy-sc", "deploy-assume", "status-one"):
+        assert f"`{rid}`" in features
+    edge_line = next(line for line in features.split("\n") if "`deploy-edge`" in line)
+    assert "(pending)" in edge_line
+    one_line = next(line for line in features.split("\n") if "`deploy-one`" in line)
+    assert "(pending)" not in one_line
+    assert "src/app.py" in features
+    lessons = readme[readme.index("\n## Lessons\n"):readme.index("\n## Discarded\n")]
+    assert lessons.index("Decisions") < lessons.index("Pitfalls") < lessons.index("Reversed approaches")
+    discarded_part = readme[readme.index("\n## Discarded\n"):]
+    assert "| `old-idea` | doubt | 1 | 1 |" in discarded_part
+    assert "不是問題 \\| 沒影響" in discarded_part
+
+
+def test_readme_is_deterministic(sdd_export):
+    data = nutrients_of(full_draft())
+
+    assert sdd_export.render_readme(data) == sdd_export.render_readme(copy.deepcopy(data))
+    assert isinstance(sdd_export.render_readme(data), bytes)
+
+
+def test_check_after_write(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, full_draft())
+    out = run_export(sdd_export, root, "check").out
+
+    assert (out["export_dir"], out["nutrients"], out["view"]) == ("ours", "unchanged", "current")
+
+
+def test_expect_must_match(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    before = tree_snapshot(root)
+
+    for expect in ("none", "0" * 64):
+        result = run_export(sdd_export, root, "write", "--expect", expect, stdin=dump(draft(project="x")))
+        assert result.code == 1
+        assert result.out["reason"] == "changed"
+        assert result.out["error"] == CHANGED_ERROR
+        assert tree_snapshot(root) == before
+
+
+def test_expect_none_needs_a_missing_folder(sdd_export, tmp_path):
+    root = project(tmp_path)
+
+    assert run_export(sdd_export, root, "write", "--expect", "0" * 64, stdin=dump(draft())).out["reason"] == "changed"
+    assert not (root / ".sdd-export").exists()
+
+
+@pytest.mark.parametrize("bad", ["broken", "secret"])
+def test_write_validates_again(sdd_export, tmp_path, bad):
+    root = project(tmp_path)
+    data = draft()
+    if bad == "broken":
+        data["language"] = "en"
+    else:
+        data["lessons"][0]["text"] = "password=abc123"
+    result = run_export(sdd_export, root, "write", "--expect", "none", stdin=dump(data))
+
+    assert result.code == 1
+    assert result.out["reason"] == ("invalid" if bad == "broken" else "secret")
+    assert result.out["errors"]
+    assert not (root / ".sdd-export").exists()
+
+
+def test_write_stops_on_conflict(sdd_export, tmp_path):
+    root = project(tmp_path)
+    (root / ".sdd-export").mkdir()
+    (root / ".sdd-export" / "notes.txt").write_text("mine\n")
+    before = tree_snapshot(root)
+    result = run_export(sdd_export, root, "write", "--expect", "none", stdin=dump(draft()))
+
+    assert result.code == 3
+    assert result.out["reason"] == "conflict"
+    assert result.out["conflicts"] == [".sdd-export/notes.txt"]
+    assert tree_snapshot(root) == before
+
+
+def test_write_into_an_existing_empty_folder(sdd_export, tmp_path):
+    root = project(tmp_path)
+    (root / ".sdd-export").mkdir()
+
+    result = write_ok(sdd_export, root, draft(), expect="none")
+
+    assert result.out["created"] is False
+
+
+def failing_replace(sdd_export, monkeypatch, fail_on: int):
+    real = os.replace
+    calls = {"n": 0}
+
+    def replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] == fail_on:
+            raise OSError(28, "No space left on device")
+        return real(src, dst)
+
+    monkeypatch.setattr(sdd_export.os, "replace", replace)
+
+
+def leftovers(root: Path) -> list[str]:
+    folder = root / ".sdd-export"
+    return sorted(p.name for p in folder.iterdir() if ".tmp-" in p.name) if folder.is_dir() else []
+
+
+def test_second_replace_fails(sdd_export, tmp_path, monkeypatch):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    state = run_export(sdd_export, root, "check").out["state"]
+    new = draft(project="renamed")
+    failing_replace(sdd_export, monkeypatch, fail_on=2)
+
+    result = run_export(sdd_export, root, "write", "--expect", state, stdin=dump(new))
+
+    assert result.code == 1
+    assert result.out["reason"] == "os-error"
+    assert result.out["error"].startswith("could not write .sdd-export/: ")
+    assert json.loads(read_export(root, "nutrients.json"))["project"] == "renamed"
+    assert leftovers(root) == []
+    monkeypatch.undo()
+    out = run_export(sdd_export, root, "check").out
+    assert out["view"] == "stale"
+    assert out["nutrients"] == "edited"
+
+
+def test_writing_a_temporary_file_fails(sdd_export, tmp_path, monkeypatch):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    old = read_export(root, "nutrients.json")
+    state = run_export(sdd_export, root, "check").out["state"]
+    real_open = os.open
+
+    def broken_open(path, flags, *args, **kwargs):
+        if ".tmp-" in str(path):
+            raise OSError(13, "Permission denied")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(sdd_export.os, "open", broken_open)
+    result = run_export(sdd_export, root, "write", "--expect", state, stdin=dump(draft(project="renamed")))
+
+    assert result.out["reason"] == "os-error"
+    assert read_export(root, "nutrients.json") == old
+    assert leftovers(root) == []
+
+
+def test_new_folder_is_removed_after_a_failure(sdd_export, tmp_path, monkeypatch):
+    root = project(tmp_path)
+    failing_replace(sdd_export, monkeypatch, fail_on=1)
+
+    result = run_export(sdd_export, root, "write", "--expect", "none", stdin=dump(draft()))
+
+    assert result.out["reason"] == "os-error"
+    assert not (root / ".sdd-export").exists()
+
+
+def test_existing_empty_folder_is_kept_after_a_failure(sdd_export, tmp_path, monkeypatch):
+    root = project(tmp_path)
+    (root / ".sdd-export").mkdir()
+    failing_replace(sdd_export, monkeypatch, fail_on=1)
+
+    result = run_export(sdd_export, root, "write", "--expect", "none", stdin=dump(draft()))
+
+    assert result.out["reason"] == "os-error"
+    assert (root / ".sdd-export").is_dir()
+    assert list((root / ".sdd-export").iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32" or IS_ROOT, reason="needs POSIX permissions and a non-root user")
+def test_read_only_project(sdd_export, tmp_path):
+    root = project(tmp_path)
+    root.chmod(0o555)
+    try:
+        result = run_export(sdd_export, root, "write", "--expect", "none", stdin=dump(draft()))
+        exists = (root / ".sdd-export").exists()
+    finally:
+        root.chmod(0o755)
+
+    assert result.code == 1
+    assert result.out["reason"] == "os-error"
+    assert not exists
+
+
+def test_read_only_project_stand_in(sdd_export, tmp_path, monkeypatch):
+    """The same situation on every platform: creating the folder is refused."""
+    root = project(tmp_path)
+    real_mkdir = Path.mkdir
+
+    def refuse(self, *args, **kwargs):
+        if self.name == ".sdd-export":
+            raise PermissionError(13, "Permission denied")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", refuse)
+    result = run_export(sdd_export, root, "write", "--expect", "none", stdin=dump(draft()))
+
+    assert result.out["reason"] == "os-error"
+    assert not (root / ".sdd-export").exists()
+
+
+def test_same_draft_same_day_same_bytes(sdd_export, tmp_path, fixed_day):
+    root = project(tmp_path)
+    first = write_ok(sdd_export, root, full_draft(), expect="none")
+    files = {name: read_export(root, name) for name in ("nutrients.json", "README.md", ".gitattributes")}
+
+    second = write_ok(sdd_export, root, full_draft(), expect=first.out["state"])
+
+    assert {name: read_export(root, name) for name in files} == files
+    assert second.out["state"] == first.out["state"]
+
+
+def test_write_reads_the_draft_only_from_stdin(sdd_export, tmp_path):
+    root = project(tmp_path)
+    (root / "draft.json").write_text(dump(draft()), "utf-8")
+
+    for argv in (["write", "--expect", "none", "draft.json"], ["write", "--expect", "none", "--input", "draft.json"]):
+        assert run_export(sdd_export, root, *argv).out["reason"] == "usage"
