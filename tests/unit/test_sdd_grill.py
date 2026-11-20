@@ -717,3 +717,499 @@ def test_save_writes_only_its_own_folder(sdd_grill, grill_project):
     after = snapshot(root)
     changed = {k for k in set(before) | set(after) if before.get(k, 0) != after.get(k, 0)}
     assert changed and all(k.startswith(OWN) for k in changed), changed
+
+
+# =========================================================== save: confirmed
+
+
+def test_confirmed_requires_summary_decided_and_language(sdd_grill, grill_project):
+    root = grill_project()
+    cases = [
+        (confirmed_progress([feature("a")], stage="feature", current_feature="a"), "stage"),
+        (confirmed_progress([feature("a"), feature("b", status="discussing")]), "features[1].status"),
+        (confirmed_progress([feature("a")], language=None), "language"),
+    ]
+    for progress, path in cases:
+        result = save(sdd_grill, root, progress)
+        assert result.code == 1
+        assert result.out["error"].startswith(f"progress is invalid at {path}: "), result.out["error"]
+    assert not (root / OWN).exists()
+
+
+def test_first_confirmed_save_records_the_baseline(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION, specs={"001-old": "old\n"})
+    assert save(sdd_grill, root, minimal_progress()).code == 0
+
+    result = save(sdd_grill, root, confirmed_progress([feature("a")]))
+
+    assert result.code == 0
+    assert result.out == {"saved": PROGRESS, "phase": "confirmed", "baseline": True}
+    assert read_progress(root)["baseline"] == {
+        "constitution": sha(WRITTEN_CONSTITUTION),
+        "specs": {"specs/001-old/spec.md": sha("old\n")},
+    }
+
+
+def test_later_saves_keep_the_baseline(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION)
+    save(sdd_grill, root, confirmed_progress([feature("a"), feature("b", ["a"])]))
+    baseline = read_progress(root)["baseline"]
+
+    write_tree(root, {".specify/memory/constitution.md": "# Changed\n", "specs/001-a/spec.md": "a\n"})
+    progress = confirmed_progress([feature("a", spec_dir="specs/001-a"), feature("b", ["a"])])
+    progress["baseline"] = {"constitution": None, "specs": {}}
+    result = save(sdd_grill, root, progress)
+
+    assert result.code == 0 and result.out["baseline"] is False
+    assert read_progress(root)["baseline"] == baseline
+    assert read_progress(root)["fingerprint"]["specs"] == {"specs/001-a/spec.md": sha("a\n")}
+
+
+@pytest.mark.parametrize(
+    "spec_dir",
+    ["/abs/specs/001-a", "specs/../001-a", "specs/..", "specs/001-a/inner", "specs\\001-a", "001-a", "specs/", "other/001-a"],
+)
+def test_spec_dir_must_be_one_folder_under_specs(sdd_grill, grill_project, spec_dir):
+    root = grill_project()
+
+    result = save(sdd_grill, root, confirmed_progress([feature("a", spec_dir=spec_dir)]))
+
+    assert result.code == 1
+    assert result.out["error"].startswith("progress is invalid at features[0].spec_dir: ")
+
+
+def test_back_to_discussing_is_refused_once_a_spec_exists(sdd_grill, grill_project):
+    root = grill_project()
+    save(sdd_grill, root, confirmed_progress([feature("a"), feature("b", ["a"])]))
+    save(sdd_grill, root, confirmed_progress([feature("a", spec_dir="specs/001-a"), feature("b", ["a"])]))
+    before = (root / PROGRESS).read_bytes()
+
+    back = minimal_progress(stage="summary", features=[feature("a"), feature("b", ["a"])])
+    result = save(sdd_grill, root, back)
+
+    assert result.code == 1
+    assert result.out["error"] == (
+        "specs were already generated from the confirmed summary; it can no longer go back to discussing"
+    )
+    assert (root / PROGRESS).read_bytes() == before
+
+
+def test_back_to_discussing_before_any_spec_resets_the_baseline(sdd_grill, grill_project):
+    root = grill_project()
+    save(sdd_grill, root, confirmed_progress([feature("a")]))
+
+    result = save(sdd_grill, root, minimal_progress(stage="summary", features=[feature("a")]))
+
+    assert result.code == 0 and result.out == {"saved": PROGRESS, "phase": "discussing", "baseline": False}
+    assert read_progress(root)["baseline"] is None
+    write_tree(root, {"specs/001-new/spec.md": "new\n"})
+    again = save(sdd_grill, root, confirmed_progress([feature("a")]))
+    assert again.out["baseline"] is True
+    assert read_progress(root)["baseline"]["specs"] == {"specs/001-new/spec.md": sha("new\n")}
+
+
+# ================================================================== verify
+
+NOTHING_TO_VERIFY = "there is no confirmed summary to verify"
+MISMATCH = "the generated documents do not match the confirmed summary"
+
+
+def generated(sdd_grill, root: Path, features: list[dict], dirs: dict[str, str], action="create", constitution=None):
+    """Confirm features, then 'generate' the given spec folders and record them as spec_dir."""
+    assert save(sdd_grill, root, confirmed_progress(features, action)).code == 0
+    if constitution is not None:
+        write_tree(root, {".specify/memory/constitution.md": constitution})
+    for fid, folder in dirs.items():
+        write_tree(root, {f"{folder}/spec.md": f"spec of {fid}\n"})
+    done = copy.deepcopy(features)
+    for entry in done:
+        entry["spec_dir"] = dirs.get(entry["id"])
+    assert save(sdd_grill, root, confirmed_progress(done, action)).code == 0
+    return done
+
+
+def failures(result) -> list[str]:
+    return [f["check"] for f in result.out["failures"]]
+
+
+def test_verify_needs_a_confirmed_progress(sdd_grill, grill_project):
+    root = grill_project()
+    assert run_grill(sdd_grill, root, "verify").out["error"] == NOTHING_TO_VERIFY
+
+    save(sdd_grill, root, minimal_progress())
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert result.code == 1 and result.out["error"] == NOTHING_TO_VERIFY
+
+
+def test_verify_passes_and_lists_the_specs(sdd_grill, grill_project):
+    root = grill_project(constitution=CONSTITUTION_TEMPLATE)
+    generated(
+        sdd_grill,
+        root,
+        [feature("a"), feature("b", ["a"]), feature("c", ["a", "b"])],
+        {"a": "specs/001-a", "b": "specs/002-b", "c": "specs/003-c"},
+        constitution=WRITTEN_CONSTITUTION,
+    )
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert result.code == 0
+    assert result.out == {
+        "ok": True,
+        "failures": [],
+        "constitution": "written",
+        "specs": [
+            {"feature": "a", "dir": "specs/001-a", "depends_on": []},
+            {"feature": "b", "dir": "specs/002-b", "depends_on": ["specs/001-a"]},
+            {"feature": "c", "dir": "specs/003-c", "depends_on": ["specs/001-a", "specs/002-b"]},
+        ],
+        "unexpected": [],
+    }
+
+
+def test_verify_keeps_ids_of_features_without_spec_dir(sdd_grill, grill_project):
+    root = grill_project()
+    generated(sdd_grill, root, [feature("a"), feature("b", ["a"])], {}, constitution=WRITTEN_CONSTITUTION)
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert result.code == 1
+    assert result.out["error"] == MISMATCH
+    assert result.out["specs"][1] == {"feature": "b", "dir": None, "depends_on": ["a"]}
+    assert failures(result) == ["spec-missing", "spec-missing"]
+    assert "a" in result.out["failures"][0]["detail"]
+
+
+def test_verify_existing_spec_changed_or_removed(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION, specs={"001-old": "old\n", "002-old": "old 2\n"})
+    generated(sdd_grill, root, [feature("a")], {"a": "specs/003-a"}, action="keep")
+    write_tree(root, {"specs/001-old/spec.md": "edited\n"})
+    (root / "specs/002-old/spec.md").unlink()
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert failures(result) == ["existing-spec-changed", "existing-spec-changed"]
+    details = [f["detail"] for f in result.out["failures"]]
+    assert "specs/001-old/spec.md" in details[0] and "specs/002-old/spec.md" in details[1]
+
+
+def test_verify_existing_spec_with_other_line_endings_is_unchanged(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION, specs={"001-old": "old\nline\n"})
+    generated(sdd_grill, root, [feature("a")], {"a": "specs/002-a"}, action="keep")
+    write_tree(root, {"specs/001-old/spec.md": b"old\r\nline\r\n"})
+
+    assert run_grill(sdd_grill, root, "verify").out["ok"] is True
+
+
+def test_verify_constitution_kept(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION)
+    generated(sdd_grill, root, [feature("a")], {"a": "specs/001-a"}, action="keep")
+    assert run_grill(sdd_grill, root, "verify").out["ok"] is True
+
+    write_tree(root, {".specify/memory/constitution.md": WRITTEN_CONSTITUTION + "- More.\n"})
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert failures(result) == ["constitution-changed"]
+    assert ".specify/memory/constitution.md" in result.out["failures"][0]["detail"]
+
+
+@pytest.mark.parametrize("start, after", [(None, None), (CONSTITUTION_TEMPLATE, CONSTITUTION_TEMPLATE)])
+def test_verify_constitution_create_not_written(sdd_grill, grill_project, start, after):
+    root = grill_project(constitution=start)
+    generated(sdd_grill, root, [feature("a")], {"a": "specs/001-a"}, action="create", constitution=after)
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert failures(result) == ["constitution-not-written"]
+    assert result.code == 1
+
+
+def test_verify_constitution_amend(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION)
+    generated(sdd_grill, root, [feature("a")], {"a": "specs/001-a"}, action="amend")
+    assert failures(run_grill(sdd_grill, root, "verify")) == ["constitution-not-written"]
+
+    write_tree(root, {".specify/memory/constitution.md": WRITTEN_CONSTITUTION + "- Amended.\n"})
+    assert run_grill(sdd_grill, root, "verify").out["ok"] is True
+
+
+def test_verify_spec_dir_without_spec_md(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION)
+    generated(sdd_grill, root, [feature("a")], {"a": "specs/001-a"}, action="keep")
+    (root / "specs/001-a/spec.md").unlink()
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert failures(result) == ["spec-missing"]
+    assert "specs/001-a" in result.out["failures"][0]["detail"]
+
+
+def test_verify_spec_not_new(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION, specs={"001-old": "old\n"})
+    generated(
+        sdd_grill, root, [feature("a"), feature("b")], {"a": "specs/001-old", "b": "specs/001-old"}, action="keep"
+    )
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert "spec-not-new" in failures(result)
+    assert any("specs/001-old" in f["detail"] for f in result.out["failures"] if f["check"] == "spec-not-new")
+
+
+def test_verify_duplicate_spec_dirs_are_not_new(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION)
+    generated(sdd_grill, root, [feature("a"), feature("b")], {"a": "specs/001-a", "b": "specs/001-a"}, action="keep")
+
+    assert "spec-not-new" in failures(run_grill(sdd_grill, root, "verify"))
+
+
+def test_verify_order_and_dependency_order(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION)
+    generated(
+        sdd_grill, root, [feature("a"), feature("b", ["a"])], {"a": "specs/002-a", "b": "specs/001-b"}, action="keep"
+    )
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert failures(result) == ["order", "dependency-order"]
+    assert "specs/001-b" in result.out["failures"][0]["detail"]
+    assert "specs/001-b" in result.out["failures"][1]["detail"] and "specs/002-a" in result.out["failures"][1]["detail"]
+
+
+def test_verify_order_without_a_number(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION)
+    generated(sdd_grill, root, [feature("a")], {"a": "specs/a-without-number"}, action="keep")
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert failures(result) == ["order"]
+    assert "specs/a-without-number" in result.out["failures"][0]["detail"]
+
+
+def test_verify_order_compares_sequential_numbers_as_integers(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION, specs={"999-old": "old\n"})
+    generated(
+        sdd_grill, root, [feature("a"), feature("b", ["a"])], {"a": "specs/1000-a", "b": "specs/1001-b"}, action="keep"
+    )
+
+    assert run_grill(sdd_grill, root, "verify").out["ok"] is True
+
+
+def test_verify_order_compares_timestamps_as_strings(sdd_grill, grill_project):
+    root = grill_project(
+        constitution=WRITTEN_CONSTITUTION,
+        init_options='{"feature_numbering": "timestamp"}',
+        specs={"20261101-090000-old": "old\n"},
+    )
+    generated(
+        sdd_grill,
+        root,
+        [feature("a"), feature("b", ["a"])],
+        {"a": "specs/20261120-100000-a", "b": "specs/20261120-100005-b"},
+        action="keep",
+    )
+    assert run_grill(sdd_grill, root, "verify").out["ok"] is True
+
+
+def test_verify_lists_all_failures_at_once(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION, specs={"001-old": "old\n"})
+    generated(
+        sdd_grill,
+        root,
+        [feature("a"), feature("b", ["a"]), feature("c")],
+        {"a": "specs/003-a", "b": "specs/002-b"},
+        action="keep",
+    )
+    write_tree(root, {"specs/001-old/spec.md": "edited\n", ".specify/memory/constitution.md": "# Other\n"})
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert failures(result) == [
+        "existing-spec-changed",
+        "constitution-changed",
+        "spec-missing",
+        "order",
+        "dependency-order",
+    ]
+
+
+def test_verify_reports_unexpected_folders_without_failing(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION, specs={"001-old": "old\n"})
+    generated(sdd_grill, root, [feature("a")], {"a": "specs/002-a"}, action="keep")
+    write_tree(root, {"specs/003-stray/spec.md": "stray\n", "specs/004-no-spec/notes.md": "x\n"})
+
+    result = run_grill(sdd_grill, root, "verify")
+
+    assert result.code == 0 and result.out["ok"] is True
+    assert result.out["unexpected"] == ["specs/003-stray"]
+
+
+def test_verify_writes_nothing(sdd_grill, grill_project):
+    root = grill_project(constitution=WRITTEN_CONSTITUTION)
+    generated(sdd_grill, root, [feature("a")], {"a": "specs/002-a"}, action="keep")
+    before = snapshot(root, with_mtime=True)
+
+    run_grill(sdd_grill, root, "verify")
+    write_tree(root, {"specs/002-a/spec.md": "x\n"})
+    before_failing = snapshot(root, with_mtime=True)
+    run_grill(sdd_grill, root, "verify")
+
+    assert snapshot(root, with_mtime=True) == before_failing
+    assert set(before) == set(before_failing)
+
+
+# =================================================================== focus
+
+NOTHING_TO_POINT_AT = "there is no confirmed summary to point at"
+FOCUS_MISMATCH = "the generated documents do not match the confirmed summary; .specify/feature.json was not changed"
+NOT_REGULAR = ".specify/feature.json is not a regular file; nothing was written"
+FEATURE_JSON = ".specify/feature.json"
+
+
+def feature_json(directory: str) -> bytes:
+    return (json.dumps({"feature_directory": directory}, indent=2) + "\n").encode("utf-8")
+
+
+def two_generated(sdd_grill, root: Path, **options):
+    generated(
+        sdd_grill,
+        root,
+        [feature("a"), feature("b", ["a"])],
+        {"a": "specs/001-a", "b": "specs/002-b"},
+        constitution=WRITTEN_CONSTITUTION,
+        **options,
+    )
+
+
+def test_focus_needs_a_confirmed_progress(sdd_grill, grill_project):
+    root = grill_project()
+    write_tree(root, {FEATURE_JSON: feature_json("specs/002-b")})
+    assert run_grill(sdd_grill, root, "focus").out["error"] == NOTHING_TO_POINT_AT
+
+    save(sdd_grill, root, minimal_progress())
+    result = run_grill(sdd_grill, root, "focus")
+
+    assert result.code == 1 and result.out["error"] == NOTHING_TO_POINT_AT
+    assert (root / FEATURE_JSON).read_bytes() == feature_json("specs/002-b")
+
+
+def test_focus_does_not_write_when_verify_fails(sdd_grill, grill_project):
+    root = grill_project()
+    generated(
+        sdd_grill,
+        root,
+        [feature("a"), feature("b", ["a"])],
+        {"a": "specs/002-a", "b": "specs/001-b"},
+        constitution=WRITTEN_CONSTITUTION,
+    )
+    original = b'{"feature_directory": "specs/001-b"}'
+    write_tree(root, {FEATURE_JSON: original})
+
+    result = run_grill(sdd_grill, root, "focus")
+
+    assert result.code == 1
+    assert result.out["error"] == FOCUS_MISMATCH
+    assert failures(result) == ["order", "dependency-order"]
+    assert (root / FEATURE_JSON).read_bytes() == original
+
+
+def test_focus_points_at_the_first_spec(sdd_grill, grill_project):
+    root = grill_project()
+    two_generated(sdd_grill, root)
+    write_tree(root, {FEATURE_JSON: '{"feature_directory": "specs/002-b"}'})
+
+    result = run_grill(sdd_grill, root, "focus")
+
+    assert result.code == 0
+    assert result.out == {"feature_directory": "specs/001-a", "previous": "specs/002-b", "changed": True}
+    assert list(result.out) == ["feature_directory", "previous", "changed"]
+    assert (root / FEATURE_JSON).read_bytes() == feature_json("specs/001-a")
+    assert sorted(p.name for p in (root / ".specify").iterdir() if p.name.startswith(".feature")) == []
+
+
+def test_focus_twice_writes_once(sdd_grill, grill_project):
+    root = grill_project()
+    two_generated(sdd_grill, root)
+    write_tree(root, {FEATURE_JSON: feature_json("specs/001-a")})
+    before = snapshot(root, with_mtime=True)
+
+    first = run_grill(sdd_grill, root, "focus")
+    second = run_grill(sdd_grill, root, "focus")
+
+    assert first.out == second.out == {"feature_directory": "specs/001-a", "previous": "specs/001-a", "changed": False}
+    assert snapshot(root, with_mtime=True) == before
+
+
+@pytest.mark.parametrize("content", [None, b"not json", b"[1]", b'{"feature_directory": 3}', b'{"other": "x"}'])
+def test_focus_without_a_valid_value(sdd_grill, grill_project, content):
+    root = grill_project()
+    two_generated(sdd_grill, root)
+    if content is not None:
+        write_tree(root, {FEATURE_JSON: content})
+
+    result = run_grill(sdd_grill, root, "focus")
+
+    assert result.code == 0
+    assert result.out == {"feature_directory": "specs/001-a", "previous": None, "changed": True}
+    assert (root / FEATURE_JSON).read_bytes() == feature_json("specs/001-a")
+
+
+def test_focus_stops_when_feature_json_is_not_a_file(sdd_grill, grill_project):
+    root = grill_project()
+    two_generated(sdd_grill, root)
+    (root / FEATURE_JSON).mkdir()
+    before = snapshot(root)
+
+    result = run_grill(sdd_grill, root, "focus")
+
+    assert result.code == 1
+    assert result.out["error"] == NOT_REGULAR
+    assert snapshot(root) == before
+
+
+def test_focus_with_a_single_spec(sdd_grill, grill_project):
+    root = grill_project()
+    generated(sdd_grill, root, [feature("a")], {"a": "specs/001-a"}, constitution=WRITTEN_CONSTITUTION)
+    write_tree(root, {FEATURE_JSON: feature_json("specs/001-a")})
+
+    result = run_grill(sdd_grill, root, "focus")
+
+    assert result.out == {"feature_directory": "specs/001-a", "previous": "specs/001-a", "changed": False}
+
+
+def test_feature_json_stays_out_of_git(sdd_grill, grill_project):
+    root = grill_project()
+    git_commit_all(root, "spec kit")
+    two_generated(sdd_grill, root)
+    git_commit_all(root, "specs")
+
+    assert run_grill(sdd_grill, root, "focus").code == 0
+
+    assert (root / FEATURE_JSON).is_file()
+    assert git_status(root) == ""
+
+
+def test_focus_writes_only_feature_json(sdd_grill, grill_project):
+    root = grill_project()
+    two_generated(sdd_grill, root)
+    before = snapshot(root)
+
+    run_grill(sdd_grill, root, "focus")
+
+    after = snapshot(root)
+    changed = {k for k in set(before) | set(after) if before.get(k, 0) != after.get(k, 0)}
+    assert changed == {FEATURE_JSON}
+
+
+@pytest.mark.parametrize("command", ["check", "verify", "save", "clear"])
+def test_other_commands_never_write_feature_json(sdd_grill, grill_project, command):
+    root = grill_project()
+    two_generated(sdd_grill, root)
+    write_tree(root, {FEATURE_JSON: '{"feature_directory": "specs/002-b"}'})
+    progress = read_progress(root)
+
+    stdin = json.dumps(progress) if command == "save" else None
+    run_grill(sdd_grill, root, command, stdin=stdin)
+
+    assert (root / FEATURE_JSON).read_bytes() == b'{"feature_directory": "specs/002-b"}'
