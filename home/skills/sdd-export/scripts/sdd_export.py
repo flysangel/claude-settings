@@ -213,7 +213,9 @@ SECRET_PATTERNS = [
     re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}"),
     re.compile(r"(?<![A-Za-z0-9])xox[abpr]-[A-Za-z0-9-]{10,}"),
     re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}"),
-    re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
+    # Anchored at the start of the scheme (unlike sdd-grill's copy) so a long run of letters is scanned once,
+    # not once per letter; it matches the same lines.
+    re.compile(r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
     re.compile(r"(?i)(?<![A-Za-z])(password|secret|token|api[_-]?key)\s*[=:]\s*\S"),
 ]
 
@@ -615,12 +617,21 @@ def evidence_problem(root: Path | None, value: str, git: dict) -> tuple[str, boo
         return "this path is a secret file, which sdd-export never opens", True
     if root is None:
         return None
-    excluded = excluded_category(value)
-    if excluded:
-        return f"this path is excluded from reading ({excluded})", False
     target = root / value
     if not target.exists():
         return "this path does not exist in the project", False
+    if not inside(root, os.path.realpath(target)):
+        return "this path leads outside the project", False
+    excluded = excluded_category(value, target.is_dir())
+    if excluded is None and target.is_file() and value != LINEAGE_PATH:
+        excluded = file_category(root, value)[0]
+        if excluded is None:
+            if git.get("repo") is None:
+                git["repo"] = is_git_repository(root)
+            if git["repo"] and value != CONSTITUTION_PATH and not git_list(root, "--cached", "--others", "--exclude-standard", "--", value):
+                excluded = "ignored"
+    if excluded and value != LINEAGE_PATH:
+        return f"this path is excluded from reading ({excluded})", False
     return None
 
 
@@ -1046,10 +1057,291 @@ def load_lineage(path: Path) -> tuple[str, dict | None, list[Problem]]:
 
 # -------------------------------------------------------------- read scope
 
+# data-model.md "讀取範圍"; names are compared in lowercase on every platform.
+DEPENDENCY_DIRS = frozenset({
+    "node_modules", "bower_components", "jspm_packages", "vendor", ".venv", "venv", "pods", "carthage", ".terraform",
+    ".bundle",
+})
+BUILD_DIRS = frozenset({
+    "dist", "build", "target", "bin", "obj", "out", ".next", ".nuxt", ".svelte-kit", ".output", "coverage", "htmlcov",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox", ".gradle", ".cache", ".parcel-cache",
+    ".turbo", ".eggs",
+})
+BUILD_SUFFIX = ".egg-info"
+TOOLING_DIRS = frozenset({".git", ".idea", ".vscode", ".claude", ".sdd-export", ".sdd-rebuild", ".specify"})
+GENERATED_NAMES = frozenset({
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", "uv.lock", "poetry.lock",
+    "pipfile.lock", "cargo.lock", "go.sum", "composer.lock", "gemfile.lock", "packages.lock.json",
+})
+GENERATED_SUFFIXES = (".min.js", ".min.css", ".map")
+BINARY_SUFFIXES = (
+    # images
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".icns", ".webp", ".tif", ".tiff", ".psd", ".heic", ".avif",
+    # audio and video
+    ".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".mp4", ".m4v", ".mov", ".avi", ".mkv", ".webm", ".wmv",
+    # fonts
+    ".ttf", ".otf", ".woff", ".woff2", ".eot",
+    # archives
+    ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".jar", ".war", ".whl", ".nupkg",
+    # executables and libraries
+    ".exe", ".dll", ".so", ".dylib", ".a", ".lib", ".o", ".obj", ".class", ".pyc", ".pyo", ".wasm", ".bin", ".msi",
+    ".dmg", ".iso", ".apk", ".ipa",
+    # databases
+    ".db", ".sqlite", ".sqlite3", ".mdb", ".accdb",
+    # documents
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp",
+)
+LARGE_FILE = 1024 * 1024
+MAX_FILES = 1500
+MAX_BYTES = 10 * 1024 * 1024
+SNIFF_BYTES = 8 * 1024
+MANIFEST_NAMES = frozenset({
+    "package.json", "pyproject.toml", "setup.py", "go.mod", "cargo.toml", "pom.xml", "build.gradle",
+    "build.gradle.kts", "composer.json", "gemfile", "mix.exs", "pubspec.yaml",
+})
+MANIFEST_SUFFIXES = (".csproj", ".sln")
+SKIPPED_KEYS = ("ignored", "dependency", "build", "tooling", "generated", "secret", "binary", "large")
+ROOT_AREA = "."
 
-def excluded_category(path: str) -> str | None:
-    """The category that excludes a path by its name alone (added with the read scope)."""
+
+def folder_category(name: str, top: bool) -> str | None:
+    """The category that excludes a folder by its name, or None."""
+    name = name.lower()
+    if top and name in TOOLING_DIRS:
+        return "tooling"
+    if name in DEPENDENCY_DIRS:
+        return "dependency"
+    if name in BUILD_DIRS or name.endswith(BUILD_SUFFIX):
+        return "build"
     return None
+
+
+def excluded_folder(path: str, is_dir: bool = False) -> tuple[str, str] | None:
+    """(category, folder) for the first folder of path that is excluded, or None.
+
+    .specify/memory/constitution.md stays readable although .specify/ is tooling.
+    """
+    if path == CONSTITUTION_PATH:
+        return None
+    parts = path.split("/")
+    folders = parts if is_dir else parts[:-1]
+    for index, name in enumerate(folders):
+        category = folder_category(name, index == 0)
+        if category:
+            return category, "/".join(parts[: index + 1])
+    return None
+
+
+def name_category(name: str) -> str | None:
+    """The category that excludes a file by its name: secret, generated or binary; None otherwise."""
+    lowered = name.lower()
+    if is_secret_name(lowered):
+        return "secret"
+    if lowered in GENERATED_NAMES or lowered.endswith(GENERATED_SUFFIXES):
+        return "generated"
+    if lowered.endswith(BINARY_SUFFIXES):
+        return "binary"
+    return None
+
+
+def excluded_category(path: str, is_dir: bool = False) -> str | None:
+    """The category that excludes a path by its name alone, or None (a secret file is "secret")."""
+    folder = excluded_folder(path, is_dir)
+    if folder:
+        return folder[0]
+    if is_secret_path(path):
+        return "secret"
+    return None if is_dir else name_category(path.rsplit("/", 1)[-1])
+
+
+def inside(root: Path, target: str) -> bool:
+    try:
+        Path(target).relative_to(os.path.realpath(root))
+    except ValueError:
+        return False
+    return True
+
+
+def file_category(root: Path, path: str) -> tuple[str | None, int]:
+    """(category or None when readable, size) of one file; secret files are judged by name and never opened."""
+    full = root / path
+    if is_secret_path(path):
+        return "secret", 0
+    category = name_category(path.rsplit("/", 1)[-1])
+    if category:
+        return category, 0
+    if full.is_symlink():
+        target = os.path.realpath(full)
+        if not inside(root, target) or os.path.isdir(target):
+            return "ignored", 0
+    try:
+        size = full.stat().st_size
+    except OSError:
+        return "ignored", 0
+    if size > LARGE_FILE:
+        return "large", size
+    with open(full, "rb") as handle:
+        if b"\0" in handle.read(SNIFF_BYTES):
+            return "binary", size
+    return None, size
+
+
+class Scan:
+    """Every readable file of a project with its size, and every excluded file or folder with its category.
+
+    Excluded folders (dependency, build, tooling) count once each; excluded files count one by one.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.readable: dict[str, int] = {}
+        self.skipped: list[tuple[str, str]] = []
+        listed = git_list(root, "--cached", "--others", "--exclude-standard") if is_git_repository(root) else None
+        self.ignore_source = "none" if listed is None else "git"
+        if listed is None:
+            self._walk()
+        else:
+            self._from_git(listed)
+        constitution = root / CONSTITUTION_PATH
+        if CONSTITUTION_PATH not in self.readable and constitution.is_file() and not constitution.is_symlink():
+            category, size = file_category(root, CONSTITUTION_PATH)
+            if category is None:
+                self.readable[CONSTITUTION_PATH] = size
+
+    def _add_file(self, path: str) -> None:
+        category, size = file_category(self.root, path)
+        if category is None:
+            self.readable[path] = size
+        else:
+            self.skipped.append((category, path))
+
+    def _walk(self) -> None:
+        for current, dirs, names in os.walk(self.root, followlinks=False):
+            base = Path(current).relative_to(self.root).as_posix()
+            prefix = "" if base == "." else base + "/"
+            for name in sorted(dirs):
+                rel = prefix + name
+                category = folder_category(name, top=not prefix)
+                if (Path(current) / name).is_symlink():
+                    self.skipped.append(("ignored", rel))
+                    dirs.remove(name)
+                elif category:
+                    self.skipped.append((category, rel))
+                    dirs.remove(name)
+            for name in sorted(names):
+                self._add_file(prefix + name)
+
+    def _from_git(self, listed: list[str]) -> None:
+        folders: set[tuple[str, str]] = set()
+        for path in sorted(set(listed)):
+            full = self.root / path
+            if not full.is_file() and not full.is_symlink():
+                continue
+            folder = excluded_folder(path)
+            if folder:
+                folders.add(folder)
+                continue
+            if full.is_symlink() and os.path.isdir(full):
+                self.skipped.append(("ignored", path))
+                continue
+            self._add_file(path)
+        self.skipped.extend(folders)
+        ignored = git_list(self.root, "--others", "--ignored", "--exclude-standard", "--directory") or []
+        self.skipped.extend(("ignored", entry.rstrip("/")) for entry in ignored)
+
+    def within(self, scopes: list[str]) -> tuple[dict[str, int], list[tuple[str, str]]]:
+        """The readable files and the exclusions under the scopes; no scopes means the whole project."""
+        if not scopes:
+            return dict(self.readable), list(self.skipped)
+
+        def covered(path: str) -> bool:
+            return any(path == scope or path.startswith(scope + "/") for scope in scopes)
+
+        readable = {path: size for path, size in self.readable.items() if covered(path) or always_read(path)}
+        return readable, [(category, path) for category, path in self.skipped if covered(path)]
+
+
+def always_read(path: str) -> bool:
+    """The constitution and every specs/<name>/spec.md: the sources of FR-005, read whatever the scope."""
+    parts = path.split("/")
+    return path == CONSTITUTION_PATH or (len(parts) == 3 and parts[0] == SPECS_DIR and parts[2] == "spec.md")
+
+
+def summary_of(readable: dict[str, int], skipped: list[tuple[str, str]]) -> dict:
+    """files, bytes, too_large, areas, skipped and secret_files of a set of readable files and exclusions."""
+    areas: dict[str, dict] = {}
+    for path, size in readable.items():
+        head, _, rest = path.partition("/")
+        name = head if rest else ROOT_AREA
+        area = areas.setdefault(name, {"path": name, "files": 0, "bytes": 0, "manifests": []})
+        area["files"] += 1
+        area["bytes"] += size
+        leaf = rest if rest else head
+        if "/" not in leaf and (leaf.lower() in MANIFEST_NAMES or leaf.lower().endswith(MANIFEST_SUFFIXES)):
+            area["manifests"].append(leaf)
+    ordered_areas = sorted((a for a in areas.values() if a["path"] != ROOT_AREA), key=lambda a: a["path"])
+    if ROOT_AREA in areas:
+        ordered_areas.append(areas[ROOT_AREA])
+    for area in ordered_areas:
+        area["manifests"].sort()
+    count, total = len(readable), sum(readable.values())
+    with_manifests = sum(1 for area in ordered_areas if area["manifests"])
+    counts = {key: 0 for key in SKIPPED_KEYS}
+    for category, _ in skipped:
+        counts[category] += 1
+    return {
+        "files": count,
+        "bytes": total,
+        "too_large": count > MAX_FILES or total > MAX_BYTES or with_manifests >= 2,
+        "areas": ordered_areas,
+        "skipped": counts,
+        "secret_files": sorted(path for category, path in skipped if category == "secret"),
+    }
+
+
+def read_scope(root: Path, scopes: list[str] | None = None) -> dict:
+    """The readable files of root (under scopes, when given), how many paths each rule excluded, and the secret files.
+
+    Paths are relative and slash-separated; secret files are listed by path and never opened.
+    """
+    scan = Scan(root)
+    readable, skipped = scan.within(scopes or [])
+    summary = summary_of(readable, skipped)
+    return {**summary, "ignore_source": scan.ignore_source, "readable": dict(sorted(readable.items())), "scan": scan}
+
+
+def scope_problem(root: Path, scan: Scan, scope: str) -> str | None:
+    """Why a --scope path cannot be used, or None."""
+    problem = path_problem(scope)
+    if problem:
+        return f"the scope {scope!r} {problem}"
+    target = root / scope
+    if not target.exists() and not target.is_symlink():
+        return f"the scope {scope!r} does not exist in the project"
+    if not inside(root, os.path.realpath(target)):
+        return f"the scope {scope!r} is outside the project"
+    is_dir = target.is_dir()
+    category = excluded_category(scope, is_dir)
+    if category is None and not is_dir and scope not in scan.readable:
+        category = next((c for c, path in scan.skipped if path == scope), "excluded")
+    if category is None and any(c == "ignored" and (scope == p or scope.startswith(p + "/")) for c, p in scan.skipped):
+        category = "ignored"
+    if category:
+        return f"the scope {scope!r} is excluded from reading ({category})"
+    return None
+
+
+def normalized_scope(scope: str) -> str:
+    scope = scope.replace("\\", "/") if os.sep == "\\" else scope
+    while scope.endswith("/") and len(scope) > 1:
+        scope = scope[:-1]
+    return scope
+
+
+def inventory_of(root: Path) -> dict:
+    """The read scope of the whole project as `check` reports it: numbers only, no file list."""
+    scope = read_scope(root)
+    return {key: scope[key] for key in ("files", "bytes", "too_large", "ignore_source", "areas", "skipped", "secret_files")}
 
 
 # ------------------------------------------------------------ project state
@@ -1118,12 +1410,6 @@ def project_state(root: Path, inventory: bool) -> dict:
     if reason is None and inventory:
         state["inventory"] = inventory_of(root)
     return {**state, "reason": reason, "problems": problems}
-
-
-def inventory_of(root: Path) -> dict:
-    """What the read scope holds (added with the read scope)."""
-    return {"files": 0, "bytes": 0, "too_large": False, "ignore_source": "none", "areas": [], "skipped": {},
-            "secret_files": []}
 
 
 def state_failure(io, state: dict, extra: dict | None = None) -> int:
@@ -1202,6 +1488,32 @@ def command_validate(io, project: Path, options: dict) -> int:
     if problems:
         return draft_failure(io, problems, out)
     return io.emit(out)
+
+
+def command_files(io, project: Path, options: dict) -> int:
+    state = project_state(project, inventory=False)
+    if state["reason"] is not None:
+        return state_failure(io, state)
+    scopes = sorted({normalized_scope(scope) for scope in options["scope"]})
+    scan = Scan(project)
+    for scope in scopes:
+        problem = scope_problem(project, scan, scope)
+        if problem:
+            return io.fail(problem, "usage", EXIT_FAILED)
+    readable, skipped = scan.within(scopes)
+    summary = summary_of(readable, skipped)
+    files = [] if summary["too_large"] else [{"path": path, "bytes": size} for path, size in sorted(readable.items())]
+    hits = []
+    for entry in files:
+        hits.extend({"path": entry["path"], "line": line} for line in scan_file(project / entry["path"]))
+    return io.emit({
+        "scope": scopes,
+        "too_large": summary["too_large"],
+        "files": files,
+        "secret_hits": hits,
+        "skipped": summary["skipped"],
+        "secret_files": summary["secret_files"],
+    })
 
 
 def write_temporary(folder: Path, name: str, data: bytes, temporaries: list[Path]) -> Path:
@@ -1347,11 +1659,7 @@ def main(argv: list[str] | None = None, root: Path | None = None, stdin=None, st
     return HANDLERS[command](io, project.resolve(), options)
 
 
-def not_yet(io: Io, project: Path, options: dict) -> int:
-    return io.fail("not implemented yet", "usage")
-
-
-HANDLERS = {"check": command_check, "files": not_yet, "validate": command_validate, "write": command_write}
+HANDLERS = {"check": command_check, "files": command_files, "validate": command_validate, "write": command_write}
 
 
 if __name__ == "__main__":

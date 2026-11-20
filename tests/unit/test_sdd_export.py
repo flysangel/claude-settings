@@ -1804,13 +1804,22 @@ def test_build_folders(sdd_export, tmp_path, name):
     skipped_only(result, build=1)
 
 
-@pytest.mark.parametrize("name", TOOLING_DIRS)
+@pytest.mark.parametrize("name", [name for name in TOOLING_DIRS if name != ".sdd-export"])
 def test_tooling_folders_at_the_top(sdd_export, tmp_path, name):
     root = project(tmp_path, files={f"{name}/notes.md": "x\n", f"src/{name}/kept.md": "kept\n"})
     result = run_export(sdd_export, root, "files")
 
-    assert files_of(result) == ["README.md", "src/app.py", f"src/{name}/kept.md"] or \
-        files_of(result) == sorted(["README.md", "src/app.py", f"src/{name}/kept.md"])
+    assert files_of(result) == sorted(["README.md", "src/app.py", f"src/{name}/kept.md"])
+    skipped_only(result, tooling=1)
+
+
+def test_the_export_folder_is_not_read(sdd_export, tmp_path):
+    """.sdd-export/ holding anything else is a conflict; holding the nutrients, it is tooling."""
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    result = run_export(sdd_export, root, "files")
+
+    assert files_of(result) == ["README.md", "src/app.py"]
     skipped_only(result, tooling=1)
 
 
@@ -2118,3 +2127,13 @@ def test_quickstart_project(sdd_export, tmp_path):
     assert check["inventory"]["secret_files"] == [".env"]
     assert [entry["path"] for entry in files["files"]] == ["README.md", "src/app.py", "src/settings.py"]
     assert files["secret_hits"] == [{"path": "src/settings.py", "line": 1}]
+
+
+def test_secret_scan_of_a_long_line_is_fast(sdd_export):
+    """A 1 MiB line of letters (a readable file may hold one) is scanned in linear time."""
+    import time
+
+    started = time.monotonic()
+    assert sdd_export.secret_lines("a" * (1024 * 1024)) == []
+    assert sdd_export.secret_lines("x" * 500_000 + " https://u:p4ss@example.invalid") == [1]
+    assert time.monotonic() - started < 5
