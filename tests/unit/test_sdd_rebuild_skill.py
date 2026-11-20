@@ -753,3 +753,61 @@ def test_readme_lists_the_three_known_limitations():
     assert "同一代" in limits and "第一次" in limits
     assert "被捨棄" in limits and "不能重用" in limits
     assert "舊專案的世代紀錄" in limits and "遺失" in limits
+
+
+# --------------------------- (T070) items 13 to 50 of contracts/skill.md, by number
+# Items 1 to 12 are GENERAL_RULES above; the outcome rows are OUTCOMES above.
+
+ITEMS = {
+    13: (1, ("old-required", "do not search")),
+    14: (1, ("check", "before anything else")),
+    15: (2, ("export now", "/sdd-export", "stop")),
+    16: (2, ("export_skill", "false", "stop")),
+    17: (2, ("../sdd-export/SKILL.md", "rules for the whole run")),
+    18: (3, ("nutrients", "never read")),
+    19: (3, ("partial", "included")),
+    20: (3, ("old_lineage", "needs_old_lineage")),
+    21: (3, ("first progress", '"phase": "deciding"')),
+    22: (4, ("keep", "amend")),
+    23: (4, ("existing_spec", "never change")),
+    24: (4, ("neither", "skip")),
+    25: (5, ("keep everything", "item by item")),
+    26: (5, ("principles", "features", "lessons", "one item per question")),
+    27: (5, ("pending", "pending_decided", "never record")),
+    28: (5, ("after every decision", '"stage": "items"')),
+    29: (6, ("rules for questioning", "../sdd-grill/SKILL.md")),
+    30: (6, ("after every decision", '"stage": "new"')),
+    31: (7, ("adjustments", "lesson", "own question")),
+    32: (7, ("still applies", "discards")),
+    33: (8, ('"stage": "summary"', "preview")),
+    34: (8, ("summary", "completely")),
+    35: (8, ("confirm and generate", "recommended")),
+    36: (9, ("speckit-constitution", "only the confirmed principles")),
+    37: (9, ("both directions",)),
+    38: (10, ("speckit-specify", "assumptions")),
+    39: (10, ("claim", "before invoking")),
+    40: (10, ("compare", "summary", "clarifying")),
+    41: (11, ("verify", "before the lineage")),
+    42: (12, ("lineage",)),
+    43: (13, ("focus", "clear")),
+    44: (13, ("/sdd-drive",)),
+    45: ("resume", ("phase", "stage", "next.step")),
+    46: ("resume", ("source_changed", "source_diff")),
+    47: ("resume", ("changed", "stage 4", "verify")),
+    48: ("resume", ("next.step",)),
+    49: ("resume", ("start over", "kept", "existing content")),
+    50: ("resume", ("change a decision", "finish as confirmed")),
+}
+
+
+def test_items_13_to_50_are_all_listed():
+    assert sorted(ITEMS) == list(range(13, 51))
+
+
+@pytest.mark.parametrize("number", sorted(ITEMS))
+def test_items_13_to_50(number):
+    stage, words = ITEMS[number]
+    part = section(stage).lower()
+
+    for word in words:
+        assert word.lower() in part, (number, word)
