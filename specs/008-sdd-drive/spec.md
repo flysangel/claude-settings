@@ -132,6 +132,9 @@
 - **FR-016**: 本 skill MUST NOT 修改 constitution 與 spec 的需求內容；需求有問題時 MUST 以失敗回報，由維護者處理。
 - **FR-017**: 本 skill 在 Windows 與 Linux MUST 有相同的行為。
 - **FR-018**: 本 skill MUST 以英文撰寫，其資料夾 MUST 包含一份繁體中文的 README 簡述。
+- **FR-019**: 每次開子 session 前，本 skill MUST 依該階段與該 spec 的工作性質評估要使用的模型，
+  MUST NOT 一律使用最強的模型：需要設計判斷或調查的工作使用較強的模型，機械性的工作使用較省的模型。
+- **FR-020**: 每個階段的回報 MUST 寫出該子 session 使用的模型與選擇的理由。
 
 ### Key Entities
 
@@ -151,9 +154,11 @@
 - **SC-005**: 失敗時，維護者只讀主 session 的回報就知道是哪一份、哪個步驟與原因，不需要開啟子 session 的紀錄。
 - **SC-006**: 在只安裝了 Claude Code 與本專案 skill 的機器上，流程可以完整執行。
 - **SC-007**: 主 session 親自產生的 plan、tasks 與程式碼數量為 0。
+- **SC-008**: 100% 的子 session 在回報中都列出使用的模型與理由；整批流程中，不是每一個子 session 都使用最強的模型。
 
 ## Assumptions
 
+- 哪些模型可用、各階段預設對應哪一級模型，以及如何指定，由 plan 決定；FR-019 只要求逐次評估，不規定固定的對應表。
 - 開子 session 的機制、主 session 如何得知子 session 的結果，由 plan 決定。
 - 全自動代表維護者不會在實作前看到 plan；想限制的技術決定應寫進專案的 constitution。這是維護者已知悉並接受的取捨。
 - 「測試通過」以專案自己的測試為準；沒有測試時依 Edge Cases 處理。
