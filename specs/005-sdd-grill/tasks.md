@@ -180,7 +180,7 @@ skill 的結構與內容檢查在 `tests/unit/test_sdd_grill_skill.py`；改同�
 - [X] T041 撰寫 `home/skills/sdd-grill/README.md`（繁體中文，指令與識別字保留原文），內容依 contracts/skill.md「README.md」逐項涵蓋，讓 T040 通過；若 repo 根目錄的 `README.md` 列有 skill 的現況，同步更新 `sdd-grill` 的狀態（先 `grep` 確認；沒有列則不改）
 - [X] T042 依 `specs/005-sdd-grill/quickstart.md`「手動情境（腳本）」的 8 個情境，在 `mktemp -d` 建立的暫存目錄逐一實跑 `uv run <repo>/home/skills/sdd-grill/scripts/sdd_grill.py`，並修正與預期不符之處；每個情境用新的暫存目錄。準備「導入 Spec Kit 的專案」時，可以用 T002 的假專案輔助函式的結構手動建立（不需要網路），也可以在有網路時執行 `sdd_init.py init`；MUST NOT 在這個 repo 的目錄、真正的 `~/.claude`，或這個 repo 的 `.specify/` 執行；MUST NOT 讀取 `~/.claude/skills/sdd-grill`。情境 5 中手動建立的 `spec.md` 只為測試腳本
 - [X] T043 執行完整測試 `uv run --with pytest pytest`，結束碼 0；確認 `git status` 中 `.specify/`（含 `.specify/feature.json`）與 `~/.claude` 都沒有被這次的工作更動；逐項核對 contracts/skill.md「內文」第 1–31 項都有至少一條對應的內容檢查，缺少的補上測試；確認 `tests/unit/test_claude_md.py` 在 `home/skills/sdd-grill/SKILL.md` 存在後仍通過。Windows 上的結果由 T044 的 CI 確認（constitution 原則 II）
-- [ ] T044 **由主代理在維護者授權推送後處理，實作的 worker 不執行這一項、不 push**：推送分支後確認 `.github/workflows/ci.yml` 的 `test`、`cross-platform-produce`、`cross-platform` 三個 job 在 `ubuntu-latest` 與 `windows-latest` 都通過；Windows 與跨平台的行為以 CI 結果為準，失敗時依紀錄修正後再確認
+- [X] T044 **由主代理在維護者授權推送後處理，實作的 worker 不執行這一項、不 push**：推送分支後確認 `.github/workflows/ci.yml` 的 `test`、`cross-platform-produce`、`cross-platform` 三個 job 在 `ubuntu-latest` 與 `windows-latest` 都通過；Windows 與跨平台的行為以 CI 結果為準，失敗時依紀錄修正後再確認
 
 ---
 
