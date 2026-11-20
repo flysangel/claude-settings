@@ -352,3 +352,22 @@ def test_all_sections_are_present():
 
     for name in (START, RESUME, RULES, ORDER, SAVING, SUMMARY, GENERATE, FAILURE, FINISH):
         assert name in names, name
+
+
+def test_existing_project_instructions():
+    rules, order, generate = section(RULES), section(ORDER), section(GENERATE)
+
+    # Item 11 and US4-2: existing decisions are not asked again; conflicts with the constitution go to the maintainer.
+    has_all(rules, "existing", "constitution", "specs")
+    has_any(rules, "count as decided", "are already decided")
+    has_any(rules, "amend the principle", "revise the principle")
+    # Item 15: only conflicts and additions; keep or amend.
+    has_all(order, "already has a constitution", "conflict")
+    has_any(order, '"keep"', "`keep`")
+    has_any(order, '"amend"', "`amend`")
+    has_any(order, "only deal with", "only handle")
+    has_all(order, "existing spec", "specs/")
+    # Items 23 and 24: the constitution only changes when amended; existing specs are never overwritten.
+    has_all(generate, "existing spec")
+    has_any(generate, "never overwrite", "never overwritten", "do not overwrite", "not overwritten")
+    has_any(generate, "after the existing ones", "after existing specs")
