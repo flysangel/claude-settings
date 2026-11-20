@@ -15,7 +15,13 @@
 
 ## 前置需求
 
-- `uv`、`git`、`bash` 都在 `PATH` 上。Windows 的 `bash` 是隨 Git for Windows 安裝的 Git Bash。
+- `uv`、`git`、`bash` 都在 `PATH` 上。
+- Windows 的 `bash` 只承認隨 Git for Windows 安裝的 Git Bash，而且 Git for Windows 的 `git` MUST 在 `PATH` 上：
+  導入前會詢問 `git` 它的安裝位置，再確認其中有 `bash.exe`，所以 Git for Windows 裝在哪裡都可以。
+  WSL 的 `bash.exe`（例如 `System32` 內的那一個）與其他來源的 bash 不算；`PATH` 上誰排在前面不影響結果。
+  找不到時會顯示 `missing   bash (Git Bash, included with Git for Windows)`，不建立任何檔案。
+- 這項檢查只確認這台機器有 Git Bash。之後實際執行 Spec Kit 腳本的是 Claude Code 的 Bash tool，
+  它使用哪一個 bash 由 Claude Code 決定，`/sdd-init` 不會改變。
 - 需要網路：向 PyPI 查詢最新穩定版，並由 `uv` 下載官方工具 `specify-cli`。
   已完整導入的專案再次執行時不會連線。
 
