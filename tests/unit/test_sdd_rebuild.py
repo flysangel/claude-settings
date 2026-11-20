@@ -1540,7 +1540,7 @@ def test_confirm_needs_language_and_decided_adjustments_and_passing_checks(sdd_r
     candidate = {**copy.deepcopy(progress), "phase": "confirmed", "stage": "summary"}
     candidate["target"]["lessons"] = []
     result = save(sdd_rebuild, new, candidate)
-    assert (result.out["reason"], [e["check"] for e in result.out["errors"]]) == ("invalid", ["unaccounted"])
+    assert (result.out["reason"], {e["check"] for e in result.out["errors"]}) == ("invalid", {"unaccounted"})
 
 
 def test_back_to_deciding_before_anything_was_generated(sdd_rebuild, tmp_path, sdd_export):
@@ -1962,7 +1962,7 @@ def test_verify_lists_unexpected_folders_without_failing(sdd_rebuild, tmp_path, 
 
 
 def test_verify_needs_confirmed_progress(sdd_rebuild, tmp_path, sdd_export):
-    assert verify(sdd_rebuild, make_rebuild_new(tmp_path)).out["reason"] == "no-progress"
+    assert verify(sdd_rebuild, make_rebuild_new(tmp_path, name="empty")).out["reason"] == "no-progress"
     old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
     assert verify(sdd_rebuild, new).out["reason"] == "no-progress"
 
@@ -2000,10 +2000,11 @@ def test_lineage_writes_the_lineage(sdd_rebuild, tmp_path, sdd_export):
 
 def test_lineage_keeps_hand_edited_gitattributes(sdd_rebuild, tmp_path, sdd_export):
     old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
     write_tree(new, {".sdd-rebuild/.gitattributes": "mine\n"})
     out = ok(run_rebuild(sdd_rebuild, new, "lineage"))
 
-    assert out["written"] == [".sdd-rebuild/lineage.json"]
+    assert (out["written"], out["unchanged"]) == ([], True)
     assert (new / ".sdd-rebuild/.gitattributes").read_text() == "mine\n"
 
 

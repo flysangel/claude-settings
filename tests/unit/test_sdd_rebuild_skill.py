@@ -126,9 +126,7 @@ def test_script_writes_only_below_the_new_project():
             if name in ("write_bytes", "write_text", "open", "mkdir", "atomic_write", "replace", "rename"):
                 writers.append(name)
     assert "write_bytes" not in writers and "write_text" not in writers and "open" not in writers
-    old_names = re.findall(r"(\w+)\s*=\s*[^\n]*old_project", source)
     for function in ("write_file", "ensure_own_folder"):
         body = ast.get_source_segment(source, next(n for n in ast.walk(tree)
                                                    if isinstance(n, ast.FunctionDef) and n.name == function))
-        assert "old" not in body, function
-    assert old_names is not None
+        assert not re.search(r"\bold", body), function
