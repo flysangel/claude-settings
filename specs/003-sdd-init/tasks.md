@@ -46,7 +46,7 @@ description: "Task list for 003 sdd-init 導入 Spec Kit"
 
 **⚠️ CRITICAL**: 這個階段完成前不能開始任何 user story
 
-- [ ] T004 建立 `home/skills/sdd-init/scripts/sdd_init.py` 骨架：uv inline metadata（`requires-python = ">=3.11"`、`dependencies` 為空）；只用標準函式庫；參數解析（`init`、`remove`，沒有子指令或有未知參數時顯示用法並以結束碼 1 結束）；結束碼常數 0、1、3、4；`main()` 以函式參數接受「查詢版本」與「執行官方工具」兩個可替換的步驟，不提供環境變數或隱藏選項；被載入為模組時不執行任何動作（contracts/cli.md「指令」「結束碼」「只為測試存在的入口」，contracts/skill.md「scripts/sdd_init.py」）
+- [X] T004 建立 `home/skills/sdd-init/scripts/sdd_init.py` 骨架：uv inline metadata（`requires-python = ">=3.11"`、`dependencies` 為空）；只用標準函式庫；參數解析（`init`、`remove`，沒有子指令或有未知參數時顯示用法並以結束碼 1 結束）；結束碼常數 0、1、3、4；`main()` 以函式參數接受「查詢版本」與「執行官方工具」兩個可替換的步驟，不提供環境變數或隱藏選項；被載入為模組時不執行任何動作（contracts/cli.md「指令」「結束碼」「只為測試存在的入口」，contracts/skill.md「scripts/sdd_init.py」）
 - [ ] T005 建立 `tests/unit/test_sdd_init.py` 並加入核心的測試，確認在 T006 至 T008 實作前失敗：參數錯誤時結束碼 1 且顯示用法；專案根目錄的判定（在 git 工作目錄的子目錄內執行時是最上層，否則是目前目錄）；內容雜湊把 CRLF 換成 LF 後計算，同一內容的 LF 與 CRLF 版本雜湊相同，其他位元組差異雜湊不同；紀錄寫入後再讀取內容相同、位元組為 UTF-8 與 LF、鍵值順序固定、`entries` 依 `path` 排序、不含絕對路徑與時間戳；無法解析、`schema` 不認得、路徑不在 `.specify/` 或 `.claude/skills/speckit-*/` 之下的紀錄都被判為無效（data-model.md「導入紀錄」「內容識別資訊」）
 - [ ] T006 在 `home/skills/sdd-init/scripts/sdd_init.py` 實作專案根目錄的判定與內容雜湊；所有相對路徑一律以 `/` 分隔（data-model.md 開頭與「內容識別資訊」）
 - [ ] T007 在 `home/skills/sdd-init/scripts/sdd_init.py` 實作導入紀錄 `.specify/sdd-init.json` 的讀取、驗證與寫入，欄位與規則依 data-model.md 的 `Record.schema`、`Record.status`、`Record.speckit_version`、`Record.init_options`、`Record.entries[].path`、`Record.entries[].sha256`、`Record.entries[].origin`、`Record.entries[].staged_executable`、`Record.created_dirs`；讀取結果要能區分「不存在」與「無效」
