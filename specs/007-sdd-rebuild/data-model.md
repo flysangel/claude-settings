@@ -58,7 +58,7 @@ Claude 送來的值被忽略（以既有值或腳本算出的值取代）。
 | `rebuilt_at` | 字串或 `null` | 腳本：第一次以 `confirmed` 保存當天的 UTC 日期；`deciding` 時 `null` |
 | `saved_at` | 字串 | 腳本：最後一次保存的 UTC 時間（ISO 8601，到秒） |
 | `fingerprint` | 物件 | 腳本：新專案的指紋（同 005：constitution、每份 spec.md、HEAD） |
-| `baseline` | 物件或 `null` | 腳本：第一次以 `confirmed` 保存時記下（同 005），之後不變；`deciding` 時 `null` |
+| `baseline` | 物件或 `null` | 腳本：第一次以 `confirmed` 保存時記下（同 005 的 `constitution`、`specs`），之後不變；`deciding` 時 `null`。另有 `confirmed_counts`：`{"governance", "deferred", "for_plan"}` 在確認時的項目數，之後多出的項目是確認後加入、不在世代紀錄中的內容（驗證規則 7），結束報告據此列出 |
 | `lineage_written` | 字串或 `null` | 腳本：`lineage` 寫入的 `lineage.json` 內容雜湊；寫入前 `null` |
 
 ### 快照（`source`）

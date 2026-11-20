@@ -1524,7 +1524,8 @@ def test_confirm_records_baseline_and_rebuilt_at(sdd_rebuild, tmp_path, sdd_expo
 
     assert (out["phase"], out["baseline"]) == ("confirmed", True)
     assert data["rebuilt_at"] == TODAY
-    assert data["baseline"] == {"constitution": None, "specs": {}}
+    assert data["baseline"] == {"constitution": None, "specs": {},
+                                "confirmed_counts": {"governance": 0, "deferred": 0, "for_plan": 0}}
     assert ok(save(sdd_rebuild, new, progress))["baseline"] is False  # kept, not recorded again
 
 

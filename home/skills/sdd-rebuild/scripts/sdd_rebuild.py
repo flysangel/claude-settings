@@ -799,8 +799,10 @@ def stored_shape_ok(data: dict) -> bool:
         and (data["rebuilt_at"] is None or isinstance(data["rebuilt_at"], str))
         and isinstance(data["saved_at"], str)
         and isinstance(fingerprint, dict) and set(fingerprint) == {"constitution", "specs", "head"}
-        and (baseline is None or (isinstance(baseline, dict) and set(baseline) == {"constitution", "specs"}
-                                  and isinstance(baseline["specs"], dict)))
+        and (baseline is None or (isinstance(baseline, dict)
+                                  and set(baseline) == {"constitution", "specs", "confirmed_counts"}
+                                  and isinstance(baseline["specs"], dict)
+                                  and isinstance(baseline["confirmed_counts"], dict)))
         and (data["lineage_written"] is None or isinstance(data["lineage_written"], str))
     )
 
@@ -1222,7 +1224,12 @@ def command_save(io: Io, options: dict) -> int:
         if confirmed_before and previous["baseline"] is not None:
             baseline = previous["baseline"]
         else:
-            baseline = {"constitution": fingerprint["constitution"], "specs": fingerprint["specs"]}
+            # confirmed_counts: how long the append-only lists were at the confirmation; entries after these were
+            # added later and are not part of the lineage (data-model, rule 7).
+            baseline = {"constitution": fingerprint["constitution"], "specs": fingerprint["specs"],
+                        "confirmed_counts": {"governance": len(progress["constitution"]["governance"]),
+                                             "deferred": len(progress["deferred"]),
+                                             "for_plan": len(progress["for_plan"])}}
             recorded = True
     data = stored(progress, {"source": snapshot, "rebuilt_at": rebuilt_at if progress["phase"] == "confirmed" else None,
                              "saved_at": utc_now(), "fingerprint": fingerprint, "baseline": baseline,

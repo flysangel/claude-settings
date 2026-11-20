@@ -481,7 +481,7 @@ def test_stage_10_specs():
     assert has_block(part, "speckit-specify", "one", "time")
     assert has_block(part, "number")
     assert has_block(part, "assumptions")
-    assert part.index('sdd_rebuild.py" claim') < part.index("next feature")
+    assert part.index('sdd_rebuild.py" claim') < part.index("go to the next feature")
     assert has_block(part, '"reviewed": true')
     assert has_block(part, "clarif", "deferred", "for_plan")
 
@@ -619,6 +619,7 @@ def test_stage_2_comes_before_stage_3():
 
 def test_confirmation_comes_before_any_generation():
     content = body()
+    content = content[content.index(HEADINGS["progress"]):]
     confirmed = content.index('"phase": "confirmed"')
 
     for later in ('Skill tool to invoke `speckit-constitution`', 'sdd_rebuild.py" claim', 'sdd_rebuild.py" lineage',
@@ -632,14 +633,20 @@ NAMES = re.compile(r"`([a-z][a-z0-9_.-]*[a-z0-9])`")
 OTHER_NAMES = {
     # names of sdd-export, sdd-grill and Spec Kit that the skill refers to
     "files", "secret_files", "secret_hits", "write", "speckit-constitution", "speckit-specify", "sdd-export",
-    "sdd-grill", "sdd-rebuild", "tools/deploy.py", "home", "zh-tw", "spec.md", "keep-all",
+    "sdd-grill", "sdd-rebuild", "tools/deploy.py", "home", "zh-tw", "spec.md", "saved", "uv",
 }
 
 
 def test_every_name_the_skill_uses_is_defined():
-    known = text(CLI_MD) + text(REPO_ROOT / "specs" / "007-sdd-rebuild" / "data-model.md")
-    unknown = sorted({name for name in NAMES.findall(body()) if name not in known and name not in OTHER_NAMES
-                      and not name.startswith((".", "specs/"))})
+    known = text(CLI_MD) + text(REPO_ROOT / "specs" / "007-sdd-rebuild" / "data-model.md") + text(EXPORT_DATA_MODEL)
+
+    def defined(name: str) -> bool:
+        if name in OTHER_NAMES or name.startswith((".", "specs/")):
+            return True
+        # a dotted name (next.feature, saved.old_project) is defined when each of its parts is
+        return all(f"`{part}`" in known or f'"{part}"' in known for part in name.split("."))
+
+    unknown = sorted({name for name in NAMES.findall(body()) if not defined(name)})
 
     assert unknown == []
 
