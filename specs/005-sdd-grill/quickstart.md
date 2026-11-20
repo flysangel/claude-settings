@@ -86,6 +86,7 @@ Windows 的 PowerShell 以 `$env:USERPROFILE` 與 `$env:CLAUDE_CONFIG_DIR` 達�
 | 12 | 在第 1 步的對話中提供一組假的 API 金鑰 | 進度與產生的文件中都沒有該值，Claude 說明它沒有被記錄（Edge Cases；FR-009） |
 | 13 | 在已有 spec 的專案重做到第 7 步的中斷；中斷後手動修改一份既有的 `spec.md`，再輸入 `/sdd-grill` | Claude 回報 `existing-spec-changed`，不繼續產生，詢問停止（還原後再執行）或重新開始。選擇停止：進度保留，以 git 還原該檔後再輸入 `/sdd-grill`，可以繼續產生。另做一次並選擇重新開始：`.specify/sdd-grill/` 被清除，已產生的 constitution 與 spec 都還在，接著開始新的討論（US3-3、4；FR-010、FR-018） |
 | 14 | 在已有 constitution 與 spec 的專案，輸入只涉及原則的需求，例如「所有文件改用英文撰寫」 | 沒有功能清單的討論，直接進入摘要；確認後只修訂 constitution，沒有產生 spec；`.specify/feature.json` 不變；結束時說明沒有產生 spec、`feature.json` 未更動，下一步是檢查既有 spec 是否需要依新原則調整，不建議 `/sdd-drive`（FR-017；SC-007） |
+| 15 | 在已有 constitution 的專案以需要修訂原則的需求走到確認摘要，在 `speckit-constitution` 執行前中斷 session；在 constitution 末尾手動加一條規則，再輸入 `/sdd-grill` 並選擇繼續 | `verify` 沒有回報 `constitution-not-written`，但 Claude 仍逐條比對：確認的原則沒有寫入，所以以 `speckit-constitution` 只套用缺少的部分（不手寫）；你加的規則沒有被直接移除，而是逐條詢問保留或移除；選擇保留時它被記進進度，之後的比對不再詢問；最後 constitution 含有所有確認的原則與你保留的規則（FR-010、FR-013、FR-014；SC-003） |
 
 情境 1 至 6 在 Linux 與 Windows 各做一次（FR-021）；其餘在任一平台做一次即可，因為平台差異只在腳本，已由兩個平台的 CI 涵蓋。
 

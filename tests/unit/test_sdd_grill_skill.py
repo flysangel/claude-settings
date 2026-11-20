@@ -291,6 +291,23 @@ def test_generating_the_documents():
     assert generate.index("speckit-constitution") < generate.index("speckit-specify")
 
 
+def constitution_step(generate: str) -> str:
+    return generate[generate.index("**the constitution**") : generate.index("**the specs**")]
+
+
+def test_constitution_step_compares_in_both_directions():
+    step = constitution_step(section(GENERATE))
+
+    # Confirmed rules missing from the file: Spec Kit applies them, never the reader by hand.
+    has_any(step, "must appear in it", "must all appear", "every confirmed principle")
+    has_all(step, "missing", "when something fails")
+    has_any(step, "by hand")
+    assert step.count("speckit-constitution") >= 2
+    # Rules without a basis: removed, or kept with consent and recorded so later comparisons agree.
+    has_any(step, "remove any rule", "remove rules")
+    has_all(step, "in the progress", "`keep`")
+
+
 def test_going_back_to_discussing_only_before_any_document():
     generate = section(GENERATE)
     change = generate[generate.index("wants to change a decision after the summary was confirmed") :]
@@ -394,6 +411,17 @@ def test_resume_confirmed_checks_a_written_constitution_again():
 
     has_all(confirmed, "did not report `constitution-not-written`", "rule by rule", "step 2 of \"generating the documents\"")
     assert confirmed.index("rule by rule") < confirmed.index("not generated yet; if none are missing")
+
+
+def test_resume_confirmed_applies_missing_rules_and_asks_about_hand_edits():
+    confirmed = confirmed_branch(section(RESUME))
+    cont = confirmed[confirmed.index("**continue**") : confirmed.index("**start over**")]
+
+    has_all(cont, "both directions", "missing", "speckit-constitution")
+    has_any(cont, "never add them by hand", "not by hand", "do not add them by hand")
+    has_all(cont, "`changed` includes `constitution`", "maintainer's own edit", "one question per rule")
+    has_any(cont, "do not remove it on your own", "never remove it on your own", "do not remove them on your own")
+    has_all(cont, "`changed` does not include `constitution`")
 
 
 def test_resume_confirmed_does_not_continue_over_lasting_failures():

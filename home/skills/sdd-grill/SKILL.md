@@ -126,10 +126,23 @@ resuming is that the maintainer never has to answer a decided question twice.
    What each answer means:
    - **Continue**: go to "Generating the documents" and do only the steps that are still open, in the same order.
      If the constitution was to be created or amended and `verify` did not report `constitution-not-written`, the
-     constitution was already written, but the last session may have ended before checking it. So first compare it
-     rule by rule with the summary, exactly as in step 2 of "Generating the documents" (remove rules without a
-     basis, ask about any you would keep, one question per rule), and save. Then continue with the specs that are
-     not generated yet; if none are missing, go straight to "Finishing".
+     constitution file has changed, but that does not prove the constitution step ran: `verify` only sees that an
+     amended file differs from before and that a created one is no longer the template, which is also true when the
+     maintainer edited it by hand. And the last session may have ended before checking it. So first compare it rule
+     by rule with the summary, in both directions, exactly as in step 2 of "Generating the documents":
+     - If a confirmed principle, rule or governance rule is missing, the constitution step is not done. Invoke
+       `speckit-constitution` with only the missing ones, saying that everything else stays as it is, and compare
+       again. If one is still missing after that call, go to "When something fails", as in step 2; never add them
+       by hand.
+     - If `changed` includes `constitution`, the file changed after the last save, so a rule without a basis may be
+       the maintainer's own edit (or one that `speckit-constitution` added just before the interruption; you cannot
+       tell them apart). Do not remove it on your own: ask the maintainer about each one (one question per rule)
+       whether to keep or remove it, and record the ones they keep as step 2 describes. If `changed` does not include
+       `constitution`, handle rules without a basis exactly as step 2 says.
+
+     Recording a rule the maintainer agreed to keep does not change a confirmed decision; it adds one they just made.
+     Then save, and continue with the specs that are not generated yet; if none are missing, go straight to
+     "Finishing".
    - **Start over**: run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" clear`. It removes only the saved
      progress. The constitution and the specs that were already generated, including any folder in `unexpected`,
      stay as they are: do not delete or undo them, and tell the maintainer they are theirs to keep, edit or remove.
@@ -296,13 +309,21 @@ resumed from the right place.
    skill with the Skill tool. As its argument, give the confirmed principles (title, rules, rationale) and governance
    rules in full, in the documents' language, and tell it to use only these and not to infer other principles from
    the repository. For `"amend"`, give only the additions and changes and say that everything else stays as it is.
-   When it finishes, read `.specify/memory/constitution.md` and compare it rule by rule with the summary. For
-   `"create"`, every principle and rule must come from the summary; for `"amend"`, the rules that were already there
-   stay as they were, and every new or changed rule must come from the summary. Remove any rule that has no such
-   basis. If you think such a rule is worth keeping, ask the maintainer (one question per rule) and keep it only if
-   they agree. Spec Kit's own bookkeeping (the version line, dates, the sync report comment) is not a rule; leave it.
-   Then save again, unchanged, so the saved progress reflects the new constitution. When the action is `keep`, do
-   not invoke `speckit-constitution` at all: the existing constitution is not changed.
+   When it finishes, read `.specify/memory/constitution.md` and compare it rule by rule with the summary, in both
+   directions:
+   - Every confirmed principle, rule and governance rule must appear in it. If any is missing, invoke
+     `speckit-constitution` once more with only the missing ones, saying that everything else stays as it is, and
+     compare again. If one is still missing after that call, `speckit-constitution` did not produce its document: go
+     to "When something fails" rather than adding it by hand.
+   - For `"create"`, every principle and rule must come from the summary; for `"amend"`, the rules that were already
+     there stay as they were, and every new or changed rule must come from the summary. Remove any rule that has no
+     such basis. If you think such a rule is worth keeping, ask the maintainer (one question per rule) and keep it
+     only if they agree. Add each rule they keep to `constitution` in the progress (to the principle it belongs to,
+     or to `governance`), so that it is part of what was confirmed and later comparisons do not question it again.
+
+   Spec Kit's own bookkeeping (the version line, dates, the sync report comment) is not a rule; leave it. Then save
+   again, unchanged apart from the rules the maintainer kept, so the saved progress reflects the new constitution.
+   When the action is `keep`, do not invoke `speckit-constitution` at all: the existing constitution is not changed.
 3. **The specs**, one at a time, in the order of `features`. For each feature, invoke the `speckit-specify` skill with
    the Skill tool. As its argument, describe that feature only, from the summary: its title, usage scenarios, scope
    and edge cases, what it depends on (by name, and by spec folder for features already generated or existing specs),

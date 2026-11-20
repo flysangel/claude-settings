@@ -48,7 +48,11 @@ MUST NOT 有 `disable-model-invocation`（FR-001：Claude MAY 主動使用）。
    改為詢問停止（讓維護者還原 `detail` 指出的檔案後再執行）或重新開始。
    重新開始時執行 `clear`，只清除進度；已產生的 constitution 與 spec MUST NOT 被刪除或還原，交給維護者處理，
    之後的新討論把它們視為既有文件（字樣：`start over`、`clear`、`do not delete`）。
-   繼續時若 constitution 已寫入（`create` 或 `amend`），先依第 23 項與摘要逐條比對一次再繼續（FR-014）。
+   繼續時若 `verify` 沒有回報 `constitution-not-written`（`create` 或 `amend`），constitution 檔案有變化，但不代表已由
+   `speckit-constitution` 寫入（`verify` 只看是否與 baseline 不同或不是範本，維護者手動修改也會通過），所以先依第 23 項
+   雙向逐條比對一次再繼續：確認的規則缺少時，以 `speckit-constitution` 只套用缺少的部分，MUST NOT 手寫補上；
+   `changed` 含 `constitution` 時，沒有依據的規則可能是維護者自己的修改，MUST 一題一條詢問保留或移除，MUST NOT 直接移除；
+   `changed` 不含 `constitution` 時依第 23 項處理（FR-013、FR-014；字樣：`speckit-constitution`、`changed`）。
 
 ### 追問的規則（集中在一個段落，R6）
 
@@ -88,8 +92,10 @@ MUST NOT 有 `disable-model-invocation`（FR-001：Claude MAY 主動使用）。
     `"discussing"`（改回會重設 `baseline`，見 data-model.md 的「狀態轉移」）；已產生任何文件時，詢問依確認內容產生完、
     停止或重新開始（FR-012、FR-014）。
 23. `constitution.action` 為 `create` 或 `amend` 時，以 Skill 工具呼叫 `speckit-constitution`，只傳入確認過的原則與治理規則，
-    並要求不要推斷其他原則；完成後移除未確認的規則，想保留的先詢問維護者（FR-014；字樣：`speckit-constitution`）。
-    `keep` 時不呼叫。
+    並要求不要推斷其他原則；完成後雙向逐條比對：摘要中每一條確認的原則、規則與治理規則 MUST 出現在 constitution 中，
+    缺少時再呼叫一次 `speckit-constitution` 只套用缺少的部分，仍缺少時依第 26 項處理，MUST NOT 手寫補上；
+    沒有依據的規則移除，想保留的先詢問維護者，維護者同意保留的規則記進進度的 `constitution`，成為確認內容的一部分，
+    之後的比對不再詢問（FR-013、FR-014、SC-003；字樣：`speckit-constitution`）。`keep` 時不呼叫，也不做這些比對。
 24. 依功能順序，一次一個以 Skill 工具呼叫 `speckit-specify`，傳入該功能確認過的內容，延後事項要求寫在 Assumptions；
     每完成一個就把回報的資料夾寫入 `spec_dir` 並保存（字樣：`speckit-specify`、`spec_dir`、`Assumptions`）。
     `speckit-specify` 要澄清時，依摘要回答；摘要沒有答案時以一題詢問維護者並補進進度。
