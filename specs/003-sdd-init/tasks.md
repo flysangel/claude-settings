@@ -229,3 +229,18 @@ Task: "T024 撰寫 home/skills/sdd-init/README.md"
 - [X] T045 在 `home/skills/sdd-init/scripts/sdd_init.py` 依 cli.md「必要工具的判定」實作：Windows 上 `bash` 的判定改為尋找 Git for Windows 附的 Git Bash，找不到時列為缺少的工具（結束碼 3、零寫入），`missing` 行與 stderr 依 cli.md；Linux 上仍以 `PATH` 上有沒有 `bash` 判定，輸出逐字不變
 - [X] T046 [P] 更新 `home/skills/sdd-init/README.md` 的「前置需求」（繁體中文）：Windows 上只承認 Git for Windows 附的 Git Bash、WSL 的 `bash.exe` 不算，Git for Windows 的 `git` 必須在 `PATH` 上；`tests/unit/test_sdd_init_skill.py` 的既有檢查繼續通過
 - [X] T047 執行 `uv run --with pytest pytest`，結束碼 0；這項判定在真正的 Windows 上的結果由 T042 的 CI（`windows-latest` 的 `test` 與 `cross-platform` job）確認
+
+---
+
+## Phase 8: Convergence
+
+**Purpose**: `/speckit-converge` 找到的漏做工作。`init` 補齊時，先前已複製但沒有成功加入暫存區的 `.sh` 不會再被
+`git add --chmod=+x`：複製途中失敗後再次執行（紀錄為 `applying`），或先前 `git add --chmod=+x` 本身失敗（紀錄已是 `complete`）
+都是如此。這樣的專案在 Windows 提交後，`.sh` 在 index 內是 100644，於 Linux clone 後無法執行。
+主代理已決定這是漏做（FR-006 是 MUST），不是已知限制。T048 先於 T049 至 T051；T050 先於 T051；T052 最後。
+
+- [ ] T048 在 `specs/003-sdd-init/contracts/cli.md` 寫明「補登執行權限」的行為、輸出與摘要（只補這一項，不改其他內容）：`init` 在專案是 git repository 時，對紀錄內 `origin` 為 `speckit`、`staged_executable` 為 false、檔案存在、且不在 index 也不在 `HEAD` 的 `.sh`，同樣執行 `git add --chmod=+x`、把 `staged_executable` 設為 true 並輸出 `staged` 行；這適用於 (1) 紀錄為 `applying` 或缺少檔案而補齊時，(2) 紀錄為 `complete` 且檔案齊全、但仍有符合上述條件的 `.sh` 時（此時 MUST NOT 只回報 `is already initialized`，也 MUST NOT 連線或執行官方工具）。文件 MUST 寫明：情況 (2) 的摘要第一行、`Git:` 一行與下一步建議各怎麼輸出，`<n> created` 與 `<k>` 怎麼算；沒有符合條件的 `.sh` 時「已完整導入」的輸出與零異動不變（FR-011）；補登成功後再次執行為零異動；`git add --chmod=+x` 失敗時的輸出與結束碼；並同步更新「不變的保證」中 init 對暫存區的敘述。這條規則也會涵蓋「導入時不是 git repository、之後才 `git init`」的專案，文件 MUST 寫明這種情況的結果；文件無法決定之處向主代理提問，不自行假設 per FR-006、SC-003、邊界情況「導入中途失敗」、FR-012 (partial)
+- [ ] T049 [P] 在 `specs/003-sdd-init/data-model.md`「導入的動作」補上這條規則：動作為 `keep` 的 `.sh` 若 `origin` 為 `speckit`、`staged_executable` 為 false、且不在 index 也不在 `HEAD`，在專案是 git repository 時同樣執行 `git add --chmod=+x` 並把 `staged_executable` 設為 true；「狀態轉移」補上「`status=complete` 且檔案齊全、但仍有這樣的 `.sh`」不再是「不做任何事」；`entries[].staged_executable` 的說明與 T048 一致。MUST NOT 修改 `spec.md` 與 `plan.md` per FR-006、SC-003、邊界情況「導入中途失敗」 (partial)
+- [ ] T050 在 `tests/unit/test_sdd_init.py` 加入補登執行權限的測試，確認在 T051 實作前失敗，全部以假的官方產出在 `tmp_path` 進行，不需要網路：(1) 複製途中失敗留下 `applying` 的紀錄後再次執行，上一次已複製的 `.sh` 與這次補上的 `.sh` 各有一行 `staged`，`git ls-files -s` 全部是 100755（在 `core.fileMode=false` 且工作目錄的檔案沒有執行權限的 repository 也成立），`staged_executable` 全為 true，`Git:` 一行的 `<n>` 等於實際加入的檔案數；(2) 紀錄為 `complete`、檔案齊全，但 `.sh` 的 `staged_executable` 為 false 且不在 index 也不在 `HEAD`（模擬先前 `git add --chmod=+x` 失敗）時再次執行，這些 `.sh` 被加入為 100755，輸出與摘要逐字符合 T048 寫進 cli.md 的內容，「查詢版本」與「執行官方工具」兩個替換函式都沒有被呼叫，除了 index 與紀錄之外目錄快照不變；(3) 上述兩種情況之後再執行一次都只輸出 `is already initialized` 且零異動；(4) 不受影響的情況維持原狀：`.sh` 已在 `HEAD` 或已在 index 時不動 index、不輸出 `staged`，被略過（不在紀錄內）的 `.sh` 不被加入，不是 git repository 時沒有 `staged` 行，`origin` 不是 `speckit` 的檔案與非 `.sh` 檔案不被加入；(5) 沒有新的 commit、分支不變 per FR-006、SC-003、邊界情況「導入中途失敗」、FR-011 (partial)
+- [ ] T051 在 `home/skills/sdd-init/scripts/sdd_init.py` 依 T048 的 cli.md 與 T049 的 data-model.md 實作補登執行權限：補齊時與「已完整導入」的判定都納入紀錄內 `origin` 為 `speckit`、`staged_executable` 為 false、檔案存在且不在 index 也不在 `HEAD` 的 `.sh`，對它們執行 `git add --chmod=+x`、更新紀錄並輸出 `staged` 行；情況 (2) 不連線、不執行官方工具、不複製任何檔案；不 commit，不對其他檔案執行 `git add`；Linux 與 Windows 的輸出逐字相同；既有測試（包含 T012 的零異動與 T026 的暫存區測試）繼續通過 per FR-006、SC-003、邊界情況「導入中途失敗」 (partial)
+- [ ] T052 執行 `uv run --with pytest pytest`（含 `network`）與 `uv run --with pytest pytest -m "not network"`，兩者結束碼 0；在 `mktemp -d` 的暫存 repository（`core.fileMode=false`，並移除 `.sh` 的執行權限以模擬 Windows）實跑 T050 的情況 (1)(2) 各一次，確認之後 `git add -A` 得到的 `.sh` 都是 100755；MUST NOT 在這個 repo 的目錄或真正的 `~/.claude` 執行。這項行為在真正的 Windows 上的結果由推送後的 CI（`windows-latest` 的 `test` job）確認，推送由主代理處理 per FR-006、SC-003、Constitution II (partial)
