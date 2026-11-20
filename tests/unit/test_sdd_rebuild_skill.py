@@ -666,3 +666,45 @@ def test_every_reason_is_in_the_cli_contract_and_most_are_handled():
         assert f"`{reason}`" in cli, reason
     handled = [reason for reason in REASONS if f"`{reason}`" in content]
     assert set(REASONS) - set(handled) <= {"usage"}, set(REASONS) - set(handled)
+
+
+# ------------------------------------- (T060) the contract text of 006 data-model
+# The expected text is copied from specs/007-sdd-rebuild/plan.md "對 006 文件的修改" (approved by the maintainer);
+# plan.md is not read at run time.
+
+ROWS_BEFORE = ['| 原樣保留 | 沿用 | 沿用 | 沿用 | 沿用 | |', '| 修改後保留 | 沿用 | 沿用 | 沿用並加上 `generation` | 沿用 | |', '| 合併多個項目 | 新取（見表後） | `generation` | 空 | 被合併的 `id` | 被合併的項目不必另記為捨棄 |', '| 拆分一個項目 | 新取（見表後） | `generation` | 空 | 被拆分的 `id` | |']
+ROWS_AFTER = ['| 原樣保留 | 沿用 | 沿用 | 沿用 | 沿用並補入祖先（見表後） | |', '| 修改後保留 | 沿用 | 沿用 | 沿用並加上 `generation` | 沿用並補入祖先（見表後） | |', '| 合併多個項目 | 新取（見表後） | `generation` | 空 | 被合併的 `id`，並補入祖先（見表後） | 被合併的項目不必另記為捨棄 |', '| 拆分一個項目 | 新取（見表後） | `generation` | 空 | 被拆分的 `id`，並補入祖先（見表後） | 原項目可以同時依「原樣保留」或「修改後保留」保留 |']
+ADDED_PARAGRAPHS = (
+    '「補入祖先」：007 以來源養分的所有有效項目，以及舊專案的 `.sdd-rebuild/lineage.json`（存在、通過驗證且世代與養分相同時）的所有有效項目，\n建立「`id` → `derived_from`」的祖先表（同一個 `id` 兩邊都有時取聯集，養分的在前）。寫入的 `derived_from` 是：直接來源依序在前\n（保留與修改的項目是祖先表中它自己的清單，合併與拆分的項目是被合併或被拆分的 `id`），接著依直接來源的順序，把每個直接來源在祖先表中的\n`derived_from` 依記錄的順序深度優先展開；去重，保留第一次出現的位置。如此一來，經過合併再拆分的項目仍記得最早的來源，\n那些 `id` 留在世代紀錄中而被世代規則 9 擋下重用；世代規則 8 允許沿用世代紀錄已記下的來源，世代規則 5 只比較內容欄位，\n所以補入後變長的 `derived_from` 不影響下一次匯出。',
+    '已知限制（維護者接受，2026-11-20）：捨棄紀錄沒有 `derived_from`，被捨棄項目的來源只保留到該次捨棄為止（被捨棄的項目本身仍在\n`discarded`，不能重用）；匯出時的合併或拆分只記下直接來源（世代規則 8 不允許在匯出時補入），下一次重建由舊專案的世代紀錄補上，\n但同一代內第二次匯出合併了第一次匯出才建立的項目時，第一次匯出記下的來源會遺失。',
+)
+UNCHANGED_ROWS = (
+    "| 情況 | `id` | `origin` | `revised` | `derived_from` | 其他 |",
+    "| 重建時新增 | 新取（見表後） | `generation` | 空 | 空 | `source` 為 `\"rebuild\"` |",
+    "| 捨棄 | 沿用 | 沿用 | | | 移到 `discarded`，`discarded_in` 為 `generation` |",
+    "| 來源養分的 `discarded` | 沿用 | 沿用 | | | 原樣帶入 |",
+    "| 來源養分中 `pending` 的項目 | 依維護者的決定套用上面任一列 | | | | 不得以 `pending` 寫入 |",
+    "### 007 寫入時 MUST 遵守的規則",
+)
+
+
+def test_006_data_model_holds_the_approved_rows():
+    content = text(EXPORT_DATA_MODEL)
+
+    for row in ROWS_AFTER:
+        assert row + "\n" in content, row
+    for row in ROWS_BEFORE:
+        assert row + "\n" not in content, row
+    for row in UNCHANGED_ROWS:
+        assert row in content, row
+
+
+def test_006_data_model_holds_the_two_approved_paragraphs_in_place():
+    content = text(EXPORT_DATA_MODEL)
+    rule_9 = content.index("兩個不同的項目（世代規則 9）。")
+    every_item = content.index("來源養分中的每一個有效項目 MUST 對應到上表其中一列")
+
+    for paragraph in ADDED_PARAGRAPHS:
+        assert paragraph in content
+        assert rule_9 < content.index(paragraph) < every_item
+    assert content.index(ADDED_PARAGRAPHS[0]) < content.index(ADDED_PARAGRAPHS[1])
