@@ -38,13 +38,30 @@ warning   .specify/.gitattributes was not created by sdd-init; add this line to 
 missing   bash
 ```
 
-之後是固定順序的摘要：
+之後是摘要。新導入或補齊時，摘要固定四行，順序如下：
 
 ```text
 Spec Kit 1.4.3 initialized: 31 created, 0 skipped.
 Git: 6 files were added to the index and nothing was committed. 31 paths are uncommitted.
-Next: run /speckit-constitution to write the project principles, then /speckit-specify.
+Next: run /sdd-grill to be questioned until the constitution and specs are decided.
+Or use Spec Kit directly: run /speckit-constitution, then /speckit-specify.
 ```
+
+| 行 | 內容 | 是否隨情況改變 |
+|---|---|---|
+| 1 | 結果 | 是，見下方「各種情況的摘要」 |
+| 2 | `Git:` | 是，見下方的三種形式 |
+| 3 | 下一步建議：本專案的 skill | 否，逐字固定 |
+| 4 | 下一步建議：原生 Spec Kit 指令 | 否，逐字固定 |
+
+第 3、4 行是下一步建議，兩條路都 MUST 列出，文字不含任何變數，兩個平台逐字相同：
+
+```text
+Next: run /sdd-grill to be questioned until the constitution and specs are decided.
+Or use Spec Kit directly: run /speckit-constitution, then /speckit-specify.
+```
+
+下一步建議 MUST NOT 提到這兩條路以外的指令。
 
 各種情況的摘要：
 
@@ -63,7 +80,7 @@ Git: nothing was added to the index. <k> paths are uncommitted.
 Git: not a git repository, and none was created. Executable bits cannot be recorded until the files are added with: git add --chmod=+x .specify/scripts/bash/*.sh
 ```
 
-已完整導入時只輸出摘要的第一行。
+已完整導入時只輸出摘要的第一行，不輸出 `Git:` 與下一步建議。
 
 ### remove
 

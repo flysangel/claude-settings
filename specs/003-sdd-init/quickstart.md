@@ -27,6 +27,7 @@ uv run --with pytest pytest -m "not network"     只跑不需要網路的測試
 
 1. **全新導入**：`git init` 後執行 `<init> init`。
    預期結束碼 0；逐筆列出 `created` 與 `staged`；摘要顯示的版本等於 PyPI 上 `specify-cli` 的最新穩定版；
+   摘要的最後兩行是下一步建議，先 `/sdd-grill`，再 `/speckit-constitution` 與 `/speckit-specify`；
    `git status` 顯示 6 支 `.sh` 已在暫存區、其餘未追蹤、沒有新的 commit。
 2. **重複執行**：再執行一次。
    預期只輸出 `Spec Kit <版本> is already initialized. Nothing changed.`，`git status` 與上一步完全相同。
@@ -52,7 +53,7 @@ uv run --with pytest pytest -m "not network"     只跑不需要網路的測試
 
 | # | 操作 | 預期 |
 |---|---|---|
-| 1 | 在沒有 Spec Kit 的專案輸入 `/sdd-init` | 回報版本、建立的檔案、加入暫存區的檔案與下一步；Claude 沒有自行 commit |
+| 1 | 在沒有 Spec Kit 的專案輸入 `/sdd-init` | 回報版本、建立的檔案、加入暫存區的檔案與下一步的兩條路（`/sdd-grill`，或 `/speckit-constitution` 再 `/speckit-specify`）；Claude 沒有自行 commit |
 | 2 | 要求 Claude「幫這個專案導入 Spec Kit」而不輸入指令 | Claude 請你執行 `/sdd-init`，沒有自行觸發 |
 | 3 | 把第 1 步的專案 commit 後，在另一個平台 clone，直接輸入 `/speckit-specify` 加一段需求 | 流程正常完成，不需要重新導入或手動補檔；Windows 與 Linux 兩個方向各做一次 |
 | 4 | 輸入 `/sdd-init remove` | 回報刪除與保留的檔案；`specs/` 不變 |

@@ -28,7 +28,8 @@ frontmatter：
 1. 沒有參數時執行 `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_init.py" init`；參數是 `remove` 時執行 `remove`；
    其他參數時說明用法，不執行任何指令。
 2. 在目前專案的目錄執行，只執行一次。
-3. 把腳本輸出的版本、建立、略過、加入暫存區、警告與下一步完整回報給維護者，不省略任何一筆路徑。
+3. 把腳本輸出的版本、建立、略過、加入暫存區、警告與下一步完整回報給維護者，不省略任何一筆路徑；
+   下一步建議的兩條路（`/sdd-grill`，或 `/speckit-constitution` 再 `/speckit-specify`）都要回報，不只挑其中一條。
 4. 結束碼不是 0 時回報原因與處理方式後停止：MUST NOT 重試、MUST NOT 改用其他方式安裝 Spec Kit、
    MUST NOT 手動建立或修改 `.specify/` 與 `speckit-*` 的檔案。`uv` 指令不存在時同樣處理。
 5. MUST NOT commit、push 或修改腳本沒有建立的檔案。

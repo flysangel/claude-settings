@@ -1,6 +1,6 @@
 # Research: sdd-init 導入 Spec Kit
 
-R1 至 R4 是 spec 留給 plan 的四個決定，R5 之後是設計時衍生的決定。
+R1 至 R4 是 spec 留給 plan 的四個決定，R5 至 R9 是設計時衍生的決定，R10 是維護者看過 plan 後的決定。
 「實測」指 2026-11-20 在 Linux 以 `uv tool run --from specify-cli==1.4.3 specify …` 於暫存目錄執行的結果，
 指令與觀察列在文末的「實測紀錄」。Windows 上的行為無法在這台機器實測，由 R4 的 CI 測試驗證。
 
@@ -207,6 +207,24 @@ R1 至 R4 是 spec 留給 plan 的四個決定，R5 之後是設計時衍生的�
 - **Rationale**: `uv` 用來執行官方工具；`bash` 是 `sh` 腳本的執行環境；`git` 用來記錄執行權限並提供 Windows 的 bash。
   官方的 `sh` 腳本在沒有 `jq`、`python3` 時會退回內建的文字處理（`common.sh` 內的註解與程式如此），所以不列為必要。
 - **Alternatives considered**: 只檢查 `uv`（Windows 沒有 Git Bash 時會導入成功但流程無法執行，違反 SC-006 的精神）。
+
+## R10 導入完成後的下一步建議
+
+- **Decision**: 摘要的最後兩行同時列出兩條路，文字固定、不含變數，兩個平台逐字相同（格式見
+  [contracts/cli.md](./contracts/cli.md)）：
+
+  ```text
+  Next: run /sdd-grill to be questioned until the constitution and specs are decided.
+  Or use Spec Kit directly: run /speckit-constitution, then /speckit-specify.
+  ```
+
+  第一行是本專案的 skill `/sdd-grill`（依需求追問出 constitution 與 spec），第二行是原生的 Spec Kit 指令
+  （`/speckit-constitution` 再 `/speckit-specify`）。不提其他指令。
+- **Rationale**: 維護者於 2026-11-20 決定兩條路都可以，兩種都要告訴使用者。方向未定時適合由 `/sdd-grill` 追問，
+  已經清楚要寫什麼時直接用原生指令較快，由使用者自己選。一條路一行，測試可以逐行逐字比對。
+- **Alternatives considered**:
+  - 只列原生指令（原本的寫法）：使用者不會知道有 `/sdd-grill` 可用。
+  - 只列 `/sdd-grill`：已經清楚方向的使用者被引導去走不需要的追問，也看不出原生指令仍可直接使用。
 
 ## 實測紀錄
 
