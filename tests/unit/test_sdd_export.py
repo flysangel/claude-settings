@@ -1760,3 +1760,361 @@ def test_write_reads_the_draft_only_from_stdin(sdd_export, tmp_path):
 
     for argv in (["write", "--expect", "none", "draft.json"], ["write", "--expect", "none", "--input", "draft.json"]):
         assert run_export(sdd_export, root, *argv).out["reason"] == "usage"
+
+
+# ========================================================= files, inventory
+
+DEPENDENCY_DIRS = ["node_modules", "bower_components", "jspm_packages", "vendor", ".venv", "venv", "Pods", "Carthage",
+                   ".terraform", ".bundle"]
+BUILD_DIRS = ["dist", "build", "target", "bin", "obj", "out", ".next", ".nuxt", ".svelte-kit", ".output", "coverage",
+              "htmlcov", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox", ".gradle",
+              ".cache", ".parcel-cache", ".turbo", ".eggs", "my_pkg.egg-info"]
+TOOLING_DIRS = [".git", ".idea", ".vscode", ".claude", ".sdd-export", ".sdd-rebuild", ".specify"]
+GENERATED_NAMES = ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", "uv.lock", "poetry.lock",
+                   "Pipfile.lock", "Cargo.lock", "go.sum", "composer.lock", "Gemfile.lock", "packages.lock.json",
+                   "app.min.js", "style.min.css", "app.js.map"]
+
+
+def files_of(result) -> list[str]:
+    return [entry["path"] for entry in result.out["files"]]
+
+
+def skipped_only(result, **expected) -> None:
+    skipped = result.out["skipped"]
+    assert list(skipped) == ["ignored", "dependency", "build", "tooling", "generated", "secret", "binary", "large"]
+    for key, value in skipped.items():
+        assert value == expected.get(key, 0), (key, skipped)
+
+
+@pytest.mark.parametrize("name", DEPENDENCY_DIRS)
+def test_dependency_folders(sdd_export, tmp_path, name):
+    root = project(tmp_path, files={f"{name}/x/index.js": "x\n", f"src/{name}/y.js": "y\n"})
+    result = run_export(sdd_export, root, "files")
+
+    assert files_of(result) == ["README.md", "src/app.py"]
+    skipped_only(result, dependency=2)
+
+
+@pytest.mark.parametrize("name", BUILD_DIRS)
+def test_build_folders(sdd_export, tmp_path, name):
+    root = project(tmp_path, files={f"{name}/app.js": "x\n"})
+    result = run_export(sdd_export, root, "files")
+
+    assert files_of(result) == ["README.md", "src/app.py"]
+    skipped_only(result, build=1)
+
+
+@pytest.mark.parametrize("name", TOOLING_DIRS)
+def test_tooling_folders_at_the_top(sdd_export, tmp_path, name):
+    root = project(tmp_path, files={f"{name}/notes.md": "x\n", f"src/{name}/kept.md": "kept\n"})
+    result = run_export(sdd_export, root, "files")
+
+    assert files_of(result) == ["README.md", "src/app.py", f"src/{name}/kept.md"] or \
+        files_of(result) == sorted(["README.md", "src/app.py", f"src/{name}/kept.md"])
+    skipped_only(result, tooling=1)
+
+
+def test_the_constitution_is_readable(sdd_export, tmp_path):
+    root = project(tmp_path, constitution="# C\n", files={".specify/templates/t.md": "t\n"})
+    result = run_export(sdd_export, root, "files")
+
+    assert ".specify/memory/constitution.md" in files_of(result)
+    assert ".specify/templates/t.md" not in files_of(result)
+    skipped_only(result, tooling=1)
+
+
+@pytest.mark.parametrize("name", GENERATED_NAMES)
+def test_generated_files(sdd_export, tmp_path, name):
+    root = project(tmp_path, files={f"web/{name}": "x\n"})
+    result = run_export(sdd_export, root, "files")
+
+    assert files_of(result) == ["README.md", "src/app.py"]
+    skipped_only(result, generated=1)
+
+
+def test_secret_files_are_listed_and_never_opened(sdd_export, tmp_path, monkeypatch):
+    root = project(tmp_path, files={".env": "API_KEY=dummy\n", ".env.example": "API_KEY=sample\n",
+                                    "config/.ssh/id_rsa": "-----BEGIN RSA PRIVATE KEY-----\n", "keys/server.pem": "x\n"})
+    opened: list[str] = []
+    import builtins
+    import io as io_module
+
+    real_open, real_io_open, real_os_open = builtins.open, io_module.open, os.open
+
+    def spy(file, *args, **kwargs):
+        opened.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    def os_spy(file, *args, **kwargs):
+        opened.append(str(file))
+        return real_os_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", spy)
+    monkeypatch.setattr(io_module, "open", spy)
+    monkeypatch.setattr(os, "open", os_spy)
+    result = run_export(sdd_export, root, "files")
+    check = run_export(sdd_export, root, "check")
+    monkeypatch.undo()
+
+    secret = [".env", ".env.example", "config/.ssh/id_rsa", "keys/server.pem"]
+    assert result.out["secret_files"] == secret
+    assert check.out["inventory"]["secret_files"] == secret
+    skipped_only(result, secret=4)
+    for name in secret:
+        assert not any(path.replace("\\", "/").endswith(name) for path in opened), (name, opened)
+    text = result.raw.decode("utf-8") + check.raw.decode("utf-8")
+    assert "dummy" not in text and "sample" not in text
+
+
+@pytest.mark.skipif(sys.platform == "win32" or IS_ROOT, reason="needs POSIX permissions and a non-root user")
+def test_unreadable_secret_files_do_not_matter(sdd_export, tmp_path):
+    root = project(tmp_path, files={".env": "API_KEY=dummy\n"})
+    (root / ".env").chmod(0)
+    try:
+        result = run_export(sdd_export, root, "files")
+    finally:
+        (root / ".env").chmod(0o644)
+
+    assert result.code == 0
+    assert result.out["secret_files"] == [".env"]
+
+
+def test_secret_hits_give_only_path_and_line(sdd_export, tmp_path):
+    root = project(tmp_path, files={"src/settings.py": 'DEBUG = True\npassword = "hunter2"\n'})
+    result = run_export(sdd_export, root, "files")
+
+    assert result.out["secret_hits"] == [{"path": "src/settings.py", "line": 2}]
+    assert "hunter2" not in result.raw.decode("utf-8")
+
+
+@pytest.mark.parametrize("name, content", [("logo.png", b"PNG"), ("font.woff2", b"x"), ("lib.so", b"x"),
+                                           ("doc.pdf", b"x"), ("data.sqlite", b"x"), ("archive.zip", b"x"),
+                                           ("blob.dat", b"abc\x00def")])
+def test_binary_files(sdd_export, tmp_path, name, content):
+    root = project(tmp_path, files={f"assets/{name}": content})
+    result = run_export(sdd_export, root, "files")
+
+    assert files_of(result) == ["README.md", "src/app.py"]
+    skipped_only(result, binary=1)
+
+
+def test_large_files(sdd_export, tmp_path):
+    mib = 1024 * 1024
+    root = project(tmp_path, files={"data/big.txt": b"a" * (mib + 1), "data/edge.txt": b"a" * mib})
+    result = run_export(sdd_export, root, "files")
+
+    assert "data/edge.txt" in files_of(result)
+    assert "data/big.txt" not in files_of(result)
+    skipped_only(result, large=1)
+
+
+@needs_git
+def test_ignored_files_in_a_git_repository(sdd_export, tmp_path):
+    root = project(tmp_path, git=True, files={".gitignore": "secret-notes/\n*.log\n", "secret-notes/a.md": "x\n",
+                                               "debug.log": "x\n"})
+    result = run_export(sdd_export, root, "files")
+
+    assert files_of(result) == [".gitignore", "README.md", "src/app.py"]
+    assert result.out["skipped"]["ignored"] == 2
+    assert run_export(sdd_export, root, "check").out["inventory"]["ignore_source"] == "git"
+
+
+@needs_git
+def test_git_and_plain_folder_agree_without_gitignore(sdd_export, tmp_path):
+    tree = {"node_modules/a/index.js": "x\n", "node_modules/b/index.js": "y\n", "dist/app.js": "z\n",
+            "web/package-lock.json": "{}\n", ".env": "A=b\n", "img/logo.png": "png", "lib/core.py": "core\n",
+            ".specify/memory/constitution.md": "c\n", ".specify/templates/t.md": "t\n"}
+    plain = project(tmp_path, "plain", files=tree)
+    repo = project(tmp_path, "repo", files=tree, git=True)
+
+    a, b = run_export(sdd_export, plain, "files"), run_export(sdd_export, repo, "files")
+
+    assert a.out == b.out
+    assert run_export(sdd_export, plain, "check").out["inventory"]["ignore_source"] == "none"
+    ia = run_export(sdd_export, plain, "check").out["inventory"]
+    ib = run_export(sdd_export, repo, "check").out["inventory"]
+    assert {k: v for k, v in ia.items() if k != "ignore_source"} == {k: v for k, v in ib.items() if k != "ignore_source"}
+
+
+def can_symlink(tmp_path: Path) -> bool:
+    try:
+        (tmp_path / "probe-link").symlink_to(tmp_path)
+    except (OSError, NotImplementedError):
+        return False
+    (tmp_path / "probe-link").unlink()
+    return True
+
+
+def test_symlinks(sdd_export, tmp_path):
+    if not can_symlink(tmp_path):
+        pytest.skip("this platform cannot create symbolic links here")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "o.txt").write_text("outside\n")
+    root = project(tmp_path)
+    (root / "link-out.txt").symlink_to(outside / "o.txt")
+    (root / "link-dir").symlink_to(root / "src", target_is_directory=True)
+    (root / "link-in.txt").symlink_to(root / "README.md")
+    result = run_export(sdd_export, root, "files")
+
+    assert files_of(result) == ["README.md", "link-in.txt", "src/app.py"]
+    assert result.out["skipped"]["ignored"] == 2
+
+
+def test_names_are_compared_in_lowercase(sdd_export, tmp_path):
+    root = project(tmp_path, files={"Node_Modules/x.js": "x\n", "DIST/a.js": "a\n", "web/Package-Lock.JSON": "{}\n",
+                                    "img/LOGO.PNG": "p"})
+    result = run_export(sdd_export, root, "files")
+
+    assert files_of(result) == ["README.md", "src/app.py"]
+    skipped_only(result, dependency=1, build=1, generated=1, binary=1)
+
+
+def test_files_with_scope(sdd_export, tmp_path):
+    root = spec_project(tmp_path, files={"src/api/routes.py": "r\n", "src/api/settings.py": "token = abc\n",
+                                         "src/api/.env": "A=b\n", "src/api/dist/x.js": "x\n", "lib/x.py": "x\n"})
+    result = run_export(sdd_export, root, "files", "--scope", "src/api", "--scope", "lib/x.py")
+
+    assert result.code == 0
+    assert result.out["scope"] == ["lib/x.py", "src/api"]
+    assert files_of(result) == [".specify/memory/constitution.md", "lib/x.py", "specs/001-deploy/spec.md",
+                                "specs/002-status/spec.md", "specs/003-remove/spec.md", "src/api/routes.py",
+                                "src/api/settings.py"]
+    assert result.out["secret_hits"] == [{"path": "src/api/settings.py", "line": 1}]
+    assert result.out["secret_files"] == ["src/api/.env"]
+    skipped_only(result, build=1, secret=1)
+    assert list(result.out) == ["scope", "too_large", "files", "secret_hits", "skipped", "secret_files"]
+
+
+def test_files_without_scope(sdd_export, tmp_path):
+    root = project(tmp_path)
+    result = run_export(sdd_export, root, "files")
+
+    assert result.out["scope"] == []
+    assert result.out["files"] == [{"path": "README.md", "bytes": 10}, {"path": "src/app.py", "bytes": 12}]
+
+
+@pytest.mark.parametrize("scope", ["nowhere", "../outside", "/abs/path", "node_modules", "node_modules/x", ".env",
+                                   ".git", "dist/a.js"])
+def test_bad_scopes(sdd_export, tmp_path, scope):
+    root = project(tmp_path, files={"node_modules/x/i.js": "x\n", ".env": "A=b\n", "dist/a.js": "a\n"})
+    (tmp_path / "outside").mkdir()
+    result = run_export(sdd_export, root, "files", "--scope", scope)
+
+    assert result.code == 1
+    assert result.out["reason"] == "usage"
+    assert result.out["error"]
+
+
+def many_files(count: int, folder: str = "src") -> dict[str, str]:
+    return {f"{folder}/f{n:05d}.txt": "x" for n in range(count)}
+
+
+def test_too_many_files(sdd_export, tmp_path):
+    root = project(tmp_path, files={**many_files(1499, "src"), "lib/a.txt": "x"})
+    # README.md + src/app.py + 1499 + 1 = 1502 readable files
+    check = run_export(sdd_export, root, "check").out["inventory"]
+    whole = run_export(sdd_export, root, "files")
+    narrow = run_export(sdd_export, root, "files", "--scope", "lib")
+
+    assert check["too_large"] is True and check["files"] == 1502
+    assert whole.out["too_large"] is True and whole.out["files"] == [] and whole.out["secret_hits"] == []
+    assert narrow.out["too_large"] is False and files_of(narrow) == ["lib/a.txt"]
+
+
+def test_exactly_1500_files_is_not_too_large(sdd_export, tmp_path):
+    root = project(tmp_path, files=many_files(1498))
+
+    inventory = run_export(sdd_export, root, "check").out["inventory"]
+    assert inventory["files"] == 1500 and inventory["too_large"] is False
+
+
+def test_too_many_bytes(sdd_export, tmp_path):
+    mib = 1024 * 1024
+    files = {f"data/part{n}.txt": b"a" * mib for n in range(10)}
+    root = project(tmp_path, files=files)
+    inventory = run_export(sdd_export, root, "check").out["inventory"]
+    assert inventory["bytes"] > 10 * mib and inventory["too_large"] is True
+
+    exact = make_old_project(tmp_path, "exact", files={f"data/part{n}.txt": b"a" * mib for n in range(10)})
+    inventory = run_export(sdd_export, exact, "check").out["inventory"]
+    assert inventory["bytes"] == 10 * mib and inventory["too_large"] is False
+
+
+MANIFESTS = ["package.json", "pyproject.toml", "setup.py", "go.mod", "Cargo.toml", "pom.xml", "build.gradle",
+             "build.gradle.kts", "App.csproj", "App.sln", "composer.json", "Gemfile", "mix.exs", "pubspec.yaml"]
+
+
+@pytest.mark.parametrize("manifest", MANIFESTS)
+def test_two_areas_with_manifests_are_too_large(sdd_export, tmp_path, manifest):
+    root = project(tmp_path, files={f"web/{manifest}": "x\n", f"api/{manifest}": "x\n"})
+    inventory = run_export(sdd_export, root, "check").out["inventory"]
+
+    assert inventory["too_large"] is True
+    assert {area["path"]: area["manifests"] for area in inventory["areas"]}["web"] == [manifest]
+
+
+def test_one_area_with_a_manifest_is_fine(sdd_export, tmp_path):
+    root = project(tmp_path, files={"web/package.json": "{}\n", "web/sub/package.json": "{}\n"})
+
+    assert run_export(sdd_export, root, "check").out["inventory"]["too_large"] is False
+
+
+def test_areas(sdd_export, tmp_path):
+    root = project(tmp_path, files={"pyproject.toml": "[project]\n", "docs/a.md": "aa\n", "node_modules/x.js": "x\n"})
+    inventory = run_export(sdd_export, root, "check").out["inventory"]
+
+    assert inventory["areas"] == [
+        {"path": "docs", "files": 1, "bytes": 3, "manifests": []},
+        {"path": "src", "files": 1, "bytes": 12, "manifests": []},
+        {"path": ".", "files": 2, "bytes": 10 + 10, "manifests": ["pyproject.toml"]},
+    ]
+    assert list(inventory) == ["files", "bytes", "too_large", "ignore_source", "areas", "skipped", "secret_files"]
+
+
+def test_inventory_matches_files(sdd_export, tmp_path):
+    root = project(tmp_path, files={"node_modules/x.js": "x\n", ".env": "A=b\n", "docs/a.md": "a\n"})
+    inventory = run_export(sdd_export, root, "check").out["inventory"]
+    files = run_export(sdd_export, root, "files").out
+
+    assert inventory["files"] == len(files["files"])
+    assert inventory["bytes"] == sum(entry["bytes"] for entry in files["files"])
+    assert inventory["skipped"] == files["skipped"]
+    assert "files" not in json.dumps(inventory["areas"]).replace('"files"', "")
+
+
+def test_files_and_check_read_only(sdd_export, tmp_path):
+    root = project(tmp_path, files={"pyproject.toml": "[project]\n", "node_modules/x.js": "x\n"})
+    before = tree_snapshot(root)
+
+    run_export(sdd_export, root, "files")
+    run_export(sdd_export, root, "files", "--scope", "src")
+    run_export(sdd_export, root, "check")
+
+    assert tree_snapshot(root) == before
+
+
+@pytest.mark.parametrize("evidence", ["node_modules/x/index.js", "dist/app.js", "web/package-lock.json",
+                                      "node_modules", "img/logo.png"])
+def test_evidence_in_excluded_paths_is_refused(sdd_export, tmp_path, evidence):
+    root = project(tmp_path, files={"node_modules/x/index.js": "x\n", "dist/app.js": "a\n",
+                                    "web/package-lock.json": "{}\n", "img/logo.png": "p"})
+    data = draft()
+    data["lessons"][0]["evidence"] = [evidence]
+
+    assert checks(validate(sdd_export, root, data)) == ["evidence"]
+
+
+def test_quickstart_project(sdd_export, tmp_path):
+    root = make_old_project(tmp_path, "quick", files={
+        "src/app.py": "print('hi')\n", "README.md": "# quick\n", "node_modules/x/index.js": "x\n",
+        "dist/app.js": "x\n", ".env": "API_KEY=dummy\n", "src/settings.py": 'password = "hunter2"\n',
+    })
+    check = run_export(sdd_export, root, "check").out
+    files = run_export(sdd_export, root, "files").out
+
+    skipped = check["inventory"]["skipped"]
+    assert (skipped["dependency"], skipped["build"], skipped["secret"]) == (1, 1, 1)
+    assert check["inventory"]["secret_files"] == [".env"]
+    assert [entry["path"] for entry in files["files"]] == ["README.md", "src/app.py", "src/settings.py"]
+    assert files["secret_hits"] == [{"path": "src/settings.py", "line": 1}]
