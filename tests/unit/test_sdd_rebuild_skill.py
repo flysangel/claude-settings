@@ -273,7 +273,7 @@ def test_rule_3_names_save_as_the_only_write_before_confirming():
 
 
 # ---------------------------------------- outcomes of every stage (T070)
-# contracts/skill.md "階段與結果的數量": 17 + 5 + 14 + 2 + 5 + 3 + 3 + 7 + 3 + 6 + 7 + 7 + 4 + 13 = 96.
+# contracts/skill.md "階段與結果的數量": 17 + 5 + 14 + 2 + 5 + 3 + 3 + 7 + 3 + 9 + 7 + 7 + 4 + 13 = 99.
 # Each outcome names the words a block (a paragraph or list item) of its stage must hold together.
 
 OUTCOMES = {
@@ -361,6 +361,9 @@ OUTCOMES = {
         ("not-next", "check", "next"),
         ("interrupted", "claim", "specify"),
         ("number", "order", "stage 11"),
+        ("none of the candidates", "speckit-specify", "unexpected"),
+        ("not this feature's spec", "stop", "start over"),
+        ("does not exist", "verify", "spec-missing"),
     ],
     11: [
         ("`ok`", "stage 12"),
@@ -404,11 +407,11 @@ OUTCOMES = {
 }
 
 
-def test_there_are_96_outcomes():
+def test_there_are_99_outcomes():
     counts = {key: len(value) for key, value in OUTCOMES.items()}
 
-    assert counts == {1: 17, 2: 5, 3: 14, 4: 2, 5: 5, 6: 3, 7: 3, 8: 7, 9: 3, 10: 6, 11: 7, 12: 7, 13: 4, "resume": 13}
-    assert sum(counts.values()) == 96
+    assert counts == {1: 17, 2: 5, 3: 14, 4: 2, 5: 5, 6: 3, 7: 3, 8: 7, 9: 3, 10: 9, 11: 7, 12: 7, 13: 4, "resume": 13}
+    assert sum(counts.values()) == 99
 
 
 @pytest.mark.parametrize("stage, words", [(stage, words) for stage, entries in OUTCOMES.items() for words in entries],
@@ -892,3 +895,51 @@ def test_rule_8_says_the_script_scans_what_it_reads():
     rule = next(b.lower() for b in blocks(section("rules")) if b.startswith("8."))
 
     assert "old project" in rule and "path" in rule and "secret" in rule
+
+
+# ------------------- (T077) only a spec folder this run generated is claimed and edited
+
+
+def test_claim_records_only_the_folder_this_run_generated():
+    part = section(10)
+
+    # What speckit-specify reported, and its spec.md read against the confirmed title and summary, before claim.
+    assert has_block(part, "speckit-specify", "reported", "spec.md", "title", "summary", "before")
+    # Why: folders of the maintainer, of another window, or the one feature.json points at are not this run's.
+    assert has_block(part, "maintainer", "another", ".specify/feature.json", "not")
+    assert part.index("reported") < part.index('sdd_rebuild.py" claim')
+
+
+def test_no_candidate_is_this_features_spec():
+    part = section(10)
+
+    assert has_block(part, "none of the candidates", "speckit-specify", "unexpected")
+    block = next(b.lower() for b in blocks(part) if "none of the candidates" in b.lower() and "unexpected" in b)
+    assert negated(block) and "delete" in block and "--dir" in block
+
+
+def test_a_recorded_spec_that_is_not_this_features_is_never_edited():
+    part = section(10)
+
+    block = next(b.lower() for b in blocks(part) if "not this feature's spec" in b.lower() and "comparing" in b.lower())
+    assert negated(block) and "change" in block and "start over" in block
+
+
+def test_a_missing_spec_md_goes_to_verify_and_is_never_generated_again():
+    assert has_block(section(10), "does not exist", "verify", "spec-missing", "stage 11")
+    assert has_block(section("resume"), "`review`", "does not exist", "spec-missing", "never generate")
+
+
+def test_resuming_a_claim_reads_the_candidates_and_asks():
+    part = section("resume")
+
+    assert has_block(part, "`claim`", "next.candidates", "spec.md", "maintainer", "--dir")
+    # "do not generate it again" holds only for a candidate confirmed to be this feature's spec.
+    assert has_block(part, "`claim`", "not generate", "confirmed")
+    assert has_block(part, "`claim`", "none of the candidates", "stage 10")
+
+
+def test_rule_4_edits_only_the_spec_claimed_for_the_feature():
+    rule = next(b.lower() for b in blocks(section("rules")) if b.startswith("4."))
+
+    assert "claim" in rule and "recorded" in rule

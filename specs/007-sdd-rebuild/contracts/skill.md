@@ -42,6 +42,7 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 3. **確認前不寫入**：最終摘要確認之前，MUST NOT 呼叫 `speckit-*`、`claim`、`lineage`、`focus`，MUST NOT 以任何方式修改 constitution、spec、
    `.sdd-rebuild/`；唯一的寫入是 `save` 的進度（FR-010、原則 IV；字樣：`confirm`）。
 4. **不手寫 Spec Kit 的檔案**：constitution 與 spec 只透過 `speckit-constitution`、`speckit-specify` 產生；MUST NOT 手寫、補寫或刪除它們；
+   比對時對 spec 的修改只限 `claim` 為該功能記錄的那一份，`specs/` 下其他資料夾屬於維護者（原則 III）；
    MUST NOT 自己修改 `.specify/feature.json`、`.sdd-rebuild/` 或進度檔（只經由腳本）（FR-011、原則 I、III；字樣：`speckit-constitution`、`speckit-specify`）。
 5. **不自己算世代紀錄**：`origin`、`revised`、`derived_from`、`spec_dir` 由腳本決定；Claude 只在進度中寫決定（`basis`、`from`）與內容
    （R1、R5；字樣：`derived_from`）。
@@ -199,7 +200,7 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 | 結果 | 下一步 |
 |---|---|
 | `preview` 的 `ok` 為 `false` | 依 `errors` 修正目標（`unaccounted` 表示有來源項目沒有去處、`id-taken` 表示 `id` 已用過要改名、`pending-undecided` 表示還有待確認項目等）；需要決定的一題一項詢問；回到第 33 項 |
-| `preview` 的 `errors` 含 `secret` | 組好的世代紀錄看起來含機密值（只有路徑）；`save` 與腳本都會擋下，所以代表進度檔被手動修改；詢問：清除並重新開始（建議）或停止；MUST NOT 開啟進度檔 |
+| `preview` 的 `errors` 含 `secret` | 組好的世代紀錄看起來含機密值（只有路徑）；`save` 與腳本讀取舊專案、進度時都會擋下，所以代表進度在途中被手動修改或 sdd-rebuild 的缺陷；詢問：清除並重新開始（建議）或停止；MUST NOT 開啟進度檔 |
 | `preview` 回 `next-export` 或 `lineage-format` 錯誤 | 這代表 007 的組成與 006 不一致；回報錯誤內容，請維護者回報問題；停止（不確認） |
 | 維護者確認 | `save`（`phase: "confirmed"`）；成功 → 階段 9 |
 | 確認時 `save` 回 `invalid` | `preview` 之後進度又被改；重新執行第 33 項 |
@@ -224,18 +225,25 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 
 38. 依目標順序，對每個 `existing_spec` 為 `null` 的功能：以 Skill 工具呼叫 `speckit-specify`，傳入該功能確認過的內容（摘要、需求、相依、
     延後事項與 `for_plan` 寫在 Assumptions）；一次一個；MUST NOT 自行指定編號（字樣：`speckit-specify`、`Assumptions`）。
-39. 返回後立即執行 `claim <功能 id>`。順序：`claim` 在下一個 `speckit-specify` 之前。
-40. 比對 spec 與摘要：沒有依據的規則移除或標為待確認；`speckit-specify` 的澄清問題能從摘要回答就依摘要，不能時一題詢問維護者，
+39. 返回後立即以 `claim <功能 id>` 記錄它建立的資料夾。順序：`claim` 在下一個 `speckit-specify` 之前。只能記錄這次執行中 `speckit-specify`
+    為這個功能建立的資料夾：腳本無法分辨它與維護者自建、另一個視窗產生、或 `.specify/feature.json` 剛好指向的資料夾，而第 40 項會修改
+    記錄的 spec。因此執行 `claim` 前先讀取 `speckit-specify` 回報建立的資料夾的 `spec.md`，確認標題與內容對應確認過的這個功能（標題、摘要）；
+    沒有回報資料夾時依 `none` 處理；內容不對應時不執行 `claim`，告訴維護者該資料夾的內容並詢問（確認是這個功能的 → `claim --dir`；
+    不是 → 「沒有吻合的候選」；或停止）。
+40. 比對 spec 與摘要（`spec.md` 不存在或明顯不是這個功能的 spec 時不做任何修改，依下表）：沒有依據的規則移除或標為待確認；`speckit-specify` 的澄清問題能從摘要回答就依摘要，不能時一題詢問維護者，
     答案經 `speckit-specify` 的流程寫進該份 spec，需要記錄時加入 `deferred` 或 `for_plan`（確認後只新增）；不改目標；完成後 `save`（該功能 `reviewed: true`）。
     第 37 項與本項在確認後加入的內容不在世代紀錄中：結束報告（第 44 項）列出它們，並說明下一次 `/sdd-export` 時它們被當成這一代新增的項目。
 
 | 結果 | 下一步 |
 |---|---|
-| `claim` 成功 | 第 40 項，然後下一個功能；全部完成 → 階段 11 |
+| `claim` 成功 | 確認 `spec_dir` 是第 39 項確認過（或維護者確認）的資料夾；第 40 項，然後下一個功能；全部完成 → 階段 11；不是時同「明顯不是這個功能的 spec」 |
 | `claim` 回 `none` | `speckit-specify` 沒有產生 spec：列出 `incomplete`（有的話，說明不會刪除它）；詢問：再呼叫一次（建議）或停止；再呼叫一次仍失敗 → 停止，進度保留 |
-| `claim` 回 `ambiguous` 或 `mismatch` | 列出 `candidates` 與 `feature_directory`，讀取候選的 spec 判斷哪一份屬於這個功能，一題請維護者確認（建議：判斷吻合的那份）；確認後 `claim --dir`；其餘候選列為維護者要處理的多出的資料夾 |
+| `claim` 回 `ambiguous` 或 `mismatch` | 列出 `candidates` 與 `feature_directory`；建議這次 `speckit-specify` 回報、且 `spec.md` 對應這個功能的那份（其他候選的 `spec.md` 只用於說明它們是什麼），一題請維護者確認；確認後 `claim --dir`；沒有吻合時見下一列；其餘候選列為維護者要處理的多出的資料夾 |
+| 沒有吻合的候選（沒有候選的 `spec.md` 對應這個功能、`speckit-specify` 回報的資料夾不在其中，或維護者說都不是） | 說明那些資料夾不是這個功能的 spec、屬於維護者：本 skill 不修改、不刪除，`verify` 列為 `unexpected`；把這個功能視為尚未產生，依第 38 項呼叫 `speckit-specify`；之後 `claim` 回 `ambiguous`，依該列以 `--dir` 記錄剛產生的資料夾；再失敗 → 停止，進度保留 |
+| 比對時記錄的 `spec.md` 明顯不是這個功能的 spec | MUST NOT 修改它（連移除一句都不做）；停止並告訴維護者哪個資料夾被記錄給哪個功能；詢問：其實就是這個功能的 spec（例如維護者改寫過，繼續比對），或重新開始（記錄的資料夾無法更改，已產生的文件保留） |
+| 比對時 `<spec_dir>/spec.md` 不存在（`claim` 後被刪除） | 執行 `verify`，依階段 11 的 `spec-missing` 處理（還原或重新開始）；MUST NOT 重新產生（plan 設計取捨 6） |
 | `claim` 回 `not-next` | 代表順序錯了；重新執行 `check`，依 `next` 處理 |
-| `speckit-specify` 中斷（session 結束） | 再執行時 `next` 為 `claim`（已產生）或 `specify`（未產生）；依它繼續，不重複產生 |
+| `speckit-specify` 中斷（session 結束） | 再執行時 `next` 為 `claim`（有新的資料夾，可能已產生）或 `specify`（未產生）；依「接續」繼續：不重複產生，也不記錄無法確認屬於這個功能的資料夾 |
 | 產生的編號與預期不同（例如中間有維護者自己的資料夾） | `claim` 仍記錄；`verify` 的 `order` 決定是否可接受（階段 11） |
 
 ### 階段 11：驗證（`verify`）
@@ -297,9 +305,9 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 | `decide` | 詢問：繼續（建議）、重新開始（`clear`）；繼續時回到 `stage` 對應的階段 |
 | `constitution` | 詢問：繼續產生（建議）、改回討論（只有這時與沒有任何 spec 時允許；`save` 為 `deciding`）、重新開始；繼續 → 階段 9 |
 | `review-constitution` | 從第 37 項的比對繼續，不重新呼叫 `speckit-constitution` |
-| `claim` | 對 `next.feature` 執行 `claim`（`speckit-specify` 已產生、中斷在記錄之前），不重新產生 |
+| `claim` | 候選（`next.candidates`）可能是中斷前產生的，也可能是維護者自建或另一個視窗產生的，這次對話中沒有 `speckit-specify` 的回報能分辨：讀取每個候選的 `spec.md`，判斷是否對應 `next.feature`；吻合時詢問維護者是否為這次重建產生的（建議），確認後 `claim --dir`、從第 40 項繼續、不重新產生；都不吻合或維護者說不是 → 同階段 10「沒有吻合的候選」 |
 | `specify` | 從第 38 項的這個功能繼續 |
-| `review` | 從第 40 項的比對繼續 |
+| `review` | 從第 40 項的比對繼續（記錄的 `spec_dir`）；`spec.md` 不存在時執行 `verify`，依 `spec-missing` 處理，MUST NOT 重新產生 |
 | `verify` | 階段 11 |
 | `focus`、`clear` | 階段 13（世代紀錄已寫入；不能重新開始） |
 
@@ -322,13 +330,13 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 | 7 教訓 | 3 |
 | 8 摘要與確認 | 7 |
 | 9 constitution | 3 |
-| 10 spec | 6 |
+| 10 spec | 9 |
 | 11 驗證 | 7 |
 | 12 世代紀錄 | 7 |
 | 13 收尾 | 4 |
 | 接續 | 8 種 `next.step`，加上舊專案變化 3 種、重新開始與改決定 2 種（共 13） |
 
-合計 96 種結果，每一種都有下一步。
+合計 99 種結果，每一種都有下一步。
 
 ## README.md
 

@@ -2774,3 +2774,63 @@ def test_save_does_not_repeat_a_secret_in_a_field_name(sdd_rebuild, tmp_path, sd
     result = save(sdd_rebuild, new, progress)
 
     assert result.code == 1 and not shows(result)
+
+
+# ------------- (T077) folders under specs/ that this run did not generate: what the script can and cannot tell
+
+
+def constitution_done(module, tmp_path, sdd_export):
+    """Confirmed, the constitution generated and compared: the next step is the first feature's spec."""
+    old, new, progress = confirmed(module, tmp_path, sdd_export)
+    simulate_constitution(new)
+    progress["generation"]["constitution"] = "reviewed"
+    ok(save(module, new, progress))
+    assert next_of(module, new) == {"step": "specify", "feature": "deploy", "candidates": []}
+    return old, new, progress
+
+
+def test_a_folder_the_maintainer_made_shows_as_a_claim_candidate(sdd_rebuild, tmp_path, sdd_export):
+    # SKILL.md must not take next.step "claim" as proof that the candidate is this feature's spec.
+    old, new, progress = constitution_done(sdd_rebuild, tmp_path, sdd_export)
+    write_tree(new, {"specs/001-mine/spec.md": "# Mine\n"})
+
+    assert next_of(sdd_rebuild, new) == {"step": "claim", "feature": "deploy", "candidates": ["specs/001-mine"]}
+    refused = run_rebuild(sdd_rebuild, new, "claim", "deploy")
+    assert (refused.code, refused.out["reason"], refused.out["candidates"]) == (1, "mismatch", ["specs/001-mine"])
+
+    # The way out SKILL.md gives: generate this feature's spec, then record it with --dir once confirmed.
+    folder = simulate_specify(new, "deploy")
+    ambiguous = run_rebuild(sdd_rebuild, new, "claim", "deploy")
+    assert (ambiguous.out["reason"], ambiguous.out["candidates"]) == ("ambiguous", ["specs/001-mine", folder])
+    assert ok(run_rebuild(sdd_rebuild, new, "claim", "deploy", "--dir", folder))["spec_dir"] == folder
+    progress["target"]["features"][0].update(spec_dir=folder, reviewed=True)
+    ok(save(sdd_rebuild, new, progress))
+    second = simulate_specify(new, "status")
+    ok(run_rebuild(sdd_rebuild, new, "claim", "status", "--dir", second))
+    progress["target"]["features"][1].update(spec_dir=second, reviewed=True)
+    ok(save(sdd_rebuild, new, progress))
+    out = ok(verify(sdd_rebuild, new))
+    assert out["unexpected"] == ["specs/001-mine"]
+    assert (new / "specs/001-mine/spec.md").read_text() == "# Mine\n"
+
+
+def test_claim_records_an_unrelated_folder_that_feature_json_points_at(sdd_rebuild, tmp_path, sdd_export):
+    # The script cannot tell a spec generated in another window from this run's: SKILL.md reads spec.md before claim.
+    old, new, progress = constitution_done(sdd_rebuild, tmp_path, sdd_export)
+    folder = simulate_specify(new, "unrelated")
+
+    assert next_of(sdd_rebuild, new) == {"step": "claim", "feature": "deploy", "candidates": [folder]}
+    out = ok(run_rebuild(sdd_rebuild, new, "claim", "deploy"))
+    assert out["spec_dir"] == folder == "specs/001-unrelated"
+
+
+def test_a_claimed_spec_that_was_deleted_is_left_to_verify(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = constitution_done(sdd_rebuild, tmp_path, sdd_export)
+    folder = simulate_specify(new, "deploy")
+    ok(run_rebuild(sdd_rebuild, new, "claim", "deploy"))
+    shutil.rmtree(new / folder)
+
+    assert next_of(sdd_rebuild, new) == {"step": "review", "feature": "deploy", "candidates": []}
+    result = run_rebuild(sdd_rebuild, new, "verify")
+    assert (result.code, result.out["reason"]) == (1, "mismatch-documents")
+    assert "spec-missing" in [f["check"] for f in result.out["failures"]]

@@ -133,7 +133,7 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 | `decide` | `phase` 為 `deciding` |
 | `constitution` | 已確認，`generation.constitution` 為 `pending` |
 | `review-constitution` | `generation.constitution` 為 `written` |
-| `claim` | 下一個要產生的功能（`feature`）沒有 `spec_dir`，且已有候選資料夾（`candidates`，同 `claim` 的定義）：先 `claim`，不重新產生 |
+| `claim` | 下一個要產生的功能（`feature`）沒有 `spec_dir`，且已有候選資料夾（`candidates`，同 `claim` 的定義）。候選只是「新的、含 `spec.md`」的資料夾，腳本無法分辨它是否為這次重建產生（維護者自建或另一個視窗產生的也會列入）；SKILL.md 讀取候選的 `spec.md` 並經維護者確認後才 `claim --dir`，確認屬於這個功能時不重新產生 |
 | `specify` | 同上但沒有候選 |
 | `review` | `feature` 已有 `spec_dir`、`reviewed` 為 `false` |
 | `verify` | 全部功能都已 `reviewed`，`lineage_written` 為 `null` |
@@ -192,7 +192,8 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 
 1. 候選：`specs/` 下含 `spec.md`、不在 `baseline.specs`、也不是任何功能的 `spec_dir` 的資料夾。
 2. 讀 `.specify/feature.json` 的 `feature_directory`（005 的 `read_feature_directory`）。
-3. 不帶 `--dir`：候選恰好一個且等於 `feature_directory` 時記錄。否則不記錄：沒有候選 → `none`（另列 `incomplete`：
+3. 不帶 `--dir`：候選恰好一個且等於 `feature_directory` 時記錄（`feature_directory` 可能被另一個視窗的 `speckit-specify` 改寫，
+   所以這不證明候選屬於這個功能；SKILL.md 在執行前先確認 `speckit-specify` 回報的資料夾與其 `spec.md` 的內容）。否則不記錄：沒有候選 → `none`（另列 `incomplete`：
    不在 `baseline`、沒有 `spec.md` 的 `specs/` 子資料夾）；兩個以上 → `ambiguous`；一個但不等於 `feature_directory` → `mismatch`。
 4. 帶 `--dir`：值 MUST 是候選之一（否則 `usage`）；記錄。只在維護者確認後使用。
 5. 記錄 = 把 `spec_dir` 寫入該功能並原子保存進度。

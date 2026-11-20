@@ -67,3 +67,7 @@ uv run <repo>/home/skills/sdd-rebuild/scripts/sdd_rebuild.py check --old <舊專
 8. **舊專案被手動加入機密值（原則 V）**：在舊專案的 `.sdd-export/nutrients.json` 某個字串加入假權杖 → 說明是哪個檔案的哪個欄位路徑、
    請維護者移除後重跑，對話中不出現該值，Claude 沒有開啟該檔案；在舊世代紀錄加入 → 階段 3 說明並建議移除，選擇略過時進度與新專案的
    `lineage.json` 都不含該值。
+9. **不相干的 spec 資料夾（原則 III）**：確認後、第一個功能產生前，維護者自己建立 `specs/001-mine/spec.md`，或在另一個視窗以 `/speckit-specify`
+   產生不相干的 spec（`.specify/feature.json` 指向它）→ 接續時 Claude 讀取候選的 `spec.md`，判斷不是這個功能的 spec，不認領、不修改它，
+   為這個功能產生新的 spec 並在維護者確認後以 `claim --dir` 記錄；`verify` 把不相干的資料夾列為 `unexpected`。已記錄的 spec 被刪除後接續 →
+   `verify` 回報 `spec-missing`，提示還原或重新開始，不重新產生。

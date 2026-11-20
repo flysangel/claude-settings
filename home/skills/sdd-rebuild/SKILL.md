@@ -71,7 +71,9 @@ These apply at every stage.
 4. **Spec Kit writes the documents.** The constitution is generated only by the `speckit-constitution` skill and
    each spec only by the `speckit-specify` skill. Never write, complete or delete them by hand, and never create a
    spec folder yourself. The only edit you make to a generated document is removing a statement that has no basis
-   in the confirmed summary, or marking it as to be confirmed (stages 9 and 10). Never edit `.specify/feature.json`,
+   in the confirmed summary, or marking it as to be confirmed (stages 9 and 10), and in a spec only in the one that
+   `claim` recorded for that feature: any other folder under `specs/` belongs to the maintainer. Never edit
+   `.specify/feature.json`,
    anything in `.sdd-rebuild/` or the progress file yourself; the script does that.
 5. **The script composes the lineage.** `origin`, `revised`, `derived_from`, `source`, `spec`, `spec_dir` and the
    discard records are computed by the script from the nutrients and your decisions. In the progress you record only
@@ -502,8 +504,9 @@ Outcomes:
   is both kept and discarded; `existing-spec` means a match to an existing spec is wrong or out of order. Ask one
   question per decision the maintainer has to make, save, and run `preview` again.
 - `errors` holds `secret`: a field of the composed lineage looks like it holds a secret (`path` names it; the value
-  is not shown). `save` refuses such text from you and the script refuses it from the old project, so the saved
-  progress was edited by hand. Tell the maintainer, and ask: clear the progress and start over (recommended; run
+  is not shown). This should not happen: `save` refuses such text from you, and the script refuses it when it reads
+  the old project and the saved progress; so either the progress was edited by hand while you were working, or it
+  is a defect of sdd-rebuild. Tell the maintainer, and ask: clear the progress and start over (recommended; run
   `clear`, then `check --old`), or stop. Do not open the progress file. Nothing is generated.
 - `errors` holds `next-export` or `lineage-format`: the composed lineage disagrees with sdd-export's rules although
   every decision is valid. That is a defect of sdd-rebuild, not something to fix in the decisions. Show the errors,
@@ -563,40 +566,67 @@ For each feature of `target.features` whose `existing_spec` is `null`, in that o
    left to the plan (items whose `feature` is `null` go with every spec they affect, or the first spec). Write in
    the documents' language. Never give it a number or a folder name: Spec Kit numbers each spec after the existing
    ones, and calling it one feature at a time in this order makes the numbers follow the order of work.
-2. Right after it returns, and before invoking `speckit-specify` for the next feature, run `claim`:
+2. Right after it returns, and before invoking `speckit-specify` for the next feature, record the folder it created
+   with `claim`. Only a folder that `speckit-specify` created for this feature in this run may be recorded: step 3
+   edits the recorded spec, and the script cannot tell this run's folder from one the maintainer made, one another
+   window or session generated, or one `.specify/feature.json` happens to point at; none of those may ever be
+   recorded or edited. So first take the folder `speckit-specify` reported creating, use Read on the `spec.md` of the
+   folder, and check that its title and content describe this feature as confirmed (its title and summary). Only
+   then run `claim`:
 
    ```text
    uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_rebuild.py" claim <feature id>
    ```
 
-   It finds the folder Spec Kit just created and records it as the feature's `spec_dir` in the progress.
-3. Read `<spec_dir>/spec.md` and compare it with the summary. Spec Kit fills in sections its template requires and
-   may infer details: remove statements that have no basis in the summary, or mark them as to be confirmed where a
-   section must not be empty. If `speckit-specify` asks clarifying questions, answer from the summary; when the
-   summary has no answer, ask the maintainer one question and give the answer to `speckit-specify`, so that it is
-   written into the spec. When the answer also needs to be remembered (something deferred, or a choice for the
-   plan), add it to `deferred` or `for_plan`. Never change the target: such an answer is added after the
-   confirmation, is not part of the lineage, and the final report names it.
+   It records the one new spec folder as the feature's `spec_dir` in the progress. Do not run `claim` when
+   `speckit-specify` reported no folder (it did not produce a spec: handle it like the `none` outcome below), or when
+   that `spec.md` does not describe this feature: then tell the maintainer what the folder holds and ask whether it
+   is this feature's spec after all (record it with `claim <feature id> --dir <that folder>`), or not (see "none of
+   the candidates" below), or stop.
+3. Use Read on `<spec_dir>/spec.md` and compare it with the summary. If `spec.md` does not exist, or it is clearly
+   not this feature's spec, change nothing and follow the outcomes below. Spec Kit fills in sections its template
+   requires and may infer details: remove statements that have no basis in the summary, or mark them as to be
+   confirmed where a section must not be empty. If `speckit-specify` asks clarifying questions, answer from the
+   summary; when the summary has no answer, ask the maintainer one question and give the answer to
+   `speckit-specify`, so that it is written into the spec. When the answer also needs to be remembered (something
+   deferred, or a choice for the plan), add it to `deferred` or `for_plan`. Never change the target: such an answer
+   is added after the confirmation, is not part of the lineage, and the final report names it.
 4. Save with the feature's `"reviewed": true` and its `spec_dir` exactly as `claim` recorded it.
    Then go to the next feature.
 
 Outcomes:
 
-- `claim` succeeds: compare (step 3), save, and continue with the next feature; once every feature is done, go to
-  stage 11.
+- `claim` succeeds: check that the `spec_dir` it answers is the folder you checked in step 2 (or the one the
+  maintainer confirmed), then compare (step 3), save, and continue with the next feature; once every feature is
+  done, go to stage 11. If it is another folder, handle it like "not this feature's spec" below.
 - `claim` answers `none`: `speckit-specify` did not produce a spec. List `incomplete` if it is not empty (folders
   without a `spec.md`; say that this skill does not delete them). Ask: invoke `speckit-specify` again for this
   feature (recommended), or stop. If it fails again, stop; the progress is kept.
 - `claim` answers `ambiguous` or `mismatch`: there is more than one new spec folder, or the new one is not the one
-  `.specify/feature.json` points at (`feature_directory`). List `candidates` and `feature_directory`, read each
-  candidate's `spec.md` to judge which one is this feature's, and ask the maintainer (recommend the one that
-  matches). Then run `claim <feature id> --dir <specs/name>` with their choice. The other candidates are extra
-  folders for the maintainer to deal with; `verify` lists them as `unexpected`.
+  `.specify/feature.json` points at (`feature_directory`). List `candidates` and `feature_directory`. The folder to
+  recommend is the one `speckit-specify` reported in this run, when it is among the candidates and its `spec.md`
+  describes this feature; read the other candidates' `spec.md` only to say what they are. Ask the maintainer, then
+  run `claim <feature id> --dir <specs/name>` with their choice. The other candidates are extra folders for the
+  maintainer to deal with; `verify` lists them as `unexpected`. When no candidate fits, see the next outcome.
+- None of the candidates is this feature's spec (no candidate's `spec.md` describes it, `speckit-specify` reported
+  no folder among them, or the maintainer says none is): those folders are not this feature's spec and belong to the
+  maintainer. Say so; this skill never changes or deletes them, and `verify` lists them as `unexpected`. Treat this
+  feature's spec as not generated: invoke `speckit-specify` for it (step 1). `claim` then answers `ambiguous`,
+  because those folders are still new; continue as in that outcome and record the folder just generated with
+  `--dir`. If `speckit-specify` fails again, stop; the progress is kept.
+- While comparing (step 3), the recorded `spec.md` is clearly not this feature's spec (it describes something else,
+  for example a spec the maintainer generated in another window): do not change it, not even to remove a statement.
+  Stop and tell the maintainer which folder was recorded for which feature. Ask: it is this feature's spec after all
+  (for example the maintainer rewrote it; then continue the comparison), or start over (see "Resuming"; the recorded
+  folder cannot be changed, and the documents generated so far are kept).
+- At step 3, `<spec_dir>/spec.md` does not exist (it was deleted after `claim`): run `verify` and handle its
+  `spec-missing` as in stage 11 (restore it or start over). Never generate it again.
 - `claim` answers `not-next`: the feature is not the next one to generate (the order went wrong). Run `check` and
   follow its `next`.
-- The session is interrupted around `speckit-specify`: the next run's `check` shows `next.step` `claim` (the spec
-  was generated but not recorded) or `specify` (it was not generated); continue from there without generating a
-  spec twice.
+- The session is interrupted around `speckit-specify`: the next run's `check` shows `next.step` `claim` (new spec
+  folders exist; the spec may have been generated but not recorded) or `specify` (it was not generated); continue
+  as "Resuming" says, which never generates a spec twice and never records a folder it cannot tell is this
+  feature's.
 - The number Spec Kit gave is not the expected one (for example a folder of the maintainer's sits in between):
   `claim` still records it; `verify` in stage 11 decides whether the order is acceptable.
 
@@ -739,10 +769,17 @@ Then continue from `next.step`:
   to stage 8 to change and confirm again), or start over (`clear`). To continue, go to stage 9.
 - `review-constitution`: the constitution was generated but not compared. Continue with the comparison of stage 9;
   do not invoke `speckit-constitution` again for what is already there.
-- `claim`: the spec of `next.feature` was generated but not recorded (`next.candidates` lists the new folders). Run
-  `claim` for `next.feature` and continue as in stage 10; do not generate it again.
+- `claim`: there are new spec folders (`next.candidates`) and `next.feature` has none recorded. Perhaps its spec was
+  generated before the interruption, but a candidate may also be a folder the maintainer made or generated in
+  another window, and nothing reported by `speckit-specify` in this conversation tells them apart. Use Read on the
+  `spec.md` of each candidate and judge whether its title and content describe `next.feature` as confirmed. When
+  one does, ask the maintainer whether it is the spec this rebuild generated (recommended when it matches); once
+  they confirm, run `claim <next.feature> --dir <that folder>`, continue with step 3 of stage 10, and do not generate
+  it again. When none of the candidates is this feature's spec, or the maintainer says so, handle it like that
+  outcome of stage 10 (generate the spec, then record it with `--dir`).
 - `specify`: continue stage 10 with `next.feature`.
-- `review`: continue stage 10 with the comparison (step 3) of `next.feature`.
+- `review`: continue stage 10 with the comparison (step 3) of `next.feature`, in its recorded `spec_dir`. If that
+  `spec.md` does not exist, run `verify` and handle `spec-missing` as in stage 11; never generate it again.
 - `verify`: go to stage 11.
 - `focus` or `clear`: the lineage is written; go to stage 13. Do not offer to start over: it is no longer possible.
 
