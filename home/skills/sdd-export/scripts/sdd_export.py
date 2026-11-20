@@ -1212,7 +1212,7 @@ def load_lineage(path: Path) -> tuple[str, dict | None, list[Problem]]:
 
 # -------------------------------------------------------------- read scope
 
-# data-model.md "讀取範圍"; names are compared in lowercase on every platform.
+# The read scope of data-model.md; names are compared in lowercase on every platform.
 DEPENDENCY_DIRS = frozenset({
     "node_modules", "bower_components", "jspm_packages", "vendor", ".venv", "venv", "pods", "carthage", ".terraform",
     ".bundle",
@@ -1374,15 +1374,17 @@ class Scan:
         for current, dirs, names in os.walk(self.root, followlinks=False):
             base = Path(current).relative_to(self.root).as_posix()
             prefix = "" if base == "." else base + "/"
+            descend = []
             for name in sorted(dirs):
                 rel = prefix + name
                 category = folder_category(name, top=not prefix)
                 if (Path(current) / name).is_symlink():
                     self.skipped.append(("ignored", rel))
-                    dirs.remove(name)
                 elif category:
                     self.skipped.append((category, rel))
-                    dirs.remove(name)
+                else:
+                    descend.append(name)
+            dirs[:] = descend
             for name in sorted(names):
                 self._add_file(prefix + name)
 

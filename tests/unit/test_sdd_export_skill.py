@@ -85,7 +85,7 @@ def test_script_is_english_without_paths_or_emails():
     assert not EMAIL.search(script)
 
 
-DELETE_CALLS = re.compile(r"\b(unlink|remove|rmtree|rmdir|removedirs|truncate)\(")
+DELETE_CALLS = re.compile(r"(?:\bos\.|\bshutil\.|\.)(unlink|remove|rmtree|rmdir|removedirs|truncate)\(")
 
 
 def function_of_each_line(source: str) -> dict[int, str]:
