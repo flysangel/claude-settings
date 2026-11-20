@@ -2137,3 +2137,79 @@ def test_secret_scan_of_a_long_line_is_fast(sdd_export):
     assert sdd_export.secret_lines("a" * (1024 * 1024)) == []
     assert sdd_export.secret_lines("x" * 500_000 + " https://u:p4ss@example.invalid") == [1]
     assert time.monotonic() - started < 5
+
+
+# ================================================================ lessons
+
+
+@pytest.mark.parametrize("kind", ["decision", "pitfall", "reversed"])
+def test_lesson_kinds(sdd_export, tmp_path, kind):
+    root = project(tmp_path)
+
+    assert validate(sdd_export, root, draft(lessons=[lesson("x", kind=kind)])).code == 0
+
+
+@pytest.mark.parametrize("kind", ["tip", "Decision", "", None, "lesson"])
+def test_other_lesson_kinds_are_refused(sdd_export, tmp_path, kind):
+    root = project(tmp_path)
+    result = validate(sdd_export, root, draft(lessons=[lesson("x", kind=kind)]))
+
+    assert result.code == 1
+    assert [e["path"] for e in errors_for(result, "field")] == ["lessons[0].kind"]
+
+
+@pytest.mark.parametrize("evidence", [["README.md"], ["maintainer"]])
+def test_confirmed_lessons_need_evidence(sdd_export, tmp_path, evidence):
+    root = project(tmp_path)
+
+    assert validate(sdd_export, root, draft(lessons=[lesson("x", evidence=evidence)])).code == 0
+    result = validate(sdd_export, root, draft(lessons=[lesson("x", evidence=[])]))
+    assert [e["path"] for e in errors_for(result, "unsupported")] == ["lessons[0]"]
+    assert validate(sdd_export, root, draft(lessons=[lesson("x", status="pending", evidence=[])])).code == 0
+
+
+@needs_git
+def test_lessons_from_git_history(sdd_export, tmp_path):
+    root = project(tmp_path, git=True)
+    git_run(root, "add", "-A")
+    git_run(root, "commit", "--quiet", "-m", "first")
+    head = git_run(root, "rev-parse", "HEAD").strip()
+
+    assert validate(sdd_export, root, draft(lessons=[lesson("x", evidence=[f"commit:{head}"])])).code == 0
+    missing = validate(sdd_export, root, draft(lessons=[lesson("x", evidence=["commit:" + "1" * 40])]))
+    assert checks(missing) == ["evidence"]
+
+
+def test_commit_evidence_outside_git(sdd_export, tmp_path):
+    root = project(tmp_path)
+    result = validate(sdd_export, root, draft(lessons=[lesson("x", evidence=["commit:abcdef1"])]))
+
+    assert checks(result) == ["evidence"]
+
+
+def test_no_lessons_is_valid_and_written(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft(lessons=[]))
+
+    assert json.loads(read_export(root, "nutrients.json"))["lessons"] == []
+
+
+def test_a_deleted_lesson_is_gone_after_writing(sdd_export, tmp_path):
+    root = project(tmp_path)
+    both = draft(lessons=[lesson("keep-me"), lesson("drop-me", kind="pitfall")])
+    write_ok(sdd_export, root, both)
+    fewer = draft(lessons=[lesson("keep-me")])
+
+    diff = validate(sdd_export, root, fewer).out["diff"]
+    write_ok(sdd_export, root, fewer)
+
+    assert diff["removed"] == [{"section": "lessons", "id": "drop-me", "title": "教訓 drop-me"}]
+    ids = [item["id"] for item in json.loads(read_export(root, "nutrients.json"))["lessons"]]
+    assert ids == ["keep-me"]
+
+
+def test_lessons_refuse_code_blocks(sdd_export, tmp_path):
+    root = project(tmp_path)
+    result = validate(sdd_export, root, draft(lessons=[lesson("x", text="原因：\n```\nrm -rf x\n```")]))
+
+    assert [e["path"] for e in errors_for(result, "code-block")] == ["lessons[0].text"]
