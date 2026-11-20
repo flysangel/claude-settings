@@ -225,3 +225,109 @@ def run_spec_kit_scripts(project: Path, env: dict[str, str]) -> None:
         )
         assert done.returncode == 0, f"{arguments[0]} failed ({done.returncode}):\n{done.stdout}\n{done.stderr}"
     assert (project / "specs" / "001-demo" / "plan.md").is_file()
+
+
+# -------------------------------------------------------------- sdd-update
+
+SDD_UPDATE_PY = REPO_ROOT / "home" / "skills" / "sdd-update" / "scripts" / "sdd_update.py"
+
+OLD_VERSION = "1.0.0"
+NEW_VERSION = "1.1.0"
+
+# Files both versions provide with the same content.
+_SAME_IN_BOTH: dict[str, str] = {
+    ".specify/templates/spec-template.md": "# Spec template\n\nsame in both\n",
+    ".specify/scripts/bash/setup-plan.sh": "#!/usr/bin/env bash\necho plan\n",
+}
+
+# Files both versions provide with different content, and files only one of them provides.
+_BY_VERSION: dict[str, dict[str, str]] = {
+    OLD_VERSION: {
+        ".claude/skills/speckit-plan/SKILL.md": "---\nname: speckit-plan\nversion: 1.0.0\n---\nplan\n",
+        ".claude/skills/speckit-specify/SKILL.md": "---\nname: speckit-specify\nversion: 1.0.0\n---\nspecify\n",
+        ".claude/skills/speckit-legacy/SKILL.md": "---\nname: speckit-legacy\nversion: 1.0.0\n---\nlegacy\n",
+        ".specify/templates/plan-template.md": "# Plan template\n\nold body\n",
+        ".specify/scripts/bash/common.sh": "#!/usr/bin/env bash\necho common 1.0.0\n",
+        ".specify/memory/constitution.md": "# Constitution\n\n[PRINCIPLE] old\n",
+        ".specify/memory/.constitution-template.json": '{"template": "old"}\n',
+    },
+    NEW_VERSION: {
+        ".claude/skills/speckit-plan/SKILL.md": "---\nname: speckit-plan\nversion: 1.1.0\n---\nplan\n",
+        ".claude/skills/speckit-specify/SKILL.md": "---\nname: speckit-specify\nversion: 1.1.0\n---\nspecify\n",
+        ".specify/templates/plan-template.md": "# Plan template\n\nnew body\n",
+        ".specify/scripts/bash/common.sh": "#!/usr/bin/env bash\necho common 1.1.0\n",
+        ".specify/scripts/bash/markdown_sections.py": "print('sections')\n",
+        ".specify/scripts/bash/setup-tasks.sh": "#!/usr/bin/env bash\necho tasks\n",
+        ".specify/memory/constitution.md": "# Constitution\n\n[PRINCIPLE] new\n",
+        ".specify/memory/.constitution-template.json": '{"template": "new"}\n',
+    },
+}
+
+
+def versioned_official_files(version: str) -> dict[str, str]:
+    """The fake official output of OLD_VERSION or NEW_VERSION (any other version gets the new files)."""
+    files = dict(_SAME_IN_BOTH)
+    files.update(_BY_VERSION.get(version, _BY_VERSION[NEW_VERSION]))
+    files[".specify/init-options.json"] = (
+        '{\n  "integration": "claude",\n  "script": "sh",\n  "speckit_version": "%s"\n}\n' % version
+    )
+    return files
+
+
+def write_versioned_official_output(dest: Path, version: str) -> None:
+    """Write the fake output of version into dest; .sh files are executable, as the official tool makes them."""
+    import os
+
+    files = versioned_official_files(version)
+    write_tree(dest, files)
+    for rel in files:
+        if rel.endswith(".sh"):
+            os.chmod(dest / rel, 0o755)
+
+
+def fake_versioned_official(version: str, dest: Path) -> None:
+    """A stand-in for running the official tool: writes the fake output of the requested version."""
+    write_versioned_official_output(Path(dest), version)
+
+
+def init_with_version(sdd_init_module, root: Path, version: str = OLD_VERSION, run_official=fake_versioned_official) -> int:
+    """Bring Spec Kit <version> into root through sdd-init's own entry point, as if it were the latest release.
+
+    Only the version lookup is replaced; run_official may be the fake above or the real official tool.
+    """
+    import os
+
+    previous = os.getcwd()
+    os.chdir(root)
+    try:
+        return sdd_init_module.main(["init"], resolve_version=lambda: version, run_official=run_official)
+    finally:
+        os.chdir(previous)
+
+
+def _load_sdd_update():
+    spec = importlib.util.spec_from_file_location("sdd_update", SDD_UPDATE_PY)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["sdd_update"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="session")
+def sdd_update(sdd_init):
+    # sdd_init is requested first so that sdd_update shares that very module (and the tests' patches on it).
+    return _load_sdd_update()
+
+
+def run_sdd_update(cwd: Path, env: dict[str, str], *args: str):
+    """Run the real script the way the skill does: uv run <script>."""
+    import subprocess
+
+    return subprocess.run(
+        ["uv", "run", str(SDD_UPDATE_PY), *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
