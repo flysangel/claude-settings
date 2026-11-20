@@ -243,4 +243,4 @@ Task: "T028 撰寫 home/skills/sdd-update/README.md"
 
 ## Phase 7: Convergence
 
-- [ ] T048 在 `tests/unit/test_sdd_update.py` 加入「有被保留的檔案時寫入中途失敗、再次執行」的測試（只增補，不改既有測試）：導入舊版後修改至少兩個新版仍提供的 Spec Kit 檔案（例如 `.specify/templates/plan-template.md` 與 `.claude/skills/speckit-specify/SKILL.md`），讓更新分別在寫入第二份比對副本時（`write_copy`）與取代檔案時（`replace_file`）拋出 `OSError`；確認第一次結束碼 1，再次執行結束碼 0，被保留的檔案位元組從頭到尾不變，每一份比對副本都存在且內容為新版官方產出，`kept` 行與一次完成時相同，紀錄與另一個沒有中斷、一次完成的相同專案逐位元組相同；另以「上一次更新已留下比對副本、這一次在刪除舊副本之後失敗」的情況確認再次執行後副本被重新寫入、紀錄內沒有殘留的舊副本項目 per Edge Case「更新中途失敗：再次執行時能從一致的狀態完成，不遺失被保留的檔案」、FR-005 (partial)
+- [X] T048 在 `tests/unit/test_sdd_update.py` 加入「有被保留的檔案時寫入中途失敗、再次執行」的測試（只增補，不改既有測試）：導入舊版後修改至少兩個新版仍提供的 Spec Kit 檔案（例如 `.specify/templates/plan-template.md` 與 `.claude/skills/speckit-specify/SKILL.md`），讓更新分別在寫入第二份比對副本時（`write_copy`）與取代檔案時（`replace_file`）拋出 `OSError`；確認第一次結束碼 1，再次執行結束碼 0，被保留的檔案位元組從頭到尾不變，每一份比對副本都存在且內容為新版官方產出，`kept` 行與一次完成時相同，紀錄與另一個沒有中斷、一次完成的相同專案逐位元組相同；另以「上一次更新已留下比對副本、這一次在刪除舊副本之後失敗」的情況確認再次執行後副本被重新寫入、紀錄內沒有殘留的舊副本項目 per Edge Case「更新中途失敗：再次執行時能從一致的狀態完成，不遺失被保留的檔案」、FR-005 (partial)

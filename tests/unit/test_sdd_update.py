@@ -1543,3 +1543,79 @@ def test_files_replaced_before_an_interruption_are_kept_if_a_newer_release_appea
     assert of(out, "kept") == [kept_modified(p) for p in replaced]
     assert (root / replaced[0]).read_bytes() == NEW[replaced[0]].encode()
     assert out[0].startswith("updated ") and out[-1] == NEXT
+
+
+# ============= Edge Case: an interruption while kept files exist, then running again (T048)
+
+
+@pytest.mark.parametrize(
+    "where, prior",
+    [
+        ("write_copy", False),
+        ("replace_file", False),
+        ("write_copy", True),
+    ],
+    ids=["second-copy", "replace", "after-old-copies-deleted"],
+)
+def test_interruption_with_kept_files_then_running_again_loses_nothing(
+    runner, sdd_update, old_project, monkeypatch, where, prior
+):
+    mine = {PLAN: b"# my plan\n", SPECIFY_SKILL: b"my specify\n"}
+
+    def prepare(root):
+        for path, data in mine.items():
+            (root / path).write_bytes(data)
+        if prior:
+            assert runner.run(root)[0] == 0
+            commit_all(root, "updated")
+            runner.latest = "1.2.0"
+
+    reference = old_project()
+    prepare(reference)
+    runner.reset()
+    code, ref_out, err = runner.run(reference)
+    assert code == 0, err
+    ref_snap = snap(reference)
+    ref_record = (reference / RECORD).read_bytes()
+
+    root = old_project()
+    runner.latest = NEW_VERSION
+    prepare(root)
+    real = getattr(sdd_update, where)
+    calls = {"n": 0}
+    # Fail on the second copy written, the first file replaced, or the first copy written after the old ones went.
+    fail_at = 2 if (where == "write_copy" and not prior) else 1
+
+    def failing(*args):
+        calls["n"] += 1
+        if calls["n"] == fail_at:
+            raise OSError("disk full")
+        return real(*args)
+
+    monkeypatch.setattr(sdd_update, where, failing)
+    runner.reset()
+
+    code, out, err = runner.run(root)
+
+    assert code == 1
+    assert out == []
+    assert "disk full" in err
+    assert read_record(root)["status"] == "applying"
+    for path, data in mine.items():
+        assert (root / path).read_bytes() == data, path
+
+    monkeypatch.setattr(sdd_update, where, real)
+    runner.reset()
+
+    code, out, err = runner.run(root)
+
+    assert code == 0, err
+    for path, data in mine.items():
+        assert (root / path).read_bytes() == data, path
+        assert (root / copy_of(path)).read_bytes() == NEW[path].encode(), path
+    assert of(out, "kept") == of(ref_out, "kept")
+    assert (root / RECORD).read_bytes() == ref_record
+    assert snap(root) == ref_snap
+    assert not [k for k in snap(root) if k.endswith(".sdd-update-tmp")]
+    names = [e["path"] for e in read_record(root)["entries"]]
+    assert len(names) == len(set(names))
