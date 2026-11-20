@@ -713,9 +713,109 @@ def validate_draft(draft, lineage: dict | None, existing: dict | None, root: Pat
     return sorted_problems(problems)
 
 
+TEXT_FIELDS = ("title", "text", "summary")
+
+
+def active_items(data: dict | None) -> dict[str, tuple[str, str, dict]]:
+    """id -> (section, path, item) for the principles, features, requirements and lessons of data."""
+    result: dict[str, tuple[str, str, dict]] = {}
+    for section, path, item, _ in walk_items(data or {}):
+        if section != "discarded" and isinstance(item.get("id"), str):
+            result.setdefault(item["id"], (section, path, item))
+    return result
+
+
+def discarded_items(data: dict | None) -> list[tuple[str, dict]]:
+    return [(path, item) for section, path, item, _ in walk_items(data or {})
+            if section == "discarded" and isinstance(item.get("id"), str)]
+
+
+def derived_sources(data: dict | None) -> dict[str, set[str]]:
+    """id -> the derived_from that data records for that item."""
+    result: dict[str, set[str]] = {}
+    for _, (_, _, item) in active_items(data).items():
+        if isinstance(item.get("derived_from"), list):
+            result[item["id"]] = {entry for entry in item["derived_from"] if isinstance(entry, str)}
+    return result
+
+
 def generation_problems(draft: dict, lineage: dict | None, existing: dict | None) -> list[Problem]:
-    """The generation rules of data-model.md (added with the lineage support)."""
-    return []
+    """The generation rules 1 to 9 of data-model.md, checked against the lineage L and the existing nutrients N."""
+    problems: list[Problem] = []
+    generation = draft_generation(lineage)
+    if is_int(draft.get("generation")) and draft["generation"] != generation:
+        problems.append(Problem("generation", "generation", f"this project is generation {generation}; use the "
+                                "generation that check reports"))
+    items = active_items(draft)
+    gone = {item["id"]: (path, item) for path, item in discarded_items(draft)}
+    derived = {entry for _, _, item in items.values() if isinstance(item.get("derived_from"), list)
+               for entry in item["derived_from"] if isinstance(entry, str)}
+    in_lineage = active_items(lineage)
+    in_existing = active_items(existing)
+    lineage_ids = set(in_lineage) | {item["id"] for _, item in discarded_items(lineage)}
+    known_ids = lineage_ids | set(in_existing) | {item["id"] for _, item in discarded_items(existing)}
+    lineage_derived, existing_derived = derived_sources(lineage), derived_sources(existing)
+
+    # Rule 2: nothing of the lineage disappears silently.
+    for item_id, (section, _, _) in in_lineage.items():
+        if item_id not in items and item_id not in gone and item_id not in derived:
+            top = "features" if section == "requirements" else section
+            problems.append(Problem("lineage-item-missing", top, f"{SINGULAR[section]} '{item_id}' from the lineage is "
+                                    "neither kept, derived from, nor discarded"))
+    for item_id, (section, path, item) in items.items():
+        origin = item.get("origin")
+        if not is_int(origin):
+            continue
+        prior = in_lineage.get(item_id)
+        if prior is None and item_id in in_existing and is_int(in_existing[item_id][2].get("origin")) \
+                and in_existing[item_id][2]["origin"] < generation:
+            prior = in_existing[item_id]
+        # Rule 3: an inherited item keeps its origin.
+        if prior is not None and is_int(prior[2].get("origin")) and prior[2]["origin"] != origin:
+            problems.append(Problem("origin-changed", join(path, "origin"), f"'{item_id}' first appeared in generation "
+                                    f"{prior[2]['origin']}; keep that origin"))
+        # Rule 4: an item from an earlier generation can be found there.
+        if origin < generation and item_id not in in_lineage and item_id not in in_existing:
+            problems.append(Problem("origin-unknown", join(path, "origin"), f"'{item_id}' says it comes from generation "
+                                    f"{origin}, but neither the lineage nor the existing nutrients hold it"))
+        # Rule 5: a changed inherited text marks this generation in revised.
+        if item_id in in_lineage:
+            before = in_lineage[item_id][2]
+            changed = any(key in item and key in before and item[key] != before[key] for key in TEXT_FIELDS)
+            revised = item.get("revised") if isinstance(item.get("revised"), list) else []
+            if changed and generation not in revised:
+                problems.append(Problem("revision-unmarked", join(path, "revised"), f"'{item_id}' differs from the "
+                                        f"lineage; add {generation} to revised"))
+        # Rule 8: derived_from points at known items, or repeats what an earlier generation recorded.
+        sources = item.get("derived_from") if isinstance(item.get("derived_from"), list) else []
+        recorded = lineage_derived.get(item_id, set()) | existing_derived.get(item_id, set())
+        for index, entry in enumerate(sources):
+            if isinstance(entry, str) and entry not in known_ids and entry not in recorded:
+                problems.append(Problem("derived-unknown", join(join(path, "derived_from"), index), f"'{entry}' is not "
+                                        "an item of the lineage or the existing nutrients"))
+        # Rule 9: an item new in this generation does not take an id the lineage already used,
+        # unless it is that very item of the lineage (one the rebuild added in this generation).
+        if origin == generation and item_id in lineage_ids:
+            same = in_lineage.get(item_id)
+            if same is None or same[2].get("origin") != generation or same[0] != section:
+                problems.append(Problem("id-reused", join(path, "id"), f"the id '{item_id}' was already used by the "
+                                        "lineage; choose a new id"))
+    # Rule 6: earlier discards stay as they are.
+    required: dict[str, dict] = {}
+    for _, item in discarded_items(lineage):
+        required.setdefault(item["id"], item)
+    for _, item in discarded_items(existing):
+        if is_int(item.get("discarded_in")) and item["discarded_in"] < generation:
+            required.setdefault(item["id"], item)
+    for item_id, item in required.items():
+        if item_id not in gone or gone[item_id][1] != item:
+            problems.append(Problem("discard-lost", "discarded", f"the discarded item '{item_id}' of an earlier "
+                                    "generation must stay in discarded unchanged"))
+    # Rule 7: a discarded id is not an active item.
+    for item_id, (path, _) in gone.items():
+        if item_id in items:
+            problems.append(Problem("discarded-active", join(path, "id"), f"'{item_id}' is both discarded and kept"))
+    return problems
 
 
 def has_field_problems(problems: list[Problem]) -> bool:
@@ -1048,11 +1148,66 @@ def edit_state(folder: Path) -> dict:
 # ---------------------------------------------------------------- lineage
 
 
+SPEC_DIR_PATTERN = re.compile(r"^specs/[^/]+$")
+
+
+def lineage_problems(data: dict) -> list[Problem]:
+    """What data-model.md lets sdd-export check in a lineage written by sdd-rebuild."""
+    problems: list[Problem] = []
+    check_keys(data, "", LINEAGE_KEYS, problems)
+    if "schema" in data and data["schema"] != SCHEMA:
+        problems.append(Problem("field", "schema", f"must be {SCHEMA}"))
+    if "rebuilt_at" in data and not (isinstance(data["rebuilt_at"], str) and DATE.match(data["rebuilt_at"])):
+        problems.append(Problem("field", "rebuilt_at", "must be a date written YYYY-MM-DD"))
+    generation = data.get("generation")
+    if "generation" in data and not (is_int(generation) and generation >= 2):
+        problems.append(Problem("generation", "generation", "the generation of a rebuilt project is at least 2"))
+        generation = None
+    source = data.get("source")
+    if "source" in data:
+        if not isinstance(source, dict):
+            problems.append(Problem("field", "source", "must be an object"))
+        else:
+            check_keys(source, "source", LINEAGE_SOURCE_KEYS, problems)
+            if "project" in source and rule_problem(source["project"], "str"):
+                problems.append(Problem("field", "source.project", "must be a non-empty string"))
+            for key in ("generation", "nutrients_schema"):
+                if key in source and not (is_int(source[key]) and source[key] >= 1):
+                    problems.append(Problem("field", f"source.{key}", "must be an integer of at least 1"))
+            if is_int(generation) and is_int(source.get("generation")) and generation != source["generation"] + 1:
+                problems.append(Problem("generation", "generation", "the generation must be one more than "
+                                        "source.generation"))
+    check_fields(data, LINEAGE_RULES, problems)
+    for section, path, item, _ in walk_items(data):
+        if section == "features" and isinstance(item.get("spec_dir"), str) and item["spec_dir"]:
+            if path_problem(item["spec_dir"]) or not SPEC_DIR_PATTERN.match(item["spec_dir"]):
+                problems.append(Problem("field", join(path, "spec_dir"), "must be a folder directly under specs/"))
+    check_ids(data, problems, unique_with_discarded=True)
+    check_ranges(data, generation, problems)
+    check_code_blocks(data, problems)
+    check_dependencies(data, problems)
+    return sorted_problems(problems)
+
+
 def load_lineage(path: Path) -> tuple[str, dict | None, list[Problem]]:
-    """The state of .sdd-rebuild/lineage.json (none, present, unreadable, newer, invalid, conflict)."""
+    """The state of a lineage.json (none, present, unreadable, newer, invalid, conflict), its content, its problems.
+
+    Only this one file of .sdd-rebuild/ is ever opened.
+    """
     if not path.exists():
         return "none", None, []
-    return "none", None, []
+    try:
+        data = read_json_object(path)
+    except (Unreadable, OSError) as error:
+        return "unreadable", None, [Problem("json", "", f"lineage.json {error}")]
+    if data.get("tool") != LINEAGE_TOOL:
+        return "conflict", None, []
+    if schema_is_newer(data.get("schema")):
+        return "newer", None, []
+    problems = lineage_problems(data)
+    if problems:
+        return "invalid", None, problems
+    return "present", data, []
 
 
 # -------------------------------------------------------------- read scope

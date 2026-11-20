@@ -1149,10 +1149,11 @@ def test_details_never_repeat_a_secret(sdd_export, tmp_path):
 
 @pytest.mark.parametrize(
     "evidence",
-    ["src/app.py", "src", "README.md", "maintainer", ".specify/memory/constitution.md", ".sdd-rebuild/lineage.json"],
+    ["src/app.py", "src", "README.md", "maintainer", ".specify/memory/constitution.md"],
 )
 def test_good_evidence(sdd_export, tmp_path, evidence):
-    root = project(tmp_path, files={".specify/memory/constitution.md": "c\n", ".sdd-rebuild/lineage.json": "{}\n"})
+    """.sdd-rebuild/lineage.json as evidence is covered by test_gen2_draft_follows_the_lineage."""
+    root = project(tmp_path, files={".specify/memory/constitution.md": "c\n"})
     data = draft()
     data["lessons"][0]["evidence"] = [evidence]
 
