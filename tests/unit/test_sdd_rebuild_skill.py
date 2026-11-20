@@ -130,3 +130,532 @@ def test_script_writes_only_below_the_new_project():
         body = ast.get_source_segment(source, next(n for n in ast.walk(tree)
                                                    if isinstance(n, ast.FunctionDef) and n.name == function))
         assert not re.search(r"\bold", body), function
+
+
+# ------------------------------------------------------------- SKILL.md
+
+
+def skill() -> str:
+    return text(SKILL_MD)
+
+
+def frontmatter() -> dict:
+    content = skill()
+    assert content.startswith("---\n")
+    head = content.split("---\n", 2)[1]
+    fields = {}
+    for line in head.strip().split("\n"):
+        key, _, value = line.partition(":")
+        fields[key.strip()] = value.strip()
+    return fields
+
+
+def body() -> str:
+    return skill().split("---\n", 2)[2]
+
+
+HEADINGS = {
+    "rules": "## Rules for the whole run",
+    "progress": "## The progress",
+    1: "## Stage 1: Start",
+    2: "## Stage 2: Exporting the old project",
+    3: "## Stage 3: Reading the nutrients",
+    4: "## Stage 4: What the new project already has",
+    5: "## Stage 5: Deciding item by item",
+    6: "## Stage 6: New requirements",
+    7: "## Stage 7: Adjustments from the lessons",
+    8: "## Stage 8: Final summary and confirmation",
+    9: "## Stage 9: The constitution",
+    10: "## Stage 10: The specs",
+    11: "## Stage 11: Verifying",
+    12: "## Stage 12: The lineage",
+    13: "## Stage 13: Finishing",
+    "resume": "## Resuming",
+}
+
+
+def section(key) -> str:
+    content = body()
+    start = content.index(HEADINGS[key] + "\n")
+    rest = content[start + len(HEADINGS[key]):]
+    following = [rest.index("\n## ") for _ in [0] if "\n## " in rest]
+    return HEADINGS[key] + (rest[: following[0]] if following else rest)
+
+
+def blocks(part: str) -> list[str]:
+    """Paragraphs and list items of a section, each as one string (continuation lines joined)."""
+    result, current = [], []
+    for line in part.split("\n"):
+        starts = line.startswith(("- ", "* ")) or re.match(r"^\d+\. ", line) or not line.strip()
+        if starts and current:
+            result.append(" ".join(current))
+            current = []
+        if line.strip():
+            current.append(line.strip())
+    if current:
+        result.append(" ".join(current))
+    return result
+
+
+def has_block(part: str, *words: str) -> bool:
+    lowered = [block.lower() for block in blocks(part)]
+    return any(all(word.lower() in block for word in words) for block in lowered)
+
+
+def test_frontmatter():
+    fields = frontmatter()
+
+    assert list(fields) == ["name", "description", "argument-hint", "disable-model-invocation"]
+    assert fields["name"] == "sdd-rebuild"
+    assert fields["argument-hint"] == '"<old project path>"'
+    assert fields["disable-model-invocation"] == "true"
+    description = fields["description"].lower()
+    for word in ("new project", "old project", "nutrients", "keep", "modify", "merge", "discard", "new requirements",
+                 "spec kit", "lineage", "confirm"):
+        assert word in description, word
+    assert not CJK.search(fields["description"])
+
+
+def test_skill_is_english_without_paths_or_emails():
+    content = skill()
+
+    assert not CJK.search(content)
+    assert not ABSOLUTE_PATH.search(content)
+    assert not EMAIL.search(content)
+
+
+def test_sections_are_in_stage_order():
+    content = body()
+    positions = [content.index(HEADINGS[key] + "\n") for key in
+                 ["rules", "progress", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, "resume"]]
+
+    assert positions == sorted(positions)
+
+
+def test_the_script_is_always_run_the_same_way():
+    content = body()
+    runs = re.findall(r'uv run "\$\{CLAUDE_SKILL_DIR\}/scripts/sdd_rebuild\.py" (\w+)', content)
+
+    assert set(runs) == {"check", "save", "preview", "claim", "verify", "lineage", "focus", "clear"}
+    assert "sdd_rebuild.py" not in re.sub(r'uv run "\$\{CLAUDE_SKILL_DIR\}/scripts/sdd_rebuild\.py"', "", content)
+
+
+# ------------------------------------------------- (T021) general rules
+
+GENERAL_RULES = {
+    1: ("old project", "plan", "tasks", "read", "grep", "glob", "stage 2"),
+    2: ("never write", "old project"),
+    3: ("confirm", "speckit-", "claim", "lineage", "focus", "save"),
+    4: ("speckit-constitution", "speckit-specify", "by hand", ".specify/feature.json", ".sdd-rebuild/"),
+    5: ("derived_from", "origin", "revised", "spec_dir", "script"),
+    6: ("askuserquestion", "recommend", "one decision", "plain text"),
+    7: ("traditional chinese", "language"),
+    8: ("secret", "what is needed"),
+    9: ("save", "heredoc", "after every decision"),
+    10: ("stop", "/sdd-rebuild", "nothing is generated"),
+    11: ("push", "commit", ".git/"),
+    12: ("exit code", "reason", "stop"),
+}
+
+
+@pytest.mark.parametrize("number", sorted(GENERAL_RULES))
+def test_general_rules(number):
+    rules = section("rules")
+    block = next((b for b in blocks(rules) if b.startswith(f"{number}. ")), None)
+
+    assert block is not None, f"rule {number} is missing"
+    for word in GENERAL_RULES[number]:
+        assert word in block.lower(), (number, word)
+
+
+def test_rule_3_names_save_as_the_only_write_before_confirming():
+    assert has_block(section("rules"), "only write", "save", "before", "confirm")
+
+
+# ---------------------------------------- outcomes of every stage (T070)
+# contracts/skill.md "階段與結果的數量": 17 + 5 + 14 + 2 + 5 + 3 + 3 + 6 + 3 + 6 + 7 + 7 + 4 + 12 = 94.
+# Each outcome names the words a block (a paragraph or list item) of its stage must hold together.
+
+OUTCOMES = {
+    1: [
+        ("present", "resuming"),
+        ("ours", "stage 3"),
+        ("`none`", "`empty`", "stage 2"),
+        ('"conflict"', ".specify/sdd-rebuild/", "stop", "nothing"),
+        ("progress-unreadable", "clear", "check"),
+        ("old-mismatch", "old_project", "old.path"),
+        ("dependency", "missing", "deploy", "stop", "nothing"),
+        ("speckit-missing", "/sdd-init", "stop", "nothing"),
+        ("speckit-incomplete", "missing", "/sdd-update", "stop", "nothing"),
+        ("old-required", "path"),
+        ("old-missing", "old-not-folder", "stop", "nothing"),
+        ("same-project", "old-inside-new", "new-inside-old", "stop", "nothing"),
+        ("rebuilt", "/sdd-grill", "/sdd-export", "stop", "nothing"),
+        ("rebuild-conflict", "rebuild_conflicts", "stop", "nothing"),
+        ("nutrients-conflict", "conflicts", "stop", "nothing"),
+        ("nutrients-unreadable", "nutrients-invalid", "nutrients_errors", "stop", "nothing"),
+        ("nutrients-newer", "update", "stop", "nothing"),
+    ],
+    2: [
+        ("chooses to stop", "either project"),
+        ("/sdd-export", "/sdd-rebuild", "old project", "stop"),
+        ("sdd-export", "stops", "new project"),
+        ("write", "check --old", "ours", "stage 3", "stage 1"),
+        ("interrupted", "stage 1"),
+    ],
+    3: [
+        ('"present"', '"used"', "stage 4"),
+        ('"not-needed"', "stage 4"),
+        ("needs_old_lineage", "git history", "skipped"),
+        ('"mismatch"', "same project"),
+        ("old_lineage_errors", "unreadable", "invalid"),
+        ('"newer"', "update"),
+        ('"conflict"', "not written by sdd-rebuild"),
+        ("chooses to stop", "/sdd-rebuild", "nothing"),
+        ("skipped", "final summary", "final report", "stage 4"),
+        ("partial", "/sdd-export", "stage 2"),
+        ("save", "succeeds", "stage 4"),
+        ("`source`", "check", "stage 1"),
+        ("`conflict`", "stage 1"),
+        ("os-error", "without saving", "stop"),
+    ],
+    4: [
+        ("decided", "save", "stage 5"),
+        ("existing spec", "/sdd-grill", "never"),
+    ],
+    5: [
+        ("every item", "stage 6"),
+        ("changes an earlier decision", "save"),
+        ("contradict", "both sides"),
+        ("stop", "rule 10"),
+        ("`invalid`", "`secret`", "save"),
+    ],
+    6: [
+        ("no new requirement", "stage 7"),
+        ("overlap", "existing feature"),
+        ("stop", "rule 10"),
+    ],
+    7: [
+        ('"lessons"', "stage 8"),
+        ("contradict", "both sides"),
+        ("no adjustment", "stage 8"),
+    ],
+    8: [
+        ("`ok` is `false`", "unaccounted", "id-taken", "pending-undecided"),
+        ("next-export", "lineage-format", "stop", "defect"),
+        ("confirms", '"confirmed"', "stage 9"),
+        ("`invalid`", "preview", "again"),
+        ("change", "stage 5", "preview"),
+        ("stop", "rule 10"),
+    ],
+    9: [
+        ("comparison", "stage 10"),
+        ("speckit-constitution", "fails", "stop", "/sdd-rebuild"),
+        ("still missing", "by hand", "stop"),
+    ],
+    10: [
+        ("claim", "succeeds", "stage 11"),
+        ("`none`", "incomplete", "again"),
+        ("`ambiguous`", "`mismatch`", "--dir", "candidates"),
+        ("not-next", "check", "next"),
+        ("interrupted", "claim", "specify"),
+        ("number", "order", "stage 11"),
+    ],
+    11: [
+        ("`ok`", "stage 12"),
+        ("existing-spec-changed", "constitution-changed", "restore", "start over", "stop"),
+        ("spec-missing", "restore", "never generate", "stop"),
+        ("spec-not-new", "dependency-order", "stop"),
+        ("existing-spec-missing", "restore", "stop"),
+        ("not-reviewed", "next"),
+        ("unexpected", "final report", "never delete"),
+    ],
+    12: [
+        ("unchanged", "stage 13"),
+        ("mismatch-documents", "stage 11"),
+        ("lineage-changed", "overwrite", "stop"),
+        ("rebuild-conflict", "stop"),
+        ("`invalid`", "by hand", "stop"),
+        ("internal", "defect", "stop"),
+        ("os-error", "/sdd-rebuild", "stop"),
+    ],
+    13: [
+        ("focus", "succeeds", "clear"),
+        ("mismatch-documents", "restore", "start over"),
+        ("not-regular", ".specify/feature.json"),
+        ("clear", "`conflict`", "report"),
+    ],
+    "resume": [
+        ("`decide`", "continue", "start over"),
+        ("`constitution`", "back to the discussion", "stage 9"),
+        ("`review-constitution`", "comparison", "speckit-constitution"),
+        ("`claim`", "next.feature", "not generate"),
+        ("`specify`", "stage 10"),
+        ("`review`", "comparison"),
+        ("`verify`", "stage 11"),
+        ("`focus`", "`clear`", "stage 13", "start over"),
+        ("unavailable", "snapshot"),
+        ("source_diff", "--refresh-source", "snapshot", "start over"),
+        ("start over", "kept", "existing", "clear"),
+        ("change a decision", "finish", "/sdd-grill"),
+    ],
+}
+
+
+def test_there_are_94_outcomes():
+    counts = {key: len(value) for key, value in OUTCOMES.items()}
+
+    assert counts == {1: 17, 2: 5, 3: 14, 4: 2, 5: 5, 6: 3, 7: 3, 8: 6, 9: 3, 10: 6, 11: 7, 12: 7, 13: 4, "resume": 12}
+    assert sum(counts.values()) == 94
+
+
+@pytest.mark.parametrize("stage, words", [(stage, words) for stage, entries in OUTCOMES.items() for words in entries],
+                         ids=lambda value: str(value))
+def test_every_outcome_has_a_next_step(stage, words):
+    assert has_block(section(stage), *words), (stage, words)
+
+
+# ------------------------------------------------- (T021-T024) instructions
+
+
+def test_stage_1_asks_for_a_path_and_never_searches():
+    part = section(1)
+
+    assert has_block(part, "do not search")
+    assert has_block(part, "check", "before")
+
+
+def test_check_comes_before_anything_else():
+    content = body()
+    first_run = content.index('scripts/sdd_rebuild.py" check')
+
+    assert first_run < content.index('scripts/sdd_rebuild.py" save')
+    assert first_run < content.index("../sdd-export/SKILL.md")
+
+
+def test_stage_3_reads_only_the_check_output():
+    part = section(3)
+
+    assert has_block(part, "nutrients", "check", "never read")
+    assert has_block(part, "nutrients_edited")
+    assert has_block(part, "coverage", "partial", "included")
+    assert "old_lineage" in part and '"skipped"' in part and '"used"' in part and '"not-needed"' in part
+    summary = part.index("pending")
+    assert summary < part.index('"stage": "items"')
+    assert has_block(part, '"phase": "deciding"', '"stage": "items"')
+
+
+def test_stage_4_compares_with_what_exists():
+    part = section(4)
+
+    assert has_block(part, "written", "keep", "amend")
+    assert has_block(part, "create", "missing", "template")
+    assert has_block(part, "existing_spec", "never")
+    assert has_block(part, "existing spec", "first")
+
+
+def test_stage_8_summary_and_order():
+    part = section(8)
+
+    assert part.index('"stage": "summary"') < part.index('sdd_rebuild.py" preview')
+    assert part.index('sdd_rebuild.py" preview') < part.index('"phase": "confirmed"')
+    for word in ("kept", "modified", "merged", "split", "discarded", "added", "pending_decided", "adjustments",
+                 "order", "action", "skipped"):
+        assert word in part, word
+    assert has_block(part, "confirm", "change", "stop", "recommended")
+
+
+def test_stage_9_constitution():
+    part = section(9)
+
+    assert has_block(part, "speckit-constitution", "only", "confirmed")
+    assert has_block(part, "both directions")
+    assert has_block(part, '"written"') and has_block(part, '"reviewed"')
+    assert has_block(part, "governance", "after the confirmation")
+    assert has_block(part, "keep", "not-needed")
+
+
+def test_stage_10_specs():
+    part = section(10)
+
+    assert has_block(part, "speckit-specify", "one", "time")
+    assert has_block(part, "number")
+    assert has_block(part, "assumptions")
+    assert part.index('sdd_rebuild.py" claim') < part.index("next feature")
+    assert has_block(part, '"reviewed": true')
+    assert has_block(part, "clarif", "deferred", "for_plan")
+
+
+def test_stage_11_verify_comes_before_the_lineage():
+    content = body()
+
+    assert content.index('sdd_rebuild.py" verify') < content.index('sdd_rebuild.py" lineage')
+    assert has_block(section(11), "spec-missing", "never generate")
+
+
+def test_stage_12_lineage():
+    assert ".sdd-rebuild/lineage.json" in section(12)
+
+
+def test_stage_13_finishing_order_and_report():
+    part = section(13)
+
+    assert part.index('sdd_rebuild.py" focus') < part.index('sdd_rebuild.py" clear')
+    report = part[part.index('sdd_rebuild.py" clear'):]
+    for word in ("order", "depend", "existing spec", ".specify/feature.json", "generation", ".sdd-rebuild/lineage.json",
+                 "commit", "skipped", "unexpected", "/sdd-drive", "after the confirmation", "new in this generation"):
+        assert word.lower() in report.lower(), word
+    assert has_block(part, "/sdd-drive", "stop", "plan", "tasks")
+    assert has_block(part, "no spec", "/sdd-drive")
+
+
+def test_resume_shows_where_the_run_stands():
+    part = section("resume")
+
+    assert has_block(part, "phase", "stage", "decided", "next")
+    assert has_block(part, "changed", "deciding", "stage 4")
+    assert has_block(part, "changed", "confirmed", "verify")
+    assert has_block(part, "lineage", "written", "not", "start over")
+
+
+# -------------------------------------------------- (T044) stages 5 to 7
+
+
+def test_stage_5_instructions():
+    part = section(5)
+
+    assert has_block(part, "keep everything", "item by item")
+    assert "merge" in part and "split" in part and "discard" in part
+    assert has_block(part, "principles", "features", "lessons", "order")
+    assert has_block(part, '"derived"', "from")
+    assert has_block(part, "split", "keeps", '"inherit"')
+    assert has_block(part, "id-taken", "new id")
+    assert has_block(part, "pending", "one", "pending_decided", "never")
+    assert has_block(part, '"stage": "items"')
+
+
+def test_stage_6_instructions():
+    part = section(6)
+
+    assert "../sdd-grill/SKILL.md" in part and "Rules for questioning" in part
+    assert has_block(part, "not", "progress", "commands")
+    assert has_block(part, '"new"', "depend")
+    assert "for_plan" in part and "deferred" in part
+    assert has_block(part, '"stage": "new"')
+
+
+def test_stage_7_instructions():
+    part = section(7)
+
+    assert has_block(part, "adjustments", "lesson", "one")
+    assert has_block(part, "never", "principle", "requirement", "agree")
+    assert has_block(part, "lesson", "still", "discards")
+
+
+def test_stages_5_to_8_come_in_order():
+    content = body()
+
+    assert content.index(HEADINGS[5]) < content.index(HEADINGS[6]) < content.index(HEADINGS[7]) < content.index(HEADINGS[8])
+
+
+def test_the_rules_for_questioning_of_sdd_grill_still_exist():
+    assert "\n## Rules for questioning\n" in text(GRILL_SKILL_MD)
+
+
+# ---------------------------------------------------------- (T065) stage 2
+
+EXPORT_GIT_FORMS = (
+    "git --no-pager log --oneline -n <n> [-- <path>]",
+    "git --no-pager log --stat -n <n> [<commit>] [-- <path>]",
+    "git --no-pager ls-files",
+    "git --no-pager blame -- <path>",
+)
+
+
+def test_stage_2_instructions():
+    part = section(2)
+
+    assert has_block(part, ".sdd-export/", "only", "confirm")
+    assert has_block(part, "export now", "recommended", "/sdd-export", "stop")
+    assert has_block(part, "export_skill", "false", "deploy", "stop")
+    assert "${CLAUDE_SKILL_DIR}/../sdd-export/SKILL.md" in part
+    assert "Rules for the whole run" in part and "Stage 1" in part and "Stage 9" in part
+    assert "${CLAUDE_SKILL_DIR}/../sdd-export/scripts/sdd_export.py" in part
+    assert '--project "<old.path>"' in part
+    assert has_block(part, "read", "grep", "one", "<old.path>/")
+    assert has_block(part, "glob", "stage 2", "folder names")
+    assert has_block(part, "four", "-C \"<old.path>\"", "nothing else")
+    assert has_block(part, "nothing", "new project", "save")
+    assert has_block(part, "stage 9", "check --old", "/sdd-rebuild")
+
+
+def test_stage_2_copies_no_rule_text_of_sdd_export():
+    part = section(2)
+
+    for form in EXPORT_GIT_FORMS:
+        assert form not in part
+    assert "secret_files" in part  # named, so the reader keeps the protection; the rule itself is sdd-export's
+
+
+def test_the_parts_of_sdd_export_that_stage_2_refers_to_still_exist():
+    export = text(EXPORT_SKILL_MD)
+
+    assert "\n## Rules for the whole run\n" in export
+    for number in range(1, 10):
+        assert f"\n## Stage {number}:" in export
+    assert "\n## Stage 9: Final report\n" in export
+    for form in EXPORT_GIT_FORMS:
+        assert form in export
+
+
+def test_stage_2_comes_before_stage_3():
+    content = body()
+
+    assert content.index(HEADINGS[2]) < content.index(HEADINGS[3])
+
+
+# ------------------------------------------------------- (T070) global order
+
+
+def test_confirmation_comes_before_any_generation():
+    content = body()
+    confirmed = content.index('"phase": "confirmed"')
+
+    for later in ('Skill tool to invoke `speckit-constitution`', 'sdd_rebuild.py" claim', 'sdd_rebuild.py" lineage',
+                  'sdd_rebuild.py" focus'):
+        assert confirmed < content.index(later), later
+    assert content.index(HEADINGS[9]) < content.index(HEADINGS[10])
+    assert content.index('sdd_rebuild.py" lineage') < content.index('sdd_rebuild.py" focus')
+
+
+NAMES = re.compile(r"`([a-z][a-z0-9_.-]*[a-z0-9])`")
+OTHER_NAMES = {
+    # names of sdd-export, sdd-grill and Spec Kit that the skill refers to
+    "files", "secret_files", "secret_hits", "write", "speckit-constitution", "speckit-specify", "sdd-export",
+    "sdd-grill", "sdd-rebuild", "tools/deploy.py", "home", "zh-tw", "spec.md", "keep-all",
+}
+
+
+def test_every_name_the_skill_uses_is_defined():
+    known = text(CLI_MD) + text(REPO_ROOT / "specs" / "007-sdd-rebuild" / "data-model.md")
+    unknown = sorted({name for name in NAMES.findall(body()) if name not in known and name not in OTHER_NAMES
+                      and not name.startswith((".", "specs/"))})
+
+    assert unknown == []
+
+
+REASONS = ("usage", "old-mismatch", "invalid", "secret", "frozen", "finished", "source", "no-progress", "none",
+           "ambiguous", "mismatch", "not-next", "mismatch-documents", "lineage-changed", "internal", "not-regular",
+           "conflict", "os-error", "dependency", "speckit-missing", "speckit-incomplete", "old-required", "old-missing",
+           "old-not-folder", "same-project", "old-inside-new", "new-inside-old", "rebuilt", "rebuild-conflict",
+           "nutrients-conflict", "nutrients-unreadable", "nutrients-invalid", "nutrients-newer", "progress-unreadable")
+
+
+def test_every_reason_is_in_the_cli_contract_and_most_are_handled():
+    cli = text(CLI_MD)
+    content = body()
+
+    for reason in REASONS:
+        assert f"`{reason}`" in cli, reason
+    handled = [reason for reason in REASONS if f"`{reason}`" in content]
+    assert set(REASONS) - set(handled) <= {"usage"}, set(REASONS) - set(handled)
