@@ -331,3 +331,115 @@ def run_sdd_update(cwd: Path, env: dict[str, str], *args: str):
         text=True,
         encoding="utf-8",
     )
+
+
+# --------------------------------------------------------------- sdd-grill
+
+SDD_GRILL_PY = REPO_ROOT / "home" / "skills" / "sdd-grill" / "scripts" / "sdd_grill.py"
+
+# research.md R4 "Spec Kit 缺少能力": besides the .specify/ folder itself, these files must exist.
+SPECKIT_REQUIRED_FILES = [
+    ".claude/skills/speckit-constitution/SKILL.md",
+    ".claude/skills/speckit-specify/SKILL.md",
+    ".specify/scripts/bash/resolve-template.sh",
+    ".specify/templates/constitution-template.md",
+    ".specify/templates/spec-template.md",
+]
+
+CONSTITUTION_TEMPLATE = "# [PROJECT_NAME] Constitution\n\n## Core Principles\n\n### [PRINCIPLE_1_NAME]\n\n[PRINCIPLE_1_DESCRIPTION]\n"
+WRITTEN_CONSTITUTION = "# Demo Constitution\n\n## Core Principles\n\n### I. Keep it small\n\n- Every feature MUST be small.\n"
+
+# Spec Kit's own .specify/.gitignore lists feature.json as local state.
+SPECKIT_GITIGNORE = "# Local state written by Spec Kit\nfeature.json\n"
+
+
+def _load_sdd_grill():
+    spec = importlib.util.spec_from_file_location("sdd_grill", SDD_GRILL_PY)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["sdd_grill"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="session")
+def sdd_grill():
+    return _load_sdd_grill()
+
+
+def write_fake_speckit(
+    root: Path,
+    *,
+    omit: tuple[str, ...] = (),
+    constitution: str | None = None,
+    init_options: str | None = None,
+    specs: dict[str, str] | None = None,
+) -> None:
+    """Write a stand-in for a project with Spec Kit: the required files plus optional extras.
+
+    omit leaves out some of SPECKIT_REQUIRED_FILES; constitution is the content of
+    .specify/memory/constitution.md (None: no file); specs maps folder names under specs/ to spec.md content.
+    """
+    files: dict[str, str] = {rel: f"stand-in for {rel}\n" for rel in SPECKIT_REQUIRED_FILES if rel not in omit}
+    if ".specify/templates/constitution-template.md" in files:
+        files[".specify/templates/constitution-template.md"] = CONSTITUTION_TEMPLATE
+    files[".specify/.gitignore"] = SPECKIT_GITIGNORE
+    if constitution is not None:
+        files[".specify/memory/constitution.md"] = constitution
+    if init_options is not None:
+        files[".specify/init-options.json"] = init_options
+    for name, content in (specs or {}).items():
+        files[f"specs/{name}/spec.md"] = content
+    write_tree(root, files)
+    (root / ".specify").mkdir(exist_ok=True)
+
+
+def git_commit_all(root: Path, message: str = "commit") -> None:
+    git_run(root, "add", "-A")
+    git_run(root, "commit", "--quiet", "--allow-empty", "-m", message)
+
+
+@pytest.fixture
+def grill_project(make_project):
+    """Factory: a temporary project, optionally a git repository, optionally with a fake Spec Kit."""
+
+    def factory(git: bool = True, speckit: bool = True, **speckit_options) -> Path:
+        root = make_project(git=git)
+        if speckit:
+            write_fake_speckit(root, **speckit_options)
+        return root
+
+    return factory
+
+
+class GrillResult:
+    def __init__(self, code: int, stdout: bytes, stderr: bytes):
+        import json
+
+        self.code = code
+        self.raw = stdout
+        self.err = stderr.decode("utf-8")
+        self.out = json.loads(stdout.decode("utf-8")) if stdout.strip() else None
+
+
+def run_grill(module, root: Path, *argv: str, stdin: str | bytes | None = None) -> GrillResult:
+    """Call sdd_grill.main the way `uv run sdd_grill.py <argv>` would, with root as the current directory."""
+    import io
+
+    if isinstance(stdin, str):
+        stdin = stdin.encode("utf-8")
+    out, err = io.BytesIO(), io.BytesIO()
+    code = module.main(list(argv), root=root, stdin=io.BytesIO(stdin or b""), stdout=out, stderr=err)
+    return GrillResult(code, out.getvalue(), err.getvalue())
+
+
+def run_grill_real(root: Path, env: dict[str, str], *argv: str, stdin: str | None = None):
+    """Run the real script through uv in root."""
+    import subprocess
+
+    return subprocess.run(
+        ["uv", "run", str(SDD_GRILL_PY), *argv],
+        cwd=root,
+        env=env,
+        input=(stdin or "").encode("utf-8"),
+        capture_output=True,
+    )
