@@ -1333,3 +1333,327 @@ def test_windows_with_git_bash_behind_the_wsl_launcher_initializes(runner, sdd_i
     assert code == 0
     assert of(out, "missing") == []
     assert out[-4] == f"Spec Kit {FAKE_VERSION} initialized: {len(ALL_CREATED)} created, 0 skipped."
+
+
+# ============================== convergence: staging .sh left unstaged earlier
+
+ALREADY = f"Spec Kit {FAKE_VERSION} is already initialized. Nothing changed."
+RESTAGED_ONLY = f"Spec Kit {FAKE_VERSION} is already initialized. Nothing was created."
+
+
+def staged_line(path: str) -> str:
+    return line("staged", f"{path} (executable bit recorded in the git index)")
+
+
+def git_added_line(added: int, uncommitted: int) -> str:
+    return f"Git: {added} files were added to the index and nothing was committed. {uncommitted} paths are uncommitted."
+
+
+def flags(root: Path) -> dict[str, bool]:
+    return {e["path"]: e["staged_executable"] for e in read_record(root)["entries"]}
+
+
+def branch(root: Path) -> str:
+    return git_run(root, "symbolic-ref", "HEAD").strip()
+
+
+def like_windows(root: Path) -> None:
+    """A repository that ignores file modes, with no executable bit on any .sh in the work tree."""
+    git_run(root, "config", "core.fileMode", "false")
+    for path in OFFICIAL_SH:
+        if (root / path).exists():
+            os.chmod(root / path, 0o644)
+
+
+def fail_git_add(sdd_init, monkeypatch) -> None:
+    """Make every `git add` of sdd-init fail, the way a locked index would."""
+    real_git = sdd_init.git
+
+    def git_without_add(cwd, *args):
+        if args and args[0] == "add":
+            return subprocess.CompletedProcess(["git", *args], 128, b"", b"fatal: Unable to create index.lock\n")
+        return real_git(cwd, *args)
+
+    monkeypatch.setattr(sdd_init, "git", git_without_add)
+
+
+def init_with_failed_git_add(runner, sdd_init, root: Path, monkeypatch) -> None:
+    """A first init whose files are all copied but whose `git add --chmod=+x` fails."""
+    with monkeypatch.context() as patch:
+        fail_git_add(sdd_init, patch)
+        code, out, err = runner.run(root, "init")
+    assert code == 0
+    assert of(out, "staged") == []
+    assert [l for l in err.splitlines() if l.startswith("note: ")] != []
+    assert read_record(root)["status"] == "complete"
+    runner.version_calls = 0
+    runner.official_versions.clear()
+
+
+def assert_nothing_changes_on_another_run(runner, root: Path) -> None:
+    before = snap(root, with_mtime=True)
+    before_index, before_status = index(root), status(root)
+    runner.version_calls = 0
+    runner.official_versions.clear()
+
+    code, out, err = runner.run(root, "init")
+
+    assert code == 0
+    assert out == [ALREADY]
+    assert err == ""
+    assert runner.version_calls == 0 and runner.official_versions == []
+    assert snap(root, with_mtime=True) == before
+    assert index(root) == before_index and status(root) == before_status
+
+
+@pytest.mark.parametrize("filemode", ["true", "false"])
+def test_repair_after_a_failed_copy_stages_the_sh_copied_by_the_earlier_run(
+    runner, sdd_init, make_project, monkeypatch, filemode
+):
+    root = make_project(git=True)
+    git_run(root, "config", "core.fileMode", filemode)
+    head = branch(root)
+    real_copy = sdd_init.copy_new_file
+    copied: list[str] = []
+    second_sh = OFFICIAL_SH[1]
+
+    def failing_copy(src, dst):
+        if Path(dst).relative_to(root).as_posix() == second_sh:
+            raise OSError("disk full")
+        real_copy(src, dst)
+        copied.append(Path(dst).relative_to(root).as_posix())
+
+    monkeypatch.setattr(sdd_init, "copy_new_file", failing_copy)
+    code, _, _ = runner.run(root, "init")
+    assert code == 1
+    assert read_record(root)["status"] == "applying"
+    assert OFFICIAL_SH[0] in copied and second_sh not in copied
+    assert index(root) == {}
+    monkeypatch.setattr(sdd_init, "copy_new_file", real_copy)
+    if filemode == "false":
+        like_windows(root)
+
+    code, out, err = runner.run(root, "init")
+
+    assert code == 0 and err == ""
+    assert of(out, "staged") == [staged_line(p) for p in OFFICIAL_SH]
+    assert index(root) == {p: "100755" for p in OFFICIAL_SH}
+    assert flags(root) == {p: p in OFFICIAL_SH for p in ALL_CREATED}
+    created = [l.split()[1] for l in of(out, "created")]
+    assert sorted(created + copied) == ALL_CREATED
+    assert out[-4] == f"Spec Kit {FAKE_VERSION} initialized: {len(created)} created, 0 skipped."
+    assert out[-3] == git_added_line(len(OFFICIAL_SH), len(ALL_CREATED))
+    assert out[-2:] == NEXT_LINES
+    assert commit_count(root) == 0 and branch(root) == head
+
+    assert_nothing_changes_on_another_run(runner, root)
+
+    # What the maintainer does next must keep the executable bit.
+    git_run(root, "add", "-A")
+    modes = index(root)
+    assert {p: modes[p] for p in OFFICIAL_SH} == {p: "100755" for p in OFFICIAL_SH}
+
+
+@pytest.mark.parametrize("filemode", ["true", "false"])
+def test_complete_record_with_unstaged_sh_only_stages_them(runner, sdd_init, make_project, monkeypatch, filemode):
+    root = make_project(git=True)
+    git_run(root, "config", "core.fileMode", filemode)
+    head = branch(root)
+    init_with_failed_git_add(runner, sdd_init, root, monkeypatch)
+    if filemode == "false":
+        like_windows(root)
+    assert index(root) == {}
+    assert not any(flags(root).values())
+    before = snap(root, with_mtime=True)
+    runner.latest = "99.0.0"
+
+    code, out, err = runner.run(root, "init")
+
+    assert code == 0 and err == ""
+    assert out == [staged_line(p) for p in OFFICIAL_SH] + [
+        RESTAGED_ONLY,
+        git_added_line(len(OFFICIAL_SH), len(ALL_CREATED)),
+        *NEXT_LINES,
+    ]
+    assert runner.version_calls == 0 and runner.official_versions == []
+    assert index(root) == {p: "100755" for p in OFFICIAL_SH}
+    assert flags(root) == {p: p in OFFICIAL_SH for p in ALL_CREATED}
+    after = snap(root, with_mtime=True)
+    assert set(after) == set(before)
+    assert {k: v for k, v in after.items() if k != RECORD} == {k: v for k, v in before.items() if k != RECORD}
+    record = read_record(root)
+    assert record["status"] == "complete" and record["speckit_version"] == FAKE_VERSION
+    assert commit_count(root) == 0 and branch(root) == head
+
+    assert_nothing_changes_on_another_run(runner, root)
+
+    git_run(root, "add", "-A")
+    modes = index(root)
+    assert {p: modes[p] for p in OFFICIAL_SH} == {p: "100755" for p in OFFICIAL_SH}
+
+
+def test_staging_that_fails_again_is_reported_and_retried_by_the_next_run(runner, sdd_init, make_project, monkeypatch):
+    root = make_project(git=True)
+    init_with_failed_git_add(runner, sdd_init, root, monkeypatch)
+    before = snap(root, with_mtime=True)
+
+    with monkeypatch.context() as patch:
+        fail_git_add(sdd_init, patch)
+        code, out, err = runner.run(root, "init")
+
+    assert code == 0
+    assert out == [
+        RESTAGED_ONLY,
+        f"Git: nothing was added to the index. {len(ALL_CREATED)} paths are uncommitted.",
+        *NEXT_LINES,
+    ]
+    assert err.splitlines() == [
+        f"note: {p} was not added to the git index: fatal: Unable to create index.lock" for p in OFFICIAL_SH
+    ]
+    assert snap(root, with_mtime=True) == before  # the record is not rewritten either
+    assert index(root) == {}
+    assert runner.version_calls == 0 and runner.official_versions == []
+
+    code, out, _ = runner.run(root, "init")
+
+    assert of(out, "staged") == [staged_line(p) for p in OFFICIAL_SH]
+    assert index(root) == {p: "100755" for p in OFFICIAL_SH}
+
+
+@pytest.mark.parametrize("where", ["index", "head"])
+def test_sh_already_in_the_index_or_in_head_is_left_alone(runner, sdd_init, make_project, monkeypatch, where):
+    root = make_project(git=True)
+    git_run(root, "config", "core.fileMode", "false")
+    init_with_failed_git_add(runner, sdd_init, root, monkeypatch)
+    like_windows(root)
+    git_run(root, "add", "-A")
+    if where == "head":
+        git_run(root, "commit", "--quiet", "-m", "spec kit")
+    commits = commit_count(root)
+    assert {index(root)[p] for p in OFFICIAL_SH} == {"100644"}
+
+    assert_nothing_changes_on_another_run(runner, root)
+
+    assert {index(root)[p] for p in OFFICIAL_SH} == {"100644"}
+    assert not any(flags(root).values())
+    assert commit_count(root) == commits
+
+
+def test_skipped_sh_is_not_staged_later_either(runner, sdd_init, make_project, monkeypatch):
+    root = make_project(git=True)
+    mine = OFFICIAL_SH[0]
+    write_tree(root, {mine: "#!/bin/sh\necho mine\n"})
+    init_with_failed_git_add(runner, sdd_init, root, monkeypatch)
+    assert mine not in entry_paths(root)
+
+    code, out, _ = runner.run(root, "init")
+
+    assert code == 0
+    assert of(out, "staged") == [staged_line(p) for p in OFFICIAL_SH[1:]]
+    assert out[-4] == RESTAGED_ONLY
+    assert out[-3] == git_added_line(len(OFFICIAL_SH) - 1, len(ALL_CREATED) - 1)
+    assert index(root) == {p: "100755" for p in OFFICIAL_SH[1:]}
+    assert (root / mine).read_bytes() == b"#!/bin/sh\necho mine\n"
+
+
+def test_only_sh_entries_that_came_from_spec_kit_are_staged_later(runner, sdd_init, make_project, monkeypatch):
+    root = make_project(git=True)
+    init_with_failed_git_add(runner, sdd_init, root, monkeypatch)
+    own = OFFICIAL_SH[0]
+    record = read_record(root)
+    for entry in record["entries"]:
+        if entry["path"] == own:
+            entry["origin"] = "sdd-init"
+    (root / RECORD).write_bytes((json.dumps(record, indent=2) + "\n").encode())
+
+    code, out, _ = runner.run(root, "init")
+
+    assert code == 0
+    assert of(out, "staged") == [staged_line(p) for p in OFFICIAL_SH[1:]]
+    assert index(root) == {p: "100755" for p in OFFICIAL_SH[1:]}  # no other file, .sh or not, was added
+    assert flags(root) == {p: p in OFFICIAL_SH[1:] for p in ALL_CREATED}
+
+
+def test_repair_outside_git_after_a_failed_copy_stages_nothing(runner, sdd_init, make_project, monkeypatch):
+    root = make_project(git=False)
+    real_copy = sdd_init.copy_new_file
+
+    def failing_copy(src, dst):
+        if Path(dst).relative_to(root).as_posix() == OFFICIAL_SH[1]:
+            raise OSError("disk full")
+        real_copy(src, dst)
+
+    monkeypatch.setattr(sdd_init, "copy_new_file", failing_copy)
+    assert runner.run(root, "init")[0] == 1
+    monkeypatch.setattr(sdd_init, "copy_new_file", real_copy)
+
+    code, out, _ = runner.run(root, "init")
+
+    assert code == 0
+    assert of(out, "staged") == []
+    assert out[-3] == GIT_NOT_A_REPO
+    assert not any(flags(root).values())
+    assert not (root / ".git").exists()
+
+
+def test_project_that_became_a_repository_after_init_gets_its_sh_staged(runner, make_project):
+    root = make_project(git=False)
+    runner.run(root, "init")
+    assert runner.run(root, "init")[1] == [ALREADY]
+    git_run(root, "init", "--quiet")
+    like_windows(root)
+    before = snap(root, with_mtime=True)
+    runner.version_calls = 0
+    runner.official_versions.clear()
+
+    code, out, err = runner.run(root, "init")
+
+    assert code == 0 and err == ""
+    assert out == [staged_line(p) for p in OFFICIAL_SH] + [
+        RESTAGED_ONLY,
+        git_added_line(len(OFFICIAL_SH), len(ALL_CREATED)),
+        *NEXT_LINES,
+    ]
+    assert runner.version_calls == 0 and runner.official_versions == []
+    assert index(root) == {p: "100755" for p in OFFICIAL_SH}
+    after = snap(root, with_mtime=True)
+    assert {k: v for k, v in after.items() if k != RECORD} == {k: v for k, v in before.items() if k != RECORD}
+    assert commit_count(root) == 0
+
+    assert_nothing_changes_on_another_run(runner, root)
+
+
+def test_sh_taken_out_of_the_index_is_staged_again_only_when_init_never_staged_it(
+    runner, sdd_init, make_project, monkeypatch
+):
+    # staged_executable is true: init staged it once, the maintainer removed it, init leaves it alone.
+    root = make_project(git=True)
+    runner.run(root, "init")
+    git_run(root, "rm", "--cached", "--quiet", "--", *OFFICIAL_SH)
+    assert_nothing_changes_on_another_run(runner, root)
+    assert index(root) == {}
+
+    # staged_executable is false: the maintainer staged and unstaged it, init stages it.
+    other = make_project(git=True)
+    init_with_failed_git_add(runner, sdd_init, other, monkeypatch)
+    git_run(other, "add", "--", *OFFICIAL_SH)
+    git_run(other, "rm", "--cached", "--quiet", "--", *OFFICIAL_SH)
+
+    code, out, _ = runner.run(other, "init")
+
+    assert code == 0
+    assert of(out, "staged") == [staged_line(p) for p in OFFICIAL_SH]
+    assert index(other) == {p: "100755" for p in OFFICIAL_SH}
+
+
+def test_remove_unstages_what_a_later_init_staged(runner, sdd_init, make_project, monkeypatch):
+    root = make_project(git=True)
+    init_with_failed_git_add(runner, sdd_init, root, monkeypatch)
+    runner.run(root, "init")
+    assert index(root) == {p: "100755" for p in OFFICIAL_SH}
+
+    code, out, _ = runner.run(root, "remove")
+
+    assert code == 0
+    assert of(out, "unstaged") == [line("unstaged", p) for p in OFFICIAL_SH]
+    assert index(root) == {} and status(root) == ""
