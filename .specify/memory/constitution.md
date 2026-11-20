@@ -12,6 +12,9 @@ claude-settings 是個人化的 Claude Code 設定：全域 CLAUDE.md、一行�
 - 把官方工具產生的檔案原樣複製到專案，以及只在 git 的 index 記錄檔案模式而不改變檔案內容，不算修改。
 - 本專案的工具可以在 `.specify/` 內新增自己的檔案（例如導入紀錄）。這些檔案不是 Spec Kit 產生的，
   不受上述限制；工具 MUST 記錄哪些檔案是自己建立的，讓它們與 Spec Kit 產生的檔案分得清楚。
+- `.specify/feature.json` 是 Spec Kit 用來記錄目前處理哪個功能的本機狀態檔，不入庫，Spec Kit 每次切換功能都會改寫它。
+  本專案的工具可以改寫它的 `feature_directory` 來切換目前的功能；這是使用 Spec Kit 提供的切換機制，不算修改。
+  這個例外只限於這個狀態檔，不延伸到 Spec Kit 的範本、腳本、設定與 `speckit-*` skill。
 
 理由：專案要能持續更新 Spec Kit，不修改上游檔案才不會在更新時產生衝突或遺失修改。
 
@@ -53,4 +56,4 @@ claude-settings 是個人化的 Claude Code 設定：全域 CLAUDE.md、一行�
 - 本 constitution 優先於其他開發慣例。
 - 修訂 MUST 經維護者確認，並更新版本號。
 
-**Version**: 1.0.1 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-20
+**Version**: 1.0.2 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-20
