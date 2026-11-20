@@ -147,8 +147,8 @@ skill 的結構與內容檢查在 `tests/unit/test_sdd_grill_skill.py`；改同�
 
 ### Tests and implementation of SKILL.md for User Story 3
 
-- [ ] T034 [P] [US3] 在 `tests/unit/test_sdd_grill_skill.py` 加入「接續」的內容檢查（contracts/skill.md 第 5–6 項；research.md R3 的 FR-010、FR-018 列）：`progress` 為 `"present"` 時先列出已決定的事項、`changed` 不是空的時先說明、以一題詢問接續或重新開始、重新開始時執行 `clear`（字樣：`changed`、`clear`）；接續時從 `stage` 與 `current_feature` 繼續、不重問已決定的事項；`phase` 為 `"confirmed"` 時詢問是否從尚未產生的文件繼續、不重新討論
-- [ ] T035 [US3] 在 `SKILL.md` 加入「接續」段落（位置在「開始」之後、「追問的規則」之前），滿足 contracts/skill.md 第 5–6 項：`progress` 為 `"present"` 時先列出已決定的事項，`changed` 非空時先說明哪些改變了，再以一題詢問接續或重新開始，重新開始時執行 `clear`；接續時依 `stage` 與 `current_feature` 繼續且 MUST NOT 重問已決定的事項；`confirmed` 時詢問是否從尚未產生的文件繼續。完成後 T034 的檢查應全部通過
+- [X] T034 [P] [US3] 在 `tests/unit/test_sdd_grill_skill.py` 加入「接續」的內容檢查（contracts/skill.md 第 5–6 項；research.md R3 的 FR-010、FR-018 列）：`progress` 為 `"present"` 時先列出已決定的事項、`changed` 不是空的時先說明、以一題詢問接續或重新開始、重新開始時執行 `clear`（字樣：`changed`、`clear`）；接續時從 `stage` 與 `current_feature` 繼續、不重問已決定的事項；`phase` 為 `"confirmed"` 時詢問是否從尚未產生的文件繼續、不重新討論
+- [X] T035 [US3] 在 `SKILL.md` 加入「接續」段落（位置在「開始」之後、「追問的規則」之前），滿足 contracts/skill.md 第 5–6 項：`progress` 為 `"present"` 時先列出已決定的事項，`changed` 非空時先說明哪些改變了，再以一題詢問接續或重新開始，重新開始時執行 `clear`；接續時依 `stage` 與 `current_feature` 繼續且 MUST NOT 重問已決定的事項；`confirmed` 時詢問是否從尚未產生的文件繼續。完成後 T034 的檢查應全部通過
 
 **Checkpoint**: US1 至 US3 可獨立運作；進度可中斷與接續
 

@@ -67,7 +67,8 @@ the progress never shows up in `git status` and is never committed.
      maintainer, and ask one question: clear it and start over (recommended, since it cannot be resumed), or stop
      and leave it as it is. To clear it, run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" clear`, then
      continue as for `"none"`.
-   - `"present"`: there is a discussion to resume. Go to "Resume".
+   - `"present"`: there is a discussion to resume. Go to "Resume" (a requirement is not needed for that; it is
+     in the saved progress).
    - `"none"`: a new discussion.
 5. For a new discussion you need a requirement: the text the maintainer gave after `/sdd-grill`, or, if this skill
    was chosen without the command, what the maintainer said they want. If there is no requirement, ask the
@@ -79,6 +80,43 @@ the progress never shows up in `git status` and is never committed.
      features can depend on them.
    - `numbering`: how Spec Kit numbers new specs (`"sequential"` or `"timestamp"`). You never choose numbers, but it
      tells you what to expect.
+
+## Resume
+
+`progress` is `"present"`: an earlier session saved a discussion, and `saved` holds it in full. The point of
+resuming is that the maintainer never has to answer a decided question twice.
+
+1. Show the maintainer what is already decided, from `saved`: the requirement, the constitution decisions, each
+   feature with its status and decisions, the deferred items and the items left for the plan, and where the
+   discussion stopped (`stage`, and `current_feature` when there is one).
+2. If `changed` is not empty, say what changed in the project since the progress was saved, before asking anything:
+   - `constitution`: `.specify/memory/constitution.md` was edited, created or removed;
+   - `specs`: a `spec.md` under `specs/` was added, edited or removed;
+   - `head`: there are new commits, so the code may have changed.
+
+   Read what changed, and point out any saved decision that the change may affect.
+3. Ask one question: resume the saved discussion, or start over. Recommend resuming unless the changes undermine
+   the saved decisions, or the maintainer has come with a different requirement.
+   - To start over, run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" clear`, then continue as for a new
+     discussion (step 5 of "Start"), using the requirement the maintainer gave this time, if any.
+   - To resume while the `phase` is `"discussing"`: continue at the saved `stage`, and with the feature in
+     `current_feature` when the stage is `"feature"`. Everything recorded as decided stays decided; do not ask about
+     it again. If a change in the project contradicts a saved decision, treat it as a contradiction (see "Rules for
+     questioning") and ask only about that point. If the maintainer gave new text with `/sdd-grill` this time,
+     discuss what it adds as part of the resumed discussion.
+4. If the `phase` is `"confirmed"`, the summary was confirmed and generation had started when the session ended. Do
+   not reopen the discussion. Run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" verify` (it only reads) to see
+   where generation stopped: `constitution-not-written` means the constitution step is still to do, and
+   `spec-missing` names the features whose specs are not generated yet. Tell the maintainer which documents were
+   generated and which were not, and mention any folder in `unexpected` (often a spec that `speckit-specify` created
+   just before the interruption, without its `spec_dir` being saved). Then ask one question: continue with the
+   documents not generated yet (recommended), or stop. To continue, go to "Generating the documents" and do only
+   the steps that are still open, in the same order.
+   - If `verify` also reports other failures (for example `existing-spec-changed` or `order`), do not continue;
+     report them as in "When something fails" and stop.
+   - If a folder in `unexpected` looks like the interrupted spec of the next feature, ask the maintainer whether to
+     record it as that feature's `spec_dir` (after you check that its content matches the summary) or to generate the
+     spec again and leave that folder for them to handle. Never delete it yourself.
 
 ## Rules for questioning
 

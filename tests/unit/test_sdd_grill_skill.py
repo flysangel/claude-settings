@@ -336,7 +336,7 @@ def test_resume():
     has_all(resume, '"present"', "decided", "`changed`", "one question", "start over", CLEAR)
     has_all(resume, "constitution", "specs", "head")
     has_all(resume, "`stage`", "`current_feature`")
-    has_any(resume, "do not ask again", "never ask again", "without asking again", "do not ask about them again")
+    has_any(resume, "do not ask about it again", "do not ask again", "never ask again", "do not ask about them again")
     has_all(resume, '"confirmed"', "not generated")
     has_any(resume, "do not reopen", "without reopening", "not reopen")
 
