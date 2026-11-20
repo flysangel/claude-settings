@@ -414,3 +414,673 @@ def test_official_output_with_forbidden_paths_is_an_official_tool_failure(runner
     assert extra in out[0]
     assert snap(root, with_mtime=True) == before
     assert not runner.dests[0].exists()
+
+
+# ============================================== US1: a fresh update (T012)
+
+
+def test_fresh_update_replaces_creates_and_removes_untouched_files(runner, old_project):
+    root = old_project()
+    write_tree(root, {"specs/001-x/spec.md": "# my spec\n", "README.md": "mine\n"})
+    commit_all(root, "content")
+    before = snap(root, with_mtime=True)
+    created_dirs_before = read_record(root)["created_dirs"]
+    assert ".claude/skills/speckit-legacy" in created_dirs_before
+
+    code, out, err = runner.run(root)
+
+    assert code == 0, err
+    assert err == ""
+    sh_created = [p for p in CREATED if p.endswith(".sh")]
+    assert out == (
+        [line("updated", p) for p in UPDATED]
+        + [line("created", p) for p in CREATED]
+        + [line("removed", p) for p in REMOVED]
+        + [staged_line(p) for p in sh_created]
+        + [summary(OLD_VERSION, NEW_VERSION, len(UPDATED), len(CREATED), len(REMOVED), 0), git_added(len(sh_created))]
+    )
+    assert of(out, "kept") == [] and not any(l.startswith("Next:") for l in out)
+    after = snap(root, with_mtime=True)
+    for path in UPDATED + CREATED:
+        assert (root / path).read_bytes() == NEW[path].encode("utf-8"), path
+    for path in REMOVED:
+        assert not os.path.lexists(root / path)
+    assert not (root / ".claude/skills/speckit-legacy").exists()
+    assert ".claude/skills/speckit-legacy" not in read_record(root)["created_dirs"]
+    # Untouched: files that are the same in both versions, .specify/memory/, specs/ and everything not recorded.
+    for key in SAME + [k for k in before if k.startswith(PROTECTED) or k.startswith("specs/")] + [
+        "README.md",
+        GITATTRIBUTES,
+    ]:
+        assert after[key] == before[key], key
+    assert (root / ".specify/memory/constitution.md").read_bytes() == OLD[".specify/memory/constitution.md"].encode()
+    # The staging directory is gone, and nothing of it was left in the project.
+    assert runner.dests and not runner.dests[0].exists() and not runner.dests[0].parent.exists()
+    assert not (root / ".specify/sdd-update").exists()
+    assert not [k for k in after if k.endswith(".sdd-update-tmp")]
+    assert runner.official_versions == [NEW_VERSION]
+
+
+def test_fresh_update_output_paths_use_forward_slashes_and_are_sorted(runner, old_project):
+    root = old_project()
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert "\\" not in "\n".join(out)
+    for action in ("updated", "created", "removed", "staged"):
+        paths = [l.split()[1] for l in of(out, action)]
+        assert paths == sorted(paths), action
+
+
+# ================================================ US1: the record (T013)
+
+
+def test_record_after_an_update(runner, sdd_init, old_project):
+    root = old_project()
+    before = entries(root)
+
+    code, _, _ = runner.run(root)
+
+    assert code == 0
+    data = read_record(root)
+    assert data["speckit_version"] == NEW_VERSION and data["status"] == "complete"
+    after = entries(root)
+    for path in UPDATED + CREATED + SAME:
+        assert after[path]["sha256"] == sha(sdd_init, NEW[path]), path
+        assert after[path]["origin"] == "speckit"
+    for path in REMOVED:
+        assert path not in after
+    for path in [p for p in before if p.startswith(PROTECTED)] + [GITATTRIBUTES]:
+        assert after[path] == before[path], path
+    assert after[GITATTRIBUTES]["origin"] == "sdd-init"
+    assert after[".specify/scripts/bash/setup-tasks.sh"]["staged_executable"] is True
+    assert after[".specify/scripts/bash/markdown_sections.py"]["staged_executable"] is False
+    # Entries already staged by sdd-init keep their flag.
+    assert after[".specify/scripts/bash/common.sh"]["staged_executable"] is True
+    paths = [e["path"] for e in data["entries"]]
+    assert paths == sorted(paths)
+    raw = (root / RECORD).read_bytes()
+    assert b"\r" not in raw and raw.endswith(b"\n")
+    assert str(root).encode() not in raw and b"\\" not in raw
+    assert data["created_dirs"] == sorted(data["created_dirs"])
+
+
+def test_new_directories_are_added_to_created_dirs(runner, old_project, sdd_update, monkeypatch):
+    root = old_project()
+    extra = ".claude/skills/speckit-newone/SKILL.md"
+    runner.extra_output = {extra: "---\nname: speckit-newone\n---\n"}
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert line("created", extra) in out
+    assert ".claude/skills/speckit-newone" in read_record(root)["created_dirs"]
+
+
+def test_remove_by_sdd_init_after_an_update_deletes_what_nobody_changed(runner, sdd_init, old_project, capsys, monkeypatch):
+    root = old_project(git=False)
+    write_tree(root, {"specs/001-x/spec.md": "# mine\n"})
+    runner.run(root)
+    (root / ".specify/templates/plan-template.md").write_bytes(b"changed after update\n")
+
+    monkeypatch.chdir(root)
+    capsys.readouterr()
+    code = sdd_init.main(["remove"])
+    out = capsys.readouterr().out.splitlines()
+
+    assert code == 0
+    assert out[-1] == "Spec Kit removed: %d deleted, 1 kept because they were modified." % (len(of(out, "deleted")))
+    assert of(out, "kept") == [line("kept", ".specify/templates/plan-template.md (modified since init)")]
+    left = sorted(k for k in snap(root) if not k.endswith("/"))
+    assert left == [".specify/templates/plan-template.md", "specs/001-x/spec.md"]
+
+
+# ===================================== US1: nothing to update (T014)
+
+
+@pytest.mark.parametrize("git", [True, False])
+def test_already_latest_changes_nothing_and_does_not_run_the_official_tool(runner, old_project, git):
+    root = old_project(git=git)
+    runner.run(root)
+    if git:
+        commit_all(root, "updated")
+    for attempt in range(5):
+        before = snap(root, with_mtime=True)
+        before_status = status(root) if git else None
+        before_index = git_run(root, "ls-files", "-s") if git else None
+        runner.reset()
+
+        code, out, err = runner.run(root)
+
+        assert code == 0
+        assert out == [already()], attempt
+        assert err == ""
+        assert runner.version_calls == 1 and runner.official_versions == []
+        assert snap(root, with_mtime=True) == before
+        if git:
+            assert status(root) == before_status
+            assert git_run(root, "ls-files", "-s") == before_index
+
+
+def set_record_version(root: Path, version: str, status_value: str | None = None) -> None:
+    data = read_record(root)
+    data["speckit_version"] = version
+    if status_value:
+        data["status"] = status_value
+    (root / RECORD).write_bytes((json.dumps(data, indent=2) + "\n").encode())
+
+
+def set_options_version(root: Path, value) -> None:
+    path = root / ".specify/init-options.json"
+    data = json.loads(path.read_bytes())
+    data["speckit_version"] = value
+    path.write_bytes((json.dumps(data, indent=2) + "\n").encode())
+
+
+@pytest.mark.parametrize(
+    "recorded, options, shown",
+    [
+        ("1.2.0", None, "1.2.0"),
+        (OLD_VERSION, "1.5.0rc1", "1.5.0rc1"),
+        ("1.2.0", "1.5.0rc1", "1.5.0rc1"),
+        ("1.6.0", "1.5.0rc1", "1.6.0"),
+        ("1.5.0", "1.5.0rc1", "1.5.0"),
+    ],
+)
+def test_newer_than_the_latest_stable_release_is_not_downgraded(runner, old_project, recorded, options, shown):
+    root = old_project()
+    set_record_version(root, recorded)
+    if options is not None:
+        set_options_version(root, options)
+    commit_all(root, "edited")
+    before = snap(root, with_mtime=True)
+    runner.latest = NEW_VERSION
+
+    code, out, err = runner.run(root)
+
+    assert code == 0
+    assert out == [f"Spec Kit {shown} is newer than the latest stable release {NEW_VERSION}. Nothing changed."]
+    assert runner.official_versions == []
+    assert snap(root, with_mtime=True) == before
+    assert status(root) == ""
+
+
+@pytest.mark.parametrize("problem", ["missing", "unparseable", "number", "list"])
+def test_unusable_init_options_only_the_record_counts(runner, old_project, problem):
+    root = old_project()
+    path = root / ".specify/init-options.json"
+    if problem == "missing":
+        path.unlink()
+    elif problem == "unparseable":
+        path.write_bytes(b"{ not json")
+    elif problem == "number":
+        set_options_version(root, 99)
+    else:
+        path.write_bytes(b'["9.9.9"]')
+    set_record_version(root, NEW_VERSION)
+    before = snap(root, with_mtime=True)
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert out == [already()]
+    assert snap(root, with_mtime=True) == before
+
+
+# ============================================== US1: stopping (T015)
+
+
+@pytest.mark.parametrize("missing", [["uv"], ["git"], ["bash"], ["bash", "uv"], ["bash", "git", "uv"]])
+def test_missing_tools_stop_before_anything(runner, old_project, monkeypatch, missing):
+    root = old_project()
+    before = snap(root, with_mtime=True)
+    monkeypatch.setattr(runner.shared, "is_windows", lambda: False)
+    monkeypatch.setattr(runner.shared, "find_tool", lambda name: None if name in missing else f"/bin/{name}")
+
+    code, out, err = runner.run(root)
+
+    assert code == 3
+    assert out == [line("missing", name) for name in sorted(missing)] + [MISSING_TOOLS]
+    for name in missing:
+        assert name in err
+    assert "/sdd-update" in err
+    assert runner.version_calls == 0 and runner.official_versions == []
+    assert snap(root, with_mtime=True) == before
+
+
+def test_windows_missing_git_bash_uses_the_sdd_init_wording(runner, old_project, monkeypatch):
+    root = old_project()
+    monkeypatch.setattr(runner.shared, "is_windows", lambda: True)
+    monkeypatch.setattr(runner.shared, "find_tool", lambda name: None if name == "bash" else f"/bin/{name}")
+
+    code, out, err = runner.run(root)
+
+    assert code == 3
+    assert out == [line("missing", "bash (Git Bash, included with Git for Windows)"), MISSING_TOOLS]
+    assert "Git Bash" in err
+
+
+@pytest.mark.parametrize("layout", ["empty", "no .specify record", "spec kit without record"])
+def test_without_a_record_exit_1_and_do_not_go_online(runner, make_project, layout):
+    root = make_project(git=True)
+    if layout == "no .specify record":
+        write_tree(root, {".specify/templates/plan-template.md": "x\n"})
+    elif layout == "spec kit without record":
+        write_versioned_official_output(root, OLD_VERSION)
+    before = snap(root, with_mtime=True)
+
+    code, out, err = runner.run(root)
+
+    assert code == 1
+    assert out == [NOT_UPDATED_NO_RECORD]
+    assert "/sdd-init" in err
+    assert runner.version_calls == 0 and runner.official_versions == []
+    assert snap(root, with_mtime=True) == before
+
+
+def _record_with(change) -> dict:
+    data = {
+        "schema": 1,
+        "status": "complete",
+        "speckit_version": OLD_VERSION,
+        "init_options": {"integration": "claude", "script": "sh"},
+        "entries": [
+            {"path": ".specify/templates/a.md", "sha256": "a" * 64, "origin": "speckit", "staged_executable": False}
+        ],
+        "created_dirs": [".specify"],
+    }
+    change(data)
+    return data
+
+
+BAD_RECORDS = {
+    "not json": "{ nope",
+    "unknown schema": _record_with(lambda d: d.update(schema=2)),
+    "bad status": _record_with(lambda d: d.update(status="done")),
+    "preview version": _record_with(lambda d: d.update(speckit_version="1.0.0rc1")),
+    "unknown origin": _record_with(lambda d: d["entries"][0].update(origin="other")),
+    "path outside": _record_with(lambda d: d["entries"][0].update(path="specs/x.md")),
+    "copy outside": _record_with(
+        lambda d: d["entries"].append(
+            {"path": ".specify/x.md.new", "sha256": "b" * 64, "origin": "sdd-update", "staged_executable": False}
+        )
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(BAD_RECORDS))
+def test_unusable_record_exit_1_and_do_not_go_online(runner, make_project, name):
+    root = make_project(git=True)
+    content = BAD_RECORDS[name]
+    write_tree(root, {RECORD: content if isinstance(content, str) else json.dumps(content)})
+    before = snap(root, with_mtime=True)
+
+    code, out, err = runner.run(root)
+
+    assert code == 1
+    assert out == [NOT_UPDATED_BAD_RECORD]
+    first = err.splitlines()[0]
+    assert first.startswith("error: .specify/sdd-init.json is not a record this version of ")
+    assert len(first) > len("error: .specify/sdd-init.json is not a record this version of sdd-update can use: ")
+    assert "/sdd-update" in err
+    assert runner.version_calls == 0 and runner.official_versions == []
+    assert snap(root, with_mtime=True) == before
+
+
+def test_interrupted_setup_at_the_latest_version_stops(runner, old_project):
+    root = old_project()
+    set_record_version(root, NEW_VERSION, "applying")
+    before = snap(root, with_mtime=True)
+
+    code, out, err = runner.run(root)
+
+    assert code == 1
+    assert out == [NOT_UPDATED_INTERRUPTED]
+    assert "/sdd-init" in err
+    assert runner.official_versions == []
+    assert snap(root, with_mtime=True) == before
+
+
+@pytest.mark.parametrize("where", ["lookup", "official", "mismatch", "copies", "record"])
+def test_version_or_official_tool_failures_exit_4_and_write_nothing(runner, old_project, where):
+    root = old_project()
+    before = snap(root, with_mtime=True)
+    before_index = index(root)
+    if where == "lookup":
+        runner.resolve_error = "pypi.org cannot be reached"
+    elif where == "official":
+        runner.official_error = "uv could not run the official tool (specify-cli 1.1.0), exit code 2"
+    elif where == "mismatch":
+        runner.produced_version = "1.0.5"
+    elif where == "copies":
+        runner.extra_output = {".specify/sdd-update/x.new": "x\n"}
+    else:
+        runner.extra_output = {RECORD: "{}\n"}
+
+    code, out, err = runner.run(root)
+
+    assert code == 4
+    assert len(out) == 1
+    assert out[0].startswith("Could not get the latest stable Spec Kit release: ")
+    assert out[0].endswith(". Nothing was changed. Check the network connection and run /sdd-update again.")
+    if where == "lookup":
+        assert out == [unavailable("pypi.org cannot be reached")]
+    assert "/sdd-update" in err and "retry" in err
+    assert runner.version_calls == 1
+    assert len(runner.official_versions) == (0 if where == "lookup" else 1)
+    for dest in runner.dests:
+        assert not dest.exists()
+    assert snap(root, with_mtime=True) == before
+    assert index(root) == before_index
+    assert not (root / ".specify/sdd-update").exists()
+
+
+# ============================================ US1: .sh and the index (T016)
+
+
+def test_new_sh_is_staged_and_replaced_sh_is_left_in_the_index(runner, old_project):
+    root = old_project()
+    before_index = index(root)
+    before_head = head(root)
+    branch = git_run(root, "symbolic-ref", "HEAD")
+    common = ".specify/scripts/bash/common.sh"
+    tasks = ".specify/scripts/bash/setup-tasks.sh"
+    assert before_index[common] == "100755"
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert of(out, "staged") == [staged_line(tasks)]
+    assert git_added(1) in out
+    after_index = index(root)
+    assert after_index[tasks] == "100755"
+    assert after_index[common] == "100755"
+    # The replaced .sh is not staged: the index still holds the old content.
+    assert git_run(root, "diff", "--cached", "--name-only").split() == [tasks]
+    assert head(root) == before_head and git_run(root, "symbolic-ref", "HEAD") == branch
+    assert git_run(root, "rev-list", "--count", "HEAD").strip() == "1"
+    if os.name != "nt":
+        assert os.access(root / common, os.X_OK) and os.access(root / tasks, os.X_OK)
+        assert not os.access(root / ".specify/scripts/bash/markdown_sections.py", os.X_OK)
+
+
+def test_new_sh_is_staged_as_executable_when_git_ignores_file_modes(runner, old_project):
+    root = old_project()
+    git_run(root, "config", "core.fileMode", "false")
+    tasks = ".specify/scripts/bash/setup-tasks.sh"
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert of(out, "staged") == [staged_line(tasks)]
+    assert index(root)[tasks] == "100755"
+    assert entries(root)[tasks]["staged_executable"] is True
+
+
+def test_sh_never_staged_by_sdd_init_is_staged_by_the_update(runner, sdd_init, make_project, capsys):
+    # Brought in outside git, then the project became a repository: sdd-init staged nothing.
+    root = make_project(git=False)
+    assert init_with_version(sdd_init, root, OLD_VERSION) == 0
+    capsys.readouterr()
+    git_run(root, "init", "--quiet")
+    git_run(root, "config", "user.name", "test")
+    git_run(root, "config", "user.email", "test@example.invalid")
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    expected = sorted(p for p in NEW if p.endswith(".sh"))
+    assert of(out, "staged") == [staged_line(p) for p in expected]
+    assert git_added(len(expected)) in out
+    assert {p: m for p, m in index(root).items()} == {p: "100755" for p in expected}
+    flags = {p: e["staged_executable"] for p, e in entries(root).items() if p.endswith(".sh")}
+    assert flags == {p: True for p in expected}
+
+
+def test_removed_sh_staged_earlier_and_not_committed_leaves_the_index(runner, sdd_init, make_project, capsys):
+    root = make_project(git=True)
+    old_sh = ".specify/scripts/bash/legacy.sh"
+
+    def official_with_legacy(version, dest):
+        write_versioned_official_output(Path(dest), version)
+        if version == OLD_VERSION:
+            write_tree(Path(dest), {old_sh: "#!/usr/bin/env bash\necho legacy\n"})
+
+    assert init_with_version(sdd_init, root, OLD_VERSION, official_with_legacy) == 0
+    capsys.readouterr()
+    assert old_sh in index(root)
+    assert entries(root)[old_sh]["staged_executable"] is True
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert line("removed", old_sh) in out
+    assert old_sh not in index(root)
+    assert old_sh not in entries(root)
+
+
+def test_staging_failure_is_a_note_and_not_a_failure(runner, old_project, monkeypatch):
+    root = old_project()
+    real_git = runner.shared.git
+
+    def git_without_add(cwd, *args):
+        if args and args[0] == "add":
+            return subprocess.CompletedProcess(["git", *args], 128, b"", b"fatal: Unable to create index.lock\n")
+        return real_git(cwd, *args)
+
+    monkeypatch.setattr(runner.shared, "git", git_without_add)
+    tasks = ".specify/scripts/bash/setup-tasks.sh"
+
+    code, out, err = runner.run(root)
+
+    assert code == 0
+    assert of(out, "staged") == []
+    assert GIT_NOTHING in out
+    assert f"note: {tasks} was not added to the git index: fatal: Unable to create index.lock" in err.splitlines()
+    assert entries(root)[tasks]["staged_executable"] is False
+
+
+def test_outside_git_nothing_is_staged_and_no_repository_is_made(runner, old_project):
+    root = old_project(git=False)
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert of(out, "staged") == [] and of(out, "warning") == []
+    assert out[-1] == GIT_NOT_A_REPO
+    assert not (root / ".git").exists()
+
+
+# ==================================== US1: .gitattributes and warnings (T017)
+
+
+def test_missing_gitattributes_is_created(runner, sdd_init, old_project):
+    root = old_project()
+    (root / GITATTRIBUTES).unlink()
+    commit_all(root, "no attributes")
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert line("created", GITATTRIBUTES) in of(out, "created")
+    assert (root / GITATTRIBUTES).read_bytes() == GITATTRIBUTES_BYTES
+    entry = entries(root)[GITATTRIBUTES]
+    assert entry["origin"] == "sdd-init" and entry["sha256"] == sha(sdd_init, GITATTRIBUTES_BYTES)
+    assert f"{len(CREATED) + 1} created" in out[-2]
+    assert of(out, "warning") == []
+
+
+def test_existing_gitattributes_is_left_alone(runner, old_project):
+    root = old_project()
+    (root / GITATTRIBUTES).write_bytes(b"scripts/bash/*.sh text eol=lf\n# mine\n")
+    commit_all(root, "my attributes")
+    before = snap(root, with_mtime=True)[GITATTRIBUTES]
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert GITATTRIBUTES not in "\n".join(out)
+    assert snap(root, with_mtime=True)[GITATTRIBUTES] == before
+
+
+def test_sh_without_an_lf_rule_is_warned_about_after_staged(runner, old_project):
+    root = old_project()
+    (root / GITATTRIBUTES).write_bytes(b"# no rule\n")
+    commit_all(root, "no rule")
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    scripts = sorted(p for p in NEW if p.endswith(".sh"))
+    warnings = [
+        line("warning", f"{p} has no eol=lf rule in git; it will not run after a checkout that converts line endings")
+        for p in scripts
+    ]
+    assert of(out, "warning") == warnings
+    assert out.index(warnings[0]) > out.index(of(out, "staged")[-1])
+    assert out[-2].startswith("Spec Kit updated from")
+
+
+# ============================== US1: failing while writing, and running again (T018)
+
+
+@pytest.mark.parametrize("step", ["replace", "create", "remove"])
+def test_failure_while_writing_leaves_an_applying_record_and_the_next_run_finishes(
+    runner, sdd_update, sdd_init, old_project, monkeypatch, step
+):
+    root = old_project(git=False)
+    reference = old_project(git=False)
+    runner.run(reference)
+    expected_record = read_record(reference)
+
+    names = {"replace": "replace_file", "remove": "remove_file"}
+    owner = sdd_init if step == "create" else sdd_update
+    name = "copy_new_file" if step == "create" else names[step]
+    real = getattr(owner, name)
+    calls = {"n": 0}
+
+    def failing(*args):
+        calls["n"] += 1
+        if calls["n"] == 2 or step == "remove":
+            raise OSError("disk full")
+        return real(*args)
+
+    monkeypatch.setattr(owner, name, failing)
+    runner.reset()
+
+    code, out, err = runner.run(root)
+
+    assert code == 1
+    assert out == []
+    assert "error: writing into the project failed: " in err and "disk full" in err
+    assert WRITE_FAILED_HINT in err
+    data = read_record(root)
+    assert data["status"] == "applying" and data["speckit_version"] == OLD_VERSION
+    paths = {e["path"] for e in data["entries"]}
+    assert set(OLD) | set(CREATED) | {GITATTRIBUTES} <= paths
+    # No file is left half written: each one is either the old or the new version.
+    for path in UPDATED:
+        assert (root / path).read_bytes() in (OLD[path].encode(), NEW[path].encode()), path
+    still_old = [p for p in UPDATED if (root / p).read_bytes() == OLD[p].encode()]
+
+    monkeypatch.setattr(owner, name, real)
+    runner.reset()
+
+    code, out, err = runner.run(root)
+
+    assert code == 0, err
+    assert read_record(root) == expected_record
+    for path in UPDATED + CREATED:
+        assert (root / path).read_bytes() == NEW[path].encode()
+    for path in REMOVED:
+        assert not (root / path).exists()
+    assert not [k for k in snap(root) if k.endswith(".sdd-update-tmp")]
+    # Only what this run did is reported.
+    assert [l.split()[1] for l in of(out, "updated")] == still_old
+    code, out, _ = runner.run(root)
+    assert out == [already()]
+
+
+def test_a_replaced_file_is_not_reported_again_by_the_next_run(runner, sdd_update, old_project, monkeypatch):
+    root = old_project(git=False)
+    real = sdd_update.replace_file
+    calls = {"n": 0}
+
+    def failing(source, target):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError("disk full")
+        return real(source, target)
+
+    monkeypatch.setattr(sdd_update, "replace_file", failing)
+    code, _, _ = runner.run(root)
+    assert code == 1
+    replaced = [p for p in UPDATED if (root / p).read_bytes() == NEW[p].encode()]
+    assert len(replaced) == 2
+
+    monkeypatch.setattr(sdd_update, "replace_file", real)
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert [l.split()[1] for l in of(out, "updated")] == [p for p in UPDATED if p not in replaced]
+    assert out[-2] == summary(OLD_VERSION, NEW_VERSION, len(UPDATED) - 2, 0, len(REMOVED), 0)
+
+
+def test_replacing_writes_a_temporary_file_and_swaps_it_in(sdd_update, tmp_path, monkeypatch):
+    source = tmp_path / "new.sh"
+    source.write_bytes(b"new\n")
+    os.chmod(source, 0o755)
+    target = tmp_path / "dir" / "old.sh"
+    target.parent.mkdir()
+    target.write_bytes(b"old\n")
+    os.chmod(target, 0o644)
+    seen = []
+    real_replace = os.replace
+
+    def watching(src, dst):
+        seen.append((Path(src).name, Path(dst).name, Path(src).read_bytes()))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(sdd_update.os, "replace", watching)
+
+    sdd_update.replace_file(source, target)
+
+    assert seen == [("old.sh.sdd-update-tmp", "old.sh", b"new\n")]
+    assert target.read_bytes() == b"new\n"
+    assert sorted(p.name for p in target.parent.iterdir()) == ["old.sh"]
+    if os.name != "nt":
+        assert os.access(target, os.X_OK)
+
+
+def test_applying_record_older_than_the_latest_is_updated_like_a_complete_one(runner, old_project):
+    root = old_project()
+    set_record_version(root, OLD_VERSION, "applying")
+    reference = old_project()
+
+    code, out, _ = runner.run(root)
+    code_ref, out_ref, _ = runner.run(reference)
+
+    assert code == code_ref == 0
+    assert out == out_ref
+    assert read_record(root) == read_record(reference)
+
+
+def test_a_file_changed_while_an_update_was_interrupted_is_never_written(runner, sdd_update, old_project, monkeypatch):
+    root = old_project(git=False)
+    real = sdd_update.replace_file
+
+    def failing(source, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sdd_update, "replace_file", failing)
+    assert runner.run(root)[0] == 1
+    changed = ".specify/templates/plan-template.md"
+    (root / changed).write_bytes(b"my plan\n")
+    monkeypatch.setattr(sdd_update, "replace_file", real)
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert (root / changed).read_bytes() == b"my plan\n"
+    assert kept_modified(changed) in out
