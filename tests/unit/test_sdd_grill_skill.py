@@ -371,3 +371,63 @@ def test_existing_project_instructions():
     has_all(generate, "existing spec")
     has_any(generate, "never overwrite", "never overwritten", "do not overwrite", "not overwritten")
     has_any(generate, "after the existing ones", "after existing specs")
+
+
+# ------------------------------------------------------- folder and README
+
+
+def test_folder_holds_exactly_three_files():
+    files = sorted(
+        p.relative_to(SKILL_DIR).as_posix()
+        for p in SKILL_DIR.rglob("*")
+        if p.is_file() and "__pycache__" not in p.parts
+    )
+
+    assert files == ["README.md", "SKILL.md", "scripts/sdd_grill.py"]
+
+
+def test_files_use_lf_line_endings():
+    for path in (SKILL_MD, README_MD, SCRIPT):
+        data = path.read_bytes()
+        assert b"\r" not in data, path.name
+        assert data.endswith(b"\n"), path.name
+
+
+def test_readme_is_traditional_chinese_without_paths_or_emails():
+    readme = text(README_MD)
+
+    assert len(CJK.findall(readme)) > 200
+    assert not ABSOLUTE_PATH.search(readme)
+    assert not EMAIL.search(readme)
+
+
+def test_readme_covers_usage_and_prerequisites():
+    readme = text(README_MD)
+
+    for needle in ("/sdd-grill", "Spec Kit", "/sdd-init", "uv", "git"):
+        assert needle in readme, needle
+    assert "主動" in readme  # Claude may use it on its own
+    assert "非必要" in readme or "不是必要" in readme  # git is optional
+
+
+def test_readme_covers_the_flow():
+    readme = text(README_MD)
+
+    principles, features, each = readme.index("原則"), readme.index("功能清單"), readme.index("逐一")
+    assert principles < features < each
+    for needle in ("確認", "speckit-constitution", "speckit-specify", "/sdd-drive"):
+        assert needle in readme, needle
+
+
+def test_readme_covers_the_progress():
+    readme = text(README_MD)
+
+    for needle in (".specify/sdd-grill/", ".gitignore", "清除", "保留", "機密", "HEAD", "未 commit"):
+        assert needle in readme, needle
+
+
+def test_readme_covers_feature_json_and_what_it_never_does():
+    readme = text(README_MD)
+
+    for needle in (".specify/feature.json", "編號最小", "不做的事", "覆蓋", "plan"):
+        assert needle in readme, needle
