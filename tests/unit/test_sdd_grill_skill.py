@@ -253,8 +253,8 @@ def test_order_of_the_discussion():
     assert principles < feature_list < each
     has_all(order, "depend", "scenario", "scope", "edge case")
     has_all(order, '"principles"', '"features"', '"feature"', '"summary"')
-    # FR-020: language of the generated documents.
-    has_all(order, "language", "traditional chinese", "must", "should")
+    # Item 16 and FR-020: the conversation follows the maintainer's settings; the documents follow the project.
+    has_all(order, "talk with the maintainer", "existing documents", "traditional chinese", "must", "should")
 
 
 def test_saving_progress():

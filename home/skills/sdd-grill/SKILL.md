@@ -95,7 +95,7 @@ resuming is that the maintainer never has to answer a decided question twice.
    - `head`: there are new commits, so the code may have changed.
 
    Read what changed, and point out any saved decision that the change may affect.
-3. Ask one question: resume the saved discussion, or start over. Recommend resuming unless the changes undermine
+3. If the `phase` is `"discussing"`, ask one question: resume the saved discussion, or start over. Recommend resuming unless the changes undermine
    the saved decisions, or the maintainer has come with a different requirement.
    - To start over, run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" clear`, then continue as for a new
      discussion (step 5 of "Start"), using the requirement the maintainer gave this time, if any.
@@ -104,16 +104,18 @@ resuming is that the maintainer never has to answer a decided question twice.
      it again. If a change in the project contradicts a saved decision, treat it as a contradiction (see "Rules for
      questioning") and ask only about that point. If the maintainer gave new text with `/sdd-grill` this time,
      discuss what it adds as part of the resumed discussion.
-4. If the `phase` is `"confirmed"`, the summary was confirmed and generation had started when the session ended. Do
-   not reopen the discussion. Run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" verify` (it only reads) to see
-   where generation stopped: `constitution-not-written` means the constitution step is still to do, and
-   `spec-missing` names the features whose specs are not generated yet. Tell the maintainer which documents were
+4. If the `phase` is `"confirmed"`, the summary was confirmed and generation had started when the session ended.
+   Skip step 3: do not offer to start over and do not reopen the discussion. Run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" verify` (it only reads) to see
+   where generation stopped: `constitution-not-written` means the constitution step is still to do, and a
+   `spec-missing` whose `detail` says that no spec folder is recorded yet names a feature whose spec is not generated
+   yet. Tell the maintainer which documents were
    generated and which were not, and mention any folder in `unexpected` (often a spec that `speckit-specify` created
    just before the interruption, without its `spec_dir` being saved). Then ask one question: continue with the
    documents not generated yet (recommended), or stop. To continue, go to "Generating the documents" and do only
    the steps that are still open, in the same order.
-   - If `verify` also reports other failures (for example `existing-spec-changed` or `order`), do not continue;
-     report them as in "When something fails" and stop.
+   - If `verify` also reports other failures (for example `existing-spec-changed`, `order`, or a `spec-missing` for
+     a feature whose recorded folder has lost its `spec.md`), do not continue; report them as in "When something
+     fails" and stop.
    - If a folder in `unexpected` looks like the interrupted spec of the next feature, ask the maintainer whether to
      record it as that feature's `spec_dir` (after you check that its content matches the summary) or to generate the
      spec again and leave that folder for them to handle. Never delete it yourself.
@@ -174,7 +176,8 @@ discussion knows where to continue.
 2. **Feature list and dependencies** (`"features"`). Split the requirement into features, each one becoming one
    spec. Propose the split, then settle it with the maintainer question by question. Order the list so that every
    feature comes after the features it depends on; that order becomes the order of the spec numbers and the
-   suggested order of work. A feature may also depend on an existing spec, given as its folder (for example
+   suggested order of work. If the maintainer postpones a whole feature, it is not part of this batch: remove it from
+   `features` and record it in `deferred` (with `feature` set to `null`). A feature may also depend on an existing spec, given as its folder (for example
    `specs/003-sdd-init`, taken from `check`'s `specs`).
 3. **Each feature in turn** (`"feature"`). Take one feature at a time, in list order, and settle its usage
    scenarios, its scope (what is in and what is out), and its edge cases. Set `current_feature` to the feature's id
@@ -195,7 +198,8 @@ confirmed.
 After every decision, save the full progress: after each answered question, each deferral, each item added to
 `for_plan`, and each change of stage. The maintainer may leave at any moment, and anything not saved is lost.
 
-Pass the whole progress as JSON on stdin, every time (the script replaces the file; it does not merge):
+Pass the whole progress as JSON on stdin, every time (the script replaces the file; it does not merge). Use the Bash
+tool (on Windows it runs Git Bash) with a quoted here-document, so that nothing in the JSON is expanded by the shell:
 
 ```text
 uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" save <<'SDD_GRILL_PROGRESS'
@@ -276,8 +280,11 @@ resumed from the right place.
 3. **The specs**, one at a time, in the order of `features`. For each feature, invoke the `speckit-specify` skill with
    the Skill tool. As its argument, describe that feature only, from the summary: its title, usage scenarios, scope
    and edge cases, what it depends on (by name, and by spec folder for features already generated or existing specs),
-   and its deferred items with their reasons, asking for those to be written in the spec's Assumptions section.
-   Write it in the documents' language.
+   its deferred items with their reasons, and its items left for the plan. Ask for the deferred items to be written
+   in the spec's Assumptions section, and for the items left for the plan to be listed there too, as decisions left
+   to the plan rather than made in the spec. Items that belong to the whole project (`feature` is `null`) go with
+   every spec they affect, or with the first spec when they affect all of them. The progress is removed at the end,
+   so whatever is not written into a spec or the constitution is lost. Write it in the documents' language.
    - When `speckit-specify` finishes, it reports the folder it created. Record it as the feature's `spec_dir`, in the
      form `specs/<folder name>`, and save before moving to the next feature.
    - If `speckit-specify` asks clarifying questions, answer them from the summary. If the summary has no answer, ask
