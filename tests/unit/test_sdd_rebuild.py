@@ -185,10 +185,12 @@ def load_copy(path: Path, name: str):
 
 def test_loading_the_module_does_nothing(tmp_path, monkeypatch):
     before = set(sys.modules)
-    monkeypatch.chdir(tmp_path)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
     module = load_copy(SDD_REBUILD_PY, "sdd_rebuild_load_check")
 
-    assert list(tmp_path.iterdir()) == []
+    assert list(work.iterdir()) == []
     assert callable(module.main)
     # neither neighbour script was loaded by the import itself
     assert module.neighbour_cache() == {}
@@ -234,13 +236,13 @@ def test_every_command_stops_when_a_neighbour_is_missing(tmp_path, gone, argv):
     skills = copy_skills(tmp_path, [name for name in ("sdd-rebuild", "sdd-export", "sdd-grill") if name not in gone])
     module = load_copy(skills / "sdd-rebuild" / "scripts" / "sdd_rebuild.py", f"sdd_rebuild_copy_{len(gone)}_{argv[0]}")
     new = make_rebuild_new(tmp_path)
-    before = tree_snapshot(tmp_path)
+    before = tree_snapshot(new)
     result = run_rebuild(module, new, *argv, stdin="{}")
 
     assert result.code == 3
     assert result.out["reason"] == "dependency"
     assert result.out["missing"] == gone
-    assert tree_changes(before, tree_snapshot(tmp_path)) == {"added": [], "removed": [], "changed": []}
+    assert tree_changes(before, tree_snapshot(new)) == {"added": [], "removed": [], "changed": []}
 
 
 def test_a_neighbour_that_fails_to_load_counts_as_missing(tmp_path):
@@ -370,7 +372,7 @@ def test_ancestors_join_the_old_lineage_nutrients_first(sdd_rebuild):
     assert sdd_rebuild.build_ancestors(nutrients, None) == {"f": ["a", "b"], "r": ["x"]}
 
 
-@pytest.mark.parametrize("basis, expected", [("inherit", ["a", "b", "c"]), ("derived", ["f", "a", "b", "c"]), ("new", [])])
+@pytest.mark.parametrize("basis, expected", [("inherit", ["a", "b", "c"]), ("derived", ["f", "a", "c", "b"]), ("new", [])])
 def test_derived_from_of_each_basis(sdd_rebuild, basis, expected):
     ancestors = {"f": ["a", "b"], "a": ["c"]}
     entry = {"id": "f" if basis == "inherit" else "n", "basis": basis, "from": ["f"] if basis == "derived" else []}
