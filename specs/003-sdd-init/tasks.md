@@ -145,8 +145,8 @@ description: "Task list for 003 sdd-init 導入 Spec Kit"
 **Purpose**: 文件、實跑驗證與 CI
 
 - [X] T039 [P] 更新 `README.md`（繁體中文）：「目前狀態」改為 `sdd-init` 已提供、其餘 5 個 skill 由 004 至 008 提供；加入 `/sdd-init` 與 `/sdd-init remove` 的簡短說明與前置需求（`uv`、`git`、`bash`，Windows 的 `bash` 是 Git Bash）
-- [ ] T040 依 `specs/003-sdd-init/quickstart.md`「手動情境（腳本）」的 9 個情境，在 `mktemp -d` 建立的暫存目錄逐一實跑 `uv run <repo>/home/skills/sdd-init/scripts/sdd_init.py`，並修正與預期不符之處；每個情境用新的暫存目錄，MUST NOT 在這個 repo 的目錄或真正的 `~/.claude` 執行。情境 8（無法取得版本）只在能夠只對該次執行隔離網路時實跑（例如 Linux 的 `unshare -rn`），MUST NOT 中斷整台機器的網路，也 MUST NOT 為此在腳本加入環境變數或隱藏選項；無法隔離時在回報中註明未實跑，該行為由 T014 的測試涵蓋
-- [ ] T041 執行完整測試 `uv run --with pytest pytest`（含 `network`）與 `uv run --with pytest pytest -m "not network"`，兩者全部通過；`tests/e2e/test_cross_platform.py` 在本機跳過是預期的；確認 `git status` 中 `.specify/sdd-init.json` 與 `.specify/` 其他既有檔案都沒有被這次的工作更動
+- [X] T040 依 `specs/003-sdd-init/quickstart.md`「手動情境（腳本）」的 9 個情境，在 `mktemp -d` 建立的暫存目錄逐一實跑 `uv run <repo>/home/skills/sdd-init/scripts/sdd_init.py`，並修正與預期不符之處；每個情境用新的暫存目錄，MUST NOT 在這個 repo 的目錄或真正的 `~/.claude` 執行。情境 8（無法取得版本）只在能夠只對該次執行隔離網路時實跑（例如 Linux 的 `unshare -rn`），MUST NOT 中斷整台機器的網路，也 MUST NOT 為此在腳本加入環境變數或隱藏選項；無法隔離時在回報中註明未實跑，該行為由 T014 的測試涵蓋
+- [X] T041 執行完整測試 `uv run --with pytest pytest`（含 `network`）與 `uv run --with pytest pytest -m "not network"`，兩者全部通過；`tests/e2e/test_cross_platform.py` 在本機跳過是預期的；確認 `git status` 中 `.specify/sdd-init.json` 與 `.specify/` 其他既有檔案都沒有被這次的工作更動
 - [ ] T042 **由主代理在維護者授權推送後處理，實作的 worker 不執行這一項、不 push**：推送分支後確認 `.github/workflows/ci.yml` 的 `test` job 與 `cross-platform` job 在 `ubuntu-latest` 與 `windows-latest` 都通過（共四個結果）；Windows 與跨平台的行為以 CI 結果為準，失敗時依紀錄修正後再確認
 
 ---
