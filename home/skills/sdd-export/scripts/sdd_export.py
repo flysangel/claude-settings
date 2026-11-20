@@ -287,6 +287,990 @@ def commit_exists(root: Path, commit: str) -> bool:
     return done is not None and done.returncode == 0
 
 
+# ------------------------------------------------------------- validation
+
+STATUSES = ("confirmed", "pending")
+PRINCIPLE_SOURCES = ("constitution", "doc", "code", "maintainer")
+FEATURE_SOURCES = ("spec", "code", "mixed", "maintainer")
+REQUIREMENT_SOURCES = ("spec", "code", "doc", "maintainer")
+REQUIREMENT_KINDS = ("story", "functional", "edge-case", "success-criterion", "assumption")
+LESSON_KINDS = ("decision", "pitfall", "reversed")
+DISCARDED_KINDS = ("principle", "feature", "requirement", "lesson", "doubt")
+COVERAGES = ("full", "partial")
+REBUILD = "rebuild"
+DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+COMMIT = re.compile(r"^commit:([0-9a-f]{7,40})$")
+CODE_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})", re.MULTILINE)
+MAINTAINER = "maintainer"
+
+# Field rules of each kind of item: "id", "int", "str" (not empty), "ints", "ids", "strs", "str?" (string or
+# null), "items" (a list of objects), or a tuple of allowed values.
+ITEM_RULES = {
+    "principles": {
+        "id": "id", "origin": "int", "title": "str", "text": "str", "revised": "ints", "derived_from": "ids",
+        "source": PRINCIPLE_SOURCES, "status": STATUSES, "evidence": "strs",
+    },
+    "features": {
+        "id": "id", "origin": "int", "title": "str", "summary": "str", "revised": "ints", "derived_from": "ids",
+        "source": FEATURE_SOURCES, "spec": "str?", "depends_on": "ids", "requirements": "items",
+    },
+    "requirements": {
+        "id": "id", "origin": "int", "kind": REQUIREMENT_KINDS, "text": "str", "revised": "ints",
+        "derived_from": "ids", "source": REQUIREMENT_SOURCES, "status": STATUSES, "evidence": "strs",
+    },
+    "lessons": {
+        "id": "id", "origin": "int", "kind": LESSON_KINDS, "title": "str", "text": "str", "revised": "ints",
+        "derived_from": "ids", "status": STATUSES, "evidence": "strs",
+    },
+    "discarded": {"id": "id", "kind": DISCARDED_KINDS, "origin": "int", "discarded_in": "int", "text": "str", "reason": "str"},
+}
+LINEAGE_RULES = {
+    "principles": {**{k: v for k, v in ITEM_RULES["principles"].items() if k not in ("status", "evidence")},
+                   "source": PRINCIPLE_SOURCES + (REBUILD,)},
+    "features": {**{k: v for k, v in ITEM_RULES["features"].items() if k != "source"},
+                 "source": FEATURE_SOURCES + (REBUILD,), "spec_dir": "str"},
+    "requirements": {**{k: v for k, v in ITEM_RULES["requirements"].items() if k not in ("status", "evidence")},
+                     "source": REQUIREMENT_SOURCES + (REBUILD,)},
+    "lessons": {k: v for k, v in ITEM_RULES["lessons"].items() if k not in ("status", "evidence")},
+    "discarded": ITEM_RULES["discarded"],
+}
+SECTIONS = ("principles", "features", "lessons", "discarded")
+ACTIVE_SECTIONS = ("principles", "features", "requirements", "lessons")
+SINGULAR = {"principles": "principle", "features": "feature", "requirements": "requirement", "lessons": "lesson",
+            "discarded": "discarded item"}
+
+
+class Problem:
+    """One error: the check that failed, the field path, a sentence that never repeats a secret value."""
+
+    def __init__(self, check: str, path: str, detail: str, secret: bool = False):
+        self.check = check
+        self.path = path
+        self.detail = detail
+        self.secret = secret
+
+    def as_dict(self) -> dict:
+        return {"check": self.check, "path": self.path, "detail": self.detail}
+
+
+def join(path: str, key) -> str:
+    if isinstance(key, int):
+        return f"{path}[{key}]"
+    return f"{path}.{key}" if path else key
+
+
+PATH_TOKEN = re.compile(r"([^.\[\]]+)|\[(\d+)\]")
+
+
+def path_sort_key(path: str) -> tuple:
+    """Field paths in reading order: features[2] before features[10]."""
+    return tuple((0, "", int(index)) if index else (1, name, 0) for name, index in PATH_TOKEN.findall(path))
+
+
+def sorted_problems(problems: list[Problem]) -> list[Problem]:
+    return sorted(problems, key=lambda problem: path_sort_key(problem.path))
+
+
+def is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def shown(value) -> str:
+    """A draft value safe to repeat in a message: never a secret, never long."""
+    if isinstance(value, str) and (looks_like_secret(value) or "\n" in value or len(value) > 120):
+        return "this value"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def rule_problem(value, rule) -> str | None:
+    if isinstance(rule, tuple):
+        return None if value in rule else "must be one of " + ", ".join(rule)
+    if rule == "int":
+        return None if is_int(value) else "must be an integer"
+    if rule in ("str", "id"):
+        if not isinstance(value, str):
+            return "must be a string"
+        return None if value or rule == "id" else "must not be empty"
+    if rule == "str?":
+        return None if value is None or (isinstance(value, str) and value) else "must be a path or null"
+    if rule == "ints":
+        return None if isinstance(value, list) and all(is_int(v) for v in value) else "must be a list of integers"
+    if rule == "ids":
+        return None if isinstance(value, list) and all(isinstance(v, str) for v in value) else "must be a list of ids"
+    if rule == "strs":
+        if isinstance(value, list) and all(isinstance(v, str) and v for v in value):
+            return None
+        return "must be a list of non-empty strings"
+    if rule == "items":
+        if not isinstance(value, list) or not all(isinstance(v, dict) for v in value):
+            return "must be a list of objects"
+        return None if value else "needs at least one entry"
+    raise ValueError(rule)
+
+
+def check_keys(obj: dict, path: str, required, problems: list[Problem], forbidden=()) -> None:
+    for key in required:
+        if key not in obj:
+            problems.append(Problem("field", join(path, key), f"the key {key} is missing"))
+    for key in obj:
+        if key in forbidden:
+            problems.append(Problem("field", join(path, key), f"{key} is filled in by the script; leave it out"))
+        elif key not in required:
+            problems.append(Problem("field", join(path, key), f"{key} is not a field of the nutrients; remove it"))
+
+
+def walk_items(data: dict):
+    """(section, path, item, feature id or None) for every object item in the four sections and the requirements."""
+    for section in SECTIONS:
+        entries = data.get(section)
+        if not isinstance(entries, list):
+            continue
+        for index, item in enumerate(entries):
+            if not isinstance(item, dict):
+                continue
+            path = join(section, index)
+            yield section, path, item, None
+            if section == "features" and isinstance(item.get("requirements"), list):
+                for number, entry in enumerate(item["requirements"]):
+                    if isinstance(entry, dict):
+                        yield "requirements", join(join(path, "requirements"), number), entry, item.get("id")
+
+
+def check_fields(data: dict, rules: dict, problems: list[Problem]) -> None:
+    for section in SECTIONS:
+        entries = data.get(section)
+        if section in data and not isinstance(entries, list):
+            problems.append(Problem("field", section, "must be a list"))
+        elif isinstance(entries, list):
+            for index, item in enumerate(entries):
+                if not isinstance(item, dict):
+                    problems.append(Problem("field", join(section, index), "must be an object"))
+    for section, path, item, _ in walk_items(data):
+        table = rules[section]
+        check_keys(item, path, tuple(table), problems)
+        for key, rule in table.items():
+            if key not in item:
+                continue
+            if rule == "strs" and isinstance(item[key], list):
+                for index, value in enumerate(item[key]):
+                    if not isinstance(value, str) or not value:
+                        problems.append(Problem("field", join(join(path, key), index), "must be a non-empty string"))
+                continue
+            problem = rule_problem(item[key], rule)
+            if problem:
+                problems.append(Problem("field", join(path, key), problem))
+
+
+def strings_of(value, path: str = ""):
+    if isinstance(value, str):
+        yield path, value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from strings_of(item, join(path, key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from strings_of(item, join(path, index))
+
+
+def check_ids(data: dict, problems: list[Problem], unique_with_discarded: bool) -> None:
+    seen: dict[str, str] = {}
+    seen_discarded: dict[str, str] = {}
+    for section, path, item, _ in walk_items(data):
+        value = item.get("id")
+        if not isinstance(value, str):
+            continue
+        if not valid_id(value):
+            problems.append(Problem("id", join(path, "id"), "an id is lowercase letters and digits joined by single "
+                                    "hyphens, at most 64 characters"))
+            continue
+        table = seen_discarded if section == "discarded" and not unique_with_discarded else seen
+        if value in table:
+            problems.append(Problem("id", join(path, "id"), f"the id {value} is already used at {table[value]}"))
+        else:
+            table[value] = path
+        for key in ("derived_from", "depends_on"):
+            entries = item.get(key)
+            if isinstance(entries, list):
+                for index, entry in enumerate(entries):
+                    if isinstance(entry, str) and not valid_id(entry):
+                        problems.append(Problem("id", join(join(path, key), index), "is not a valid id"))
+
+
+def check_ranges(data: dict, generation, problems: list[Problem]) -> None:
+    if not is_int(generation) or generation < 1:
+        return
+    for section, path, item, _ in walk_items(data):
+        origin = item.get("origin")
+        if not is_int(origin):
+            continue
+        if not 1 <= origin <= generation:
+            problems.append(Problem("range", join(path, "origin"), f"origin must be between 1 and the generation {generation}"))
+            continue
+        if section == "discarded":
+            when = item.get("discarded_in")
+            if is_int(when) and not origin <= when <= generation:
+                problems.append(Problem("range", join(path, "discarded_in"),
+                                        f"discarded_in must be between the origin {origin} and the generation {generation}"))
+            continue
+        revised = item.get("revised")
+        if isinstance(revised, list) and all(is_int(v) for v in revised):
+            increasing = all(a < b for a, b in zip(revised, revised[1:]))
+            if not increasing or any(not origin < v <= generation for v in revised):
+                problems.append(Problem("range", join(path, "revised"), "revised must be strictly increasing, after the "
+                                        f"origin {origin} and not after the generation {generation}"))
+
+
+def check_code_blocks(data: dict, problems: list[Problem]) -> None:
+    for path, value in strings_of(data):
+        if CODE_FENCE.search(value):
+            problems.append(Problem("code-block", path, "code blocks do not belong in the nutrients; describe the "
+                                    "behaviour instead"))
+
+
+def check_secrets(data: dict, problems: list[Problem]) -> None:
+    for path, value in strings_of(data):
+        if looks_like_secret(value):
+            problems.append(Problem("secret", path, "this text looks like a secret; describe what is needed instead "
+                                    "of recording the value", secret=True))
+
+
+def check_dependencies(data: dict, problems: list[Problem]) -> None:
+    features = data.get("features")
+    if not isinstance(features, list):
+        return
+    before: set[str] = set()
+    for index, item in enumerate(features):
+        if not isinstance(item, dict):
+            continue
+        entries = item.get("depends_on")
+        if isinstance(entries, list):
+            for number, entry in enumerate(entries):
+                if isinstance(entry, str) and valid_id(entry) and entry not in before:
+                    problems.append(Problem("dependency", join(join(join("features", index), "depends_on"), number),
+                                            f"{entry} is not a feature listed before this one"))
+        if isinstance(item.get("id"), str):
+            before.add(item["id"])
+
+
+def check_unsupported(data: dict, problems: list[Problem]) -> None:
+    for section, path, item, _ in walk_items(data):
+        if section in ("principles", "requirements", "lessons") and item.get("status") == "confirmed" \
+                and item.get("evidence") == []:
+            problems.append(Problem("unsupported", path, "a confirmed item needs at least one piece of evidence; mark "
+                                    "it pending or add evidence"))
+
+
+def check_top(data: dict, problems: list[Problem], draft: bool) -> None:
+    if draft:
+        check_keys(data, "", DRAFT_KEYS, problems, forbidden=SCRIPT_KEYS)
+    else:
+        check_keys(data, "", NUTRIENTS_KEYS, problems)
+        if "schema" in data and not is_int(data["schema"]):
+            problems.append(Problem("field", "schema", "must be an integer"))
+        if "exported_at" in data and not (isinstance(data["exported_at"], str) and DATE.match(data["exported_at"])):
+            problems.append(Problem("field", "exported_at", "must be a date written YYYY-MM-DD"))
+    if "generation" in data and not (is_int(data["generation"]) and data["generation"] >= 1):
+        problems.append(Problem("field", "generation", "must be an integer of at least 1"))
+    if "project" in data:
+        name = data["project"]
+        if not isinstance(name, str) or not name:
+            problems.append(Problem("field", "project", "must be a non-empty string"))
+        elif "/" in name or "\\" in name:
+            problems.append(Problem("field", "project", "must be a name, not a path"))
+    if "language" in data and data["language"] != LANGUAGE:
+        problems.append(Problem("field", "language", f"must be {LANGUAGE}"))
+    if "scope" in data:
+        scope = data["scope"]
+        if not isinstance(scope, dict):
+            problems.append(Problem("field", "scope", "must be an object"))
+        else:
+            check_keys(scope, "scope", SCOPE_KEYS, problems)
+            if "coverage" in scope and scope["coverage"] not in COVERAGES:
+                problems.append(Problem("field", "scope.coverage", "must be one of full, partial"))
+            if "included" in scope and rule_problem(scope["included"], "strs"):
+                problems.append(Problem("field", "scope.included", "must be a list of paths"))
+    if isinstance(data.get("features"), list) and not data["features"]:
+        problems.append(Problem("field", "features", "needs at least one feature"))
+
+
+def evidence_problem(root: Path | None, value: str, git: dict) -> tuple[str, bool] | None:
+    """Why one piece of evidence is not acceptable (and whether it is a secret file), or None."""
+    if value == MAINTAINER:
+        return None
+    if value.startswith("commit:"):
+        match = COMMIT.match(value)
+        if not match:
+            return "a commit is written commit:<7 to 40 lowercase hexadecimal characters>", False
+        if root is None:
+            return None
+        if git.get("repo") is None:
+            git["repo"] = is_git_repository(root)
+        if not git["repo"]:
+            return "the project is not a git repository, so a commit cannot be evidence", False
+        return None if commit_exists(root, match.group(1)) else ("this commit does not exist in the repository", False)
+    problem = path_problem(value)
+    if problem:
+        return f"the path {problem}", False
+    if is_secret_path(value):
+        return "this path is a secret file, which sdd-export never opens", True
+    if root is None:
+        return None
+    excluded = excluded_category(value)
+    if excluded:
+        return f"this path is excluded from reading ({excluded})", False
+    target = root / value
+    if not target.exists():
+        return "this path does not exist in the project", False
+    return None
+
+
+def check_evidence(data: dict, root: Path | None, problems: list[Problem]) -> None:
+    git: dict = {}
+    for section, path, item, _ in walk_items(data):
+        entries = item.get("evidence")
+        if section == "discarded" or not isinstance(entries, list):
+            continue
+        for index, value in enumerate(entries):
+            if isinstance(value, str) and value:
+                found = evidence_problem(root, value, git)
+                if found:
+                    problems.append(Problem("evidence", join(join(path, "evidence"), index), found[0], secret=found[1]))
+
+
+def check_specs(data: dict, root: Path | None, problems: list[Problem]) -> None:
+    features = data.get("features")
+    if not isinstance(features, list):
+        return
+    for index, item in enumerate(features):
+        if not isinstance(item, dict):
+            continue
+        path = join(join("features", index), "spec")
+        spec = item.get("spec")
+        if item.get("source") in ("spec", "mixed") and spec is None and "spec" in item:
+            problems.append(Problem("spec", path, "a feature taken from a spec names that spec"))
+        elif isinstance(spec, str) and spec:
+            problem = path_problem(spec)
+            if problem:
+                problems.append(Problem("spec", path, f"the path {problem}"))
+            elif root is not None and not (root / spec).is_file():
+                problems.append(Problem("spec", path, "this spec file does not exist in the project"))
+
+
+def check_scope(data: dict, root: Path | None, problems: list[Problem]) -> None:
+    scope = data.get("scope")
+    if not isinstance(scope, dict) or not isinstance(scope.get("included"), list):
+        return
+    included = scope["included"]
+    if scope.get("coverage") == "full" and included:
+        problems.append(Problem("scope", "scope.included", "a full export includes everything; leave included empty"))
+    if scope.get("coverage") == "partial":
+        if not included:
+            problems.append(Problem("scope", "scope.included", "a partial export lists the paths it covers"))
+        for index, value in enumerate(included):
+            if not isinstance(value, str):
+                continue
+            problem = path_problem(value)
+            if problem:
+                problems.append(Problem("scope", join("scope.included", index), f"the path {problem}"))
+            elif root is not None and not (root / value).exists():
+                problems.append(Problem("scope", join("scope.included", index), "this path does not exist in the project"))
+
+
+def structure_problems(data: dict, draft: bool) -> list[Problem]:
+    """Problems found from the content alone (no files are looked at)."""
+    problems: list[Problem] = []
+    check_top(data, problems, draft)
+    check_fields(data, ITEM_RULES, problems)
+    check_ids(data, problems, unique_with_discarded=False)
+    check_ranges(data, data.get("generation"), problems)
+    check_code_blocks(data, problems)
+    check_unsupported(data, problems)
+    check_dependencies(data, problems)
+    return problems
+
+
+def validate_draft(draft, lineage: dict | None, existing: dict | None, root: Path | None) -> list[Problem]:
+    """Every problem of a draft, sorted by field path; root None skips the checks that look at files."""
+    if not isinstance(draft, dict):
+        return [Problem("json", "", "the draft must be a JSON object")]
+    problems = structure_problems(draft, draft=True)
+    check_secrets(draft, problems)
+    check_evidence(draft, root, problems)
+    check_specs(draft, root, problems)
+    check_scope(draft, root, problems)
+    problems += generation_problems(draft, lineage, existing)
+    return sorted_problems(problems)
+
+
+def generation_problems(draft: dict, lineage: dict | None, existing: dict | None) -> list[Problem]:
+    """The generation rules of data-model.md (added with the lineage support)."""
+    return []
+
+
+def has_field_problems(problems: list[Problem]) -> bool:
+    return any(problem.check in ("json", "field") for problem in problems)
+
+
+def draft_generation(lineage: dict | None) -> int:
+    return lineage["generation"] if lineage else 1
+
+
+def counts_of(data: dict, generation) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    counts = {"principles": 0, "features": 0, "requirements": 0, "lessons": 0, "discarded": 0,
+              "pending": 0, "inherited": 0, "new": 0}
+    for section, _, item, _ in walk_items(data):
+        counts[section] += 1
+        if section == "discarded":
+            continue
+        if item.get("status") == "pending":
+            counts["pending"] += 1
+        if is_int(item.get("origin")) and is_int(generation):
+            if item["origin"] < generation:
+                counts["inherited"] += 1
+            elif item["origin"] == generation:
+                counts["new"] += 1
+    return counts
+
+
+# ------------------------------------------------------------------- diff
+
+
+def item_title(item: dict) -> str:
+    if isinstance(item.get("title"), str):
+        return item["title"]
+    text = item.get("text") if isinstance(item.get("text"), str) else ""
+    return text.split("\n", 1)[0][:80]
+
+
+def indexed(data: dict) -> dict[str, dict[str, tuple]]:
+    """section -> id -> (item without nested requirements, owning feature id)."""
+    result: dict[str, dict[str, tuple]] = {section: {} for section in ACTIVE_SECTIONS + ("discarded",)}
+    for section, _, item, owner in walk_items(data):
+        if isinstance(item.get("id"), str):
+            plain = {key: value for key, value in item.items() if key != "requirements"}
+            result[section].setdefault(item["id"], (plain, owner))
+    return result
+
+
+def compute_diff(old: dict | None, new: dict) -> dict:
+    """What changes from the existing nutrients (None: there are none) to the draft, by id and section."""
+    new = ordered(new, "nutrients")
+    diff = {"base": "none", "generation": None, "scope": None, "added": [], "removed": [], "changed": [],
+            "order_changed": False}
+    after = indexed(new)
+    if old is None:
+        for section in ("principles", "features", "requirements", "lessons", "discarded"):
+            for item_id, (item, _) in after[section].items():
+                diff["added"].append({"section": section, "id": item_id, "title": item_title(item)})
+        return order_entries(diff, new)
+    old = ordered(old, "nutrients")
+    diff["base"] = "nutrients"
+    if old.get("generation") != new.get("generation"):
+        diff["generation"] = {"from": old.get("generation"), "to": new.get("generation")}
+    if old.get("scope") != new.get("scope"):
+        diff["scope"] = {"from": old.get("scope"), "to": new.get("scope")}
+    before = indexed(old)
+    for section in ("principles", "features", "requirements", "lessons", "discarded"):
+        for item_id, (item, owner) in after[section].items():
+            if item_id not in before[section]:
+                diff["added"].append({"section": section, "id": item_id, "title": item_title(item)})
+                continue
+            previous, previous_owner = before[section][item_id]
+            fields = []
+            if section == "requirements" and owner != previous_owner:
+                fields.append({"field": "feature", "from": previous_owner, "to": owner})
+            for key in list(previous) + [k for k in item if k not in previous]:
+                if key != "id" and previous.get(key) != item.get(key):
+                    fields.append({"field": key, "from": previous.get(key), "to": item.get(key)})
+            if fields:
+                diff["changed"].append({"section": section, "id": item_id, "fields": fields})
+        for item_id, (item, _) in before[section].items():
+            if item_id not in after[section]:
+                diff["removed"].append({"section": section, "id": item_id, "title": item_title(item)})
+    old_order = [i for i in feature_ids(old) if i in after["features"]]
+    new_order = [i for i in feature_ids(new) if i in before["features"]]
+    diff["order_changed"] = old_order != new_order
+    return order_entries(diff, new)
+
+
+def feature_ids(data: dict) -> list[str]:
+    return [item["id"] for section, _, item, _ in walk_items(data) if section == "features" and isinstance(item.get("id"), str)]
+
+
+def order_entries(diff: dict, new: dict) -> dict:
+    rank = {"principles": 0, "features": 1, "requirements": 2, "lessons": 3, "discarded": 4}
+    for key in ("added", "removed", "changed"):
+        diff[key].sort(key=lambda entry: rank[entry["section"]])
+    return diff
+
+
+# ----------------------------------------------------------------- README
+
+MARKER = "<!-- Generated by sdd-export from nutrients.json; do not edit. source-sha256: {} view-sha256: {} -->"
+MARKER_PATTERN = re.compile(
+    r"^<!-- Generated by sdd-export from nutrients\.json; do not edit\. "
+    r"source-sha256: ([0-9a-f]{64}) view-sha256: ([0-9a-f]{64}) -->$"
+)
+KIND_HEADINGS = (
+    ("story", "User stories"), ("functional", "Functional requirements"), ("edge-case", "Edge cases"),
+    ("success-criterion", "Success criteria"), ("assumption", "Assumptions"),
+)
+LESSON_HEADINGS = (("decision", "Decisions"), ("pitfall", "Pitfalls"), ("reversed", "Reversed approaches"))
+
+
+def code_list(values) -> str:
+    return ", ".join(f"`{value}`" for value in values) if values else "none"
+
+
+def revised_text(item: dict) -> str:
+    return ", ".join(str(v) for v in item.get("revised", [])) or "none"
+
+
+def indented(text: str, prefix: str = "  ") -> list[str]:
+    return [prefix + line if line else "" for line in text.split("\n")]
+
+
+def cell(text) -> str:
+    return " ".join(str(text).split("\n")).replace("|", "\\|")
+
+
+def render_body(data: dict) -> str:
+    """README.md without its first line, decided by the nutrients alone."""
+    lines: list[str] = []
+    add = lines.append
+    scope = data["scope"]
+    counts = counts_of(data, data["generation"])
+    add(f"# Nutrients: {data['project']}")
+    add("")
+    add(f"- Generation: {data['generation']}")
+    add(f"- Exported: {data['exported_at']}")
+    add("- Scope: " + ("full" if scope["coverage"] == "full" else "partial (" + code_list(scope["included"]) + ")"))
+    add(f"- Contents: {counts['principles']} principles, {counts['features']} features, {counts['requirements']} "
+        f"requirements, {counts['lessons']} lessons, {counts['discarded']} discarded; {counts['pending']} pending; "
+        f"{counts['inherited']} inherited, {counts['new']} new")
+    add("")
+    add("Source of truth: `nutrients.json` in this folder. This file is regenerated from it.")
+    add("")
+    add("## Principles")
+    add("")
+    if not data["principles"]:
+        add("None.")
+        add("")
+    for item in data["principles"]:
+        add(f"### {item['title']} (`{item['id']}`)" + (" (pending)" if item["status"] == "pending" else ""))
+        add("")
+        add(f"- Origin: generation {item['origin']}; revised in: {revised_text(item)}")
+        add(f"- Source: {item['source']}; status: {item['status']}")
+        add(f"- Evidence: {code_list(item['evidence'])}")
+        if item["derived_from"]:
+            add(f"- Derived from: {code_list(item['derived_from'])}")
+        add("")
+        lines.extend(item["text"].split("\n"))
+        add("")
+    add("## Features")
+    add("")
+    for item in data["features"]:
+        add(f"### {item['title']} (`{item['id']}`)")
+        add("")
+        lines.extend(item["summary"].split("\n"))
+        add("")
+        add(f"- Origin: generation {item['origin']}; revised in: {revised_text(item)}")
+        add(f"- Source: {item['source']}" + (f" (`{item['spec']}`)" if item["spec"] else ""))
+        add(f"- Depends on: {code_list(item['depends_on'])}")
+        if item["derived_from"]:
+            add(f"- Derived from: {code_list(item['derived_from'])}")
+        add("")
+        for kind, heading in KIND_HEADINGS:
+            entries = [entry for entry in item["requirements"] if entry["kind"] == kind]
+            if not entries:
+                continue
+            add(f"#### {heading}")
+            add("")
+            for entry in entries:
+                pending = " (pending)" if entry["status"] == "pending" else ""
+                derived = f"; derived from: {code_list(entry['derived_from'])}" if entry["derived_from"] else ""
+                add(f"- `{entry['id']}`{pending}: origin {entry['origin']}; revised in: {revised_text(entry)}; "
+                    f"source: {entry['source']}; status: {entry['status']}; evidence: {code_list(entry['evidence'])}"
+                    f"{derived}")
+                add("")
+                lines.extend(indented(entry["text"]))
+                add("")
+    add("## Lessons")
+    add("")
+    if not data["lessons"]:
+        add("None.")
+        add("")
+    for kind, heading in LESSON_HEADINGS:
+        entries = [entry for entry in data["lessons"] if entry["kind"] == kind]
+        if not entries:
+            continue
+        add(f"### {heading}")
+        add("")
+        for entry in entries:
+            pending = " (pending)" if entry["status"] == "pending" else ""
+            add(f"#### {entry['title']} (`{entry['id']}`){pending}")
+            add("")
+            add(f"- Origin: generation {entry['origin']}; revised in: {revised_text(entry)}; status: {entry['status']}")
+            add(f"- Evidence: {code_list(entry['evidence'])}")
+            if entry["derived_from"]:
+                add(f"- Derived from: {code_list(entry['derived_from'])}")
+            add("")
+            lines.extend(entry["text"].split("\n"))
+            add("")
+    add("## Discarded")
+    add("")
+    if not data["discarded"]:
+        add("None.")
+    else:
+        add("| ID | Kind | Origin | Discarded in | Content | Reason |")
+        add("|---|---|---|---|---|---|")
+        for entry in data["discarded"]:
+            add(f"| `{entry['id']}` | {entry['kind']} | {entry['origin']} | {entry['discarded_in']} | "
+                f"{cell(entry['text'])} | {cell(entry['reason'])} |")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def render_readme(nutrients: dict) -> bytes:
+    """README.md for the nutrients: the marker line with both hashes, then the readable body."""
+    data = ordered(nutrients, "nutrients")
+    body = render_body(data).encode("utf-8")
+    source = content_hash(serialize(data, "nutrients"))
+    marker = MARKER.format(source, content_hash(body))
+    return marker.encode("utf-8") + b"\n" + body
+
+
+# -------------------------------------------------------- export folder
+
+
+def load_nutrients(path: Path) -> tuple[str, dict | None, list[Problem]]:
+    """The state of a nutrients.json (none, conflict, unreadable, newer, invalid, ours), its content, its problems."""
+    if not path.exists():
+        return "none", None, []
+    try:
+        data = read_json_object(path)
+    except (Unreadable, OSError) as error:
+        return "unreadable", None, [Problem("json", "", f"nutrients.json {error}")]
+    if data.get("tool") != TOOL:
+        return "conflict", None, []
+    if schema_is_newer(data.get("schema")):
+        return "newer", None, []
+    problems = structure_problems(data, draft=False)
+    if is_int(data.get("schema")) and data["schema"] != SCHEMA:
+        problems.append(Problem("field", "schema", f"must be {SCHEMA}"))
+    check_evidence(data, None, problems)
+    check_specs(data, None, problems)
+    check_scope(data, None, problems)
+    if problems:
+        return "invalid", None, sorted_problems(problems)
+    return "ours", data, []
+
+
+def export_folder(root: Path) -> dict:
+    """The state of .sdd-export/: export_dir, conflicts, nutrients, view, gitattributes, state, existing, errors."""
+    folder = root / EXPORT_DIR
+    result = {"export_dir": "none", "conflicts": [], "nutrients": "none", "view": "none", "gitattributes": "missing",
+              "state": "none", "existing": None, "errors": []}
+    if not folder.exists() and not folder.is_symlink():
+        return result
+    if folder.is_symlink() or not folder.is_dir():
+        return {**result, "export_dir": "conflict", "conflicts": [EXPORT_DIR], "nutrients": None, "view": None,
+                "gitattributes": None, "state": None}
+    entries = sorted(folder.iterdir(), key=lambda p: p.name)
+    strangers = [f"{EXPORT_DIR}/{entry.name}" for entry in entries
+                 if entry.name not in OWN_FILES or entry.is_symlink() or not entry.is_file()]
+    if not entries:
+        return {**result, "export_dir": "empty"}
+    nutrients_path = folder / NUTRIENTS_NAME
+    if not strangers and not nutrients_path.exists():
+        strangers = [f"{EXPORT_DIR}/{entry.name}" for entry in entries]
+    if strangers:
+        return {**result, "export_dir": "conflict", "conflicts": strangers, "nutrients": None, "view": None,
+                "gitattributes": None, "state": None}
+    status, data, problems = load_nutrients(nutrients_path)
+    if status == "conflict":
+        return {**result, "export_dir": "conflict", "conflicts": [f"{EXPORT_DIR}/{NUTRIENTS_NAME}"], "nutrients": None,
+                "view": None, "gitattributes": None, "state": None}
+    result.update(export_dir=status, existing=data, errors=problems)
+    result.update(edit_state(folder))
+    return result
+
+
+def edit_state(folder: Path) -> dict:
+    """nutrients, view, gitattributes and state, from the files and the README marker."""
+    nutrients_path, readme_path = folder / NUTRIENTS_NAME, folder / README_NAME
+    nutrients_hash = content_hash(nutrients_path.read_bytes()) if nutrients_path.is_file() else None
+    readme = normalize_newlines(readme_path.read_bytes()) if readme_path.is_file() else None
+    marker = None
+    if readme is not None:
+        first, _, rest = readme.partition(b"\n")
+        match = MARKER_PATTERN.match(first.decode("utf-8", errors="replace"))
+        marker = (match.group(1), match.group(2), content_hash(rest)) if match else None
+    if nutrients_hash is None:
+        nutrients = "none"
+    elif marker is None:
+        nutrients = "unknown"
+    else:
+        nutrients = "unchanged" if marker[0] == nutrients_hash else "edited"
+    if nutrients_hash is None and readme is None:
+        view = "none"
+    elif readme is None:
+        view = "missing"
+    elif marker is None or marker[2] != marker[1]:
+        view = "edited"
+    else:
+        view = "current" if marker[0] == nutrients_hash else "stale"
+    attributes = folder / GITATTRIBUTES_NAME
+    if not attributes.is_file():
+        gitattributes = "missing"
+    else:
+        gitattributes = "ok" if normalize_newlines(attributes.read_bytes()) == GITATTRIBUTES.encode("utf-8") else "edited"
+    if nutrients_hash is None and readme is None:
+        state = "none"
+    else:
+        readme_hash = content_hash(readme) if readme is not None else ""
+        state = hashlib.sha256(f"{nutrients_hash or ''}\n{readme_hash}".encode("ascii")).hexdigest()
+    return {"nutrients": nutrients, "view": view, "gitattributes": gitattributes, "state": state}
+
+
+# ---------------------------------------------------------------- lineage
+
+
+def load_lineage(path: Path) -> tuple[str, dict | None, list[Problem]]:
+    """The state of .sdd-rebuild/lineage.json (none, present, unreadable, newer, invalid, conflict)."""
+    if not path.exists():
+        return "none", None, []
+    return "none", None, []
+
+
+# -------------------------------------------------------------- read scope
+
+
+def excluded_category(path: str) -> str | None:
+    """The category that excludes a path by its name alone (added with the read scope)."""
+    return None
+
+
+# ------------------------------------------------------------ project state
+
+STATE_REASONS = {
+    "conflict": "conflict", "unreadable": "nutrients-unreadable", "invalid": "nutrients-invalid",
+    "newer": "nutrients-newer",
+}
+LINEAGE_REASONS = {
+    "unreadable": "lineage-unreadable", "invalid": "lineage-invalid", "newer": "lineage-newer",
+    "conflict": "lineage-conflict",
+}
+STATE_ERRORS = {
+    "nutrients-unreadable": ".sdd-export/nutrients.json cannot be read; fix or remove it, nothing was written",
+    "nutrients-invalid": ".sdd-export/nutrients.json does not match the nutrients format; fix it, nothing was written",
+    "nutrients-newer": ".sdd-export/nutrients.json comes from a newer sdd-export; update the skill, nothing was written",
+    "lineage-unreadable": ".sdd-rebuild/lineage.json cannot be read; fix it, nothing was written",
+    "lineage-invalid": ".sdd-rebuild/lineage.json does not match the lineage format; fix it, nothing was written",
+    "lineage-newer": ".sdd-rebuild/lineage.json comes from a newer sdd-rebuild; update the skill, nothing was written",
+    "lineage-conflict": ".sdd-rebuild/lineage.json was not written by sdd-rebuild; nothing was written",
+}
+
+
+def spec_entries(root: Path) -> list[str]:
+    folder = root / SPECS_DIR
+    if not folder.is_dir():
+        return []
+    return sorted(p.name for p in folder.iterdir() if p.is_dir() and not p.is_symlink() and (p / "spec.md").is_file())
+
+
+def project_state(root: Path, inventory: bool) -> dict:
+    """Everything `check` reports, plus reason, error and problems when the project cannot be exported."""
+    writable_target = root / EXPORT_DIR if (root / EXPORT_DIR).is_dir() else root
+    state: dict = {
+        "project": root.name,
+        "git": is_git_repository(root),
+        "writable": os.access(writable_target, os.W_OK),
+    }
+    folder = export_folder(root)
+    state.update({key: folder[key] for key in ("export_dir", "nutrients", "view", "gitattributes", "state")})
+    nulls = {"lineage": None, "generation": None, "existing_generation": None, "constitution": None, "specs": None,
+             "lineage_missing_specs": None, "inventory": None, "existing": None, "lineage_content": None}
+    if folder["export_dir"] == "conflict":
+        return {**state, **nulls, "conflicts": folder["conflicts"], "reason": "conflict", "problems": []}
+    lineage_status, lineage, lineage_problems = load_lineage(root / LINEAGE_PATH)
+    existing = folder["existing"]
+    names = spec_entries(root)
+    lineage_dirs = {}
+    if lineage:
+        lineage_dirs = {f.get("spec_dir"): f.get("id") for f in lineage.get("features", []) if isinstance(f, dict)}
+    state.update({
+        "lineage": lineage_status,
+        "generation": lineage["generation"] if lineage_status == "present" else (1 if lineage_status == "none" else None),
+        "existing_generation": existing.get("generation") if existing else None,
+        "constitution": CONSTITUTION_PATH if (root / CONSTITUTION_PATH).is_file() else None,
+        "specs": [{"dir": f"{SPECS_DIR}/{name}", "spec": f"{SPECS_DIR}/{name}/spec.md",
+                   "in_lineage": f"{SPECS_DIR}/{name}" in lineage_dirs} for name in names],
+        "lineage_missing_specs": [{"id": feature_id, "spec_dir": spec_dir} for spec_dir, feature_id in lineage_dirs.items()
+                                  if f"{spec_dir}" not in {f"{SPECS_DIR}/{n}" for n in names}],
+        "inventory": None,
+        "existing": existing,
+        "lineage_content": lineage,
+    })
+    reason = STATE_REASONS.get(folder["export_dir"]) or LINEAGE_REASONS.get(lineage_status)
+    problems = folder["errors"] if folder["export_dir"] == "invalid" else lineage_problems
+    if reason is None and inventory:
+        state["inventory"] = inventory_of(root)
+    return {**state, "reason": reason, "problems": problems}
+
+
+def inventory_of(root: Path) -> dict:
+    """What the read scope holds (added with the read scope)."""
+    return {"files": 0, "bytes": 0, "too_large": False, "ignore_source": "none", "areas": [], "skipped": {},
+            "secret_files": []}
+
+
+def state_failure(io, state: dict, extra: dict | None = None) -> int:
+    """Exit code 3 with the reason the project cannot be exported now."""
+    reason = state["reason"]
+    fields = dict(extra or {})
+    if reason == "conflict":
+        fields["conflicts"] = state["conflicts"]
+    if state["problems"]:
+        fields["errors"] = [problem.as_dict() for problem in state["problems"]]
+    message = CONFLICT if reason == "conflict" else STATE_ERRORS[reason]
+    return io.fail(message, reason, EXIT_STATE, **fields)
+
+
+# ------------------------------------------------------------------ commands
+
+
+def command_check(io, project: Path, options: dict) -> int:
+    state = project_state(project, inventory=True)
+    out = {key: state[key] for key in CHECK_KEYS}
+    if state["reason"] is None:
+        return io.emit(out)
+    return state_failure(io, state, out)
+
+
+CHECK_KEYS = (
+    "project", "git", "writable", "export_dir", "nutrients", "view", "gitattributes", "state", "lineage", "generation",
+    "existing_generation", "constitution", "specs", "lineage_missing_specs", "inventory", "existing", "lineage_content",
+)
+
+
+def read_draft(io) -> tuple[object, list[Problem]]:
+    data = io.stdin.read()
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    if data.startswith(b"\xef\xbb\xbf"):
+        return None, [Problem("json", "", "the draft starts with a byte order mark")]
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None, [Problem("json", "", "the draft is not valid JSON in UTF-8")]
+    if not isinstance(value, dict):
+        return None, [Problem("json", "", "the draft must be a JSON object")]
+    return value, []
+
+
+def checked_draft(io, project: Path, state: dict) -> tuple[object, list[Problem], dict]:
+    """Read and validate the draft; also the output fields ok, errors, counts and diff."""
+    draft, problems = read_draft(io)
+    lineage = state["lineage_content"]
+    if not problems:
+        problems = validate_draft(draft, lineage, state["existing"], project)
+    generation = draft.get("generation") if isinstance(draft, dict) else None
+    out = {
+        "ok": not problems,
+        "errors": [problem.as_dict() for problem in problems],
+        "counts": counts_of(draft, generation) if isinstance(draft, dict) and not has_field_problems(problems) else None,
+        # No diff while a secret is reported: the diff repeats the draft's text.
+        "diff": None if draft is None or has_field_problems(problems) or any(p.secret for p in problems)
+        else compute_diff(state["existing"], draft),
+    }
+    return draft, problems, out
+
+
+def draft_failure(io, problems: list[Problem], out: dict) -> int:
+    if any(problem.secret for problem in problems):
+        return io.fail(SECRET, "secret", EXIT_FAILED, **out)
+    return io.fail(INVALID, "invalid", EXIT_FAILED, **out)
+
+
+def command_validate(io, project: Path, options: dict) -> int:
+    state = project_state(project, inventory=False)
+    if state["reason"] is not None:
+        return state_failure(io, state)
+    _, problems, out = checked_draft(io, project, state)
+    if problems:
+        return draft_failure(io, problems, out)
+    return io.emit(out)
+
+
+def write_temporary(folder: Path, name: str, data: bytes, temporaries: list[Path]) -> Path:
+    path = folder / f".{name}.tmp-{random_names.token_hex(8)}"
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666)
+    temporaries.append(path)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(data)
+    return path
+
+
+def cleanup_after_failure(temporaries: list[Path], folder: Path, created: bool) -> None:
+    """Remove this run's temporary files, and the export folder when this run created it and it is empty."""
+    for path in temporaries:
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError:
+            pass
+    try:
+        if created and folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+    except OSError:
+        pass
+
+
+def command_write(io, project: Path, options: dict) -> int:
+    state = project_state(project, inventory=False)
+    if state["reason"] is not None:
+        return state_failure(io, state)
+    if state["state"] != options["expect"]:
+        return io.fail(CHANGED, "changed", EXIT_FAILED)
+    draft, problems, out = checked_draft(io, project, state)
+    if problems:
+        return draft_failure(io, problems, out)
+    nutrients = ordered({**draft, "tool": TOOL, "schema": SCHEMA, "exported_at": utc_today()}, "nutrients")
+    nutrients_bytes = serialize(nutrients, "nutrients")
+    readme_bytes = render_readme(nutrients)
+    folder = project / EXPORT_DIR
+    created = False
+    temporaries: list[Path] = []
+    written: list[str] = []
+    try:
+        if not folder.is_dir():
+            folder.mkdir()
+            created = True
+        new_nutrients = write_temporary(folder, NUTRIENTS_NAME, nutrients_bytes, temporaries)
+        new_readme = write_temporary(folder, README_NAME, readme_bytes, temporaries)
+        os.replace(new_nutrients, folder / NUTRIENTS_NAME)
+        written.append(f"{EXPORT_DIR}/{NUTRIENTS_NAME}")
+        os.replace(new_readme, folder / README_NAME)
+        written.append(f"{EXPORT_DIR}/{README_NAME}")
+        if not (folder / GITATTRIBUTES_NAME).exists():
+            new_attributes = write_temporary(folder, GITATTRIBUTES_NAME, GITATTRIBUTES.encode("utf-8"), temporaries)
+            os.replace(new_attributes, folder / GITATTRIBUTES_NAME)
+            written.append(f"{EXPORT_DIR}/{GITATTRIBUTES_NAME}")
+    except OSError as error:
+        cleanup_after_failure(temporaries, folder, created)
+        return io.fail(COULD_NOT_WRITE.format(error.strerror or error), "os-error", EXIT_FAILED)
+    return io.emit({
+        "written": written,
+        "created": created,
+        "state": edit_state(folder)["state"],
+        "generation": nutrients["generation"],
+        "counts": out["counts"],
+        "diff": out["diff"],
+    })
+
+
 # --------------------------------------------------------------------- main
 
 
@@ -367,7 +1351,7 @@ def not_yet(io: Io, project: Path, options: dict) -> int:
     return io.fail("not implemented yet", "usage")
 
 
-HANDLERS = {"check": not_yet, "files": not_yet, "validate": not_yet, "write": not_yet}
+HANDLERS = {"check": command_check, "files": not_yet, "validate": command_validate, "write": command_write}
 
 
 if __name__ == "__main__":
