@@ -686,3 +686,187 @@ def test_stage_9_report():
     has_any(nine, "inherited", "carried over")
     has_any(nine, "changes their mind", "changes the mind", "wants to change something after")
     has_any(nine, "delete", "remove")
+
+
+# ------------------------------------------- coverage of contracts/skill.md
+
+
+def contract_entries() -> set:
+    """("item", N) for every numbered instruction and ("row", stage, n) for every result row of contracts/skill.md."""
+    lines = text(CONTRACT_MD).split("\n")
+    start = lines.index("## SKILL.md 的內文")
+    end = lines.index("## README.md")
+    entries: set = set()
+    current_stage = None
+    row = 0
+    for line in lines[start:end]:
+        heading = re.match(r"^### 階段 (\d+)", line)
+        if heading:
+            current_stage, row = int(heading.group(1)), 0
+            continue
+        item = re.match(r"^(\d+)\. ", line)
+        if item:
+            entries.add(("item", int(item.group(1))))
+        if current_stage and line.startswith("| ") and not line.startswith("| 結果") and not line.startswith("|---"):
+            row += 1
+            entries.add(("row", current_stage, row))
+    return entries
+
+
+# Each entry: (section, needles). A needle is a string that must appear, or a tuple of which one must appear.
+# They check that the meaning is there, not the wording.
+COVERAGE = {
+    ("item", 1): (RULES, ["read-only", "grep", "glob", "git --no-pager log", ("build",), "test", "stdin",
+                          ("temporary file",)]),
+    ("item", 2): (RULES, [".sdd-export/", ("only thing that writes", "exactly one write")]),
+    ("item", 3): (RULES, ["speckit-", "/sdd-init"]),
+    ("item", 4): (RULES, ["secret_files", "secret_hits", ("never quote", "never repeat")]),
+    ("item", 5): (RULES, ["askuserquestion", "recommend", "multiselect", "each doubt gets its own question",
+                          "plain text"]),
+    ("item", 6): (RULES, ["traditional chinese", "translate"]),
+    ("item", 7): (RULES, ["nothing is saved", "starts over"]),
+    ("item", 8): (RULES, ["changes an earlier decision", "do not reopen"]),
+    ("item", 9): (RULES, ["git add", "git commit", "git push"]),
+    ("item", 10): (RULES, ["pending", "never make up"]),
+    ("item", 11): (STAGES[1], [CHECK.lower(), "before you read any project file"]),
+    ("item", 12): (STAGES[2], ["paths after `/sdd-export`", "--scope"]),
+    ("item", 13): (STAGES[2], ["too_large", "areas", "multiselect", "do not read or open any project file yet"]),
+    ("item", 14): (STAGES[2], ["partial", "included", "kept as they are"]),
+    ("item", 15): (STAGES[3], ["read only the files in the `files` list", "constitution", "specs"]),
+    ("item", 16): (STAGES[3], ["mixed", "own `source`"]),
+    ("item", 17): (STAGES[3], ["actually does now", "evidence", "pending"]),
+    ("item", 18): (STAGES[3], ["not how it is implemented"]),
+    ("item", 19): (STAGES[3], ["decision", "pitfall", "reversed", "commit:<hash>", "is `pending`"]),
+    ("item", 20): (STAGES[3], ["suspected bug", "both sides", "do not pick one"]),
+    ("item", 21): (STAGES[3], ["never contain plans, tasks or code", "only as evidence for lessons"]),
+    ("item", 22): (STAGES[4], ["do not compute the generation yourself"]),
+    ("item", 23): (STAGES[4], ["in_lineage", "lineage_missing_specs", "still apply", "exactly as it is, unchanged"]),
+    ("item", 24): (STAGES[4], ["export_dir", "starting point", "one by one", "outside the chosen scope"]),
+    ("item", 25): (STAGES[4], ["never reused", "discarded items included"]),
+    ("item", 26): (STAGES[5], ["generation", "principles", "features", "doubts", "lessons", "pending"]),
+    ("item", 27): (STAGES[5], ["accept it all", "moves to `discarded`"]),
+    ("item", 28): (STAGES[5], ["one question per doubt", "`doubt`"]),
+    ("item", 29): (STAGES[5], ["found none", "`maintainer` as evidence", "never invent"]),
+    ("item", 30): (STAGES[5], ["short list"]),
+    ("item", 31): (STAGES[5], ["nothing is written in this stage"]),
+    ("item", 32): (STAGES[6], [VALIDATE.lower(), "before the final confirmation"]),
+    ("item", 33): (STAGES[7], ["counts", "diff.base", "no differences"]),
+    ("item", 34): (STAGES[7], ['`view`', "overwrite their changes", "merge"]),
+    ("item", 35): (STAGES[7], ["confirm and write (recommended)", "change something", "stop"]),
+    ("item", 36): (STAGES[8], [WRITE.lower()]),
+    ("item", 37): (STAGES[9], [".sdd-export/nutrients.json", ".sdd-export/readme.md", "/sdd-rebuild", "commit"]),
+    ("item", 38): (STAGES[9], ["`partial`", "running `/sdd-export` again"]),
+    ("item", 39): (STAGES[9], ["changes their mind after the write", "edit or delete"]),
+    # stage 1 results
+    ("row", 1, 1): (STAGES[1], ["`uv` is not installed"]),
+    ("row", 1, 2): (STAGES[1], ["`conflict`", "conflicts", "move or rename"]),
+    ("row", 1, 3): (STAGES[1], ["`nutrients-unreadable`", "`nutrients-invalid`", "never overwrite it"]),
+    ("row", 1, 4): (STAGES[1], ["`nutrients-newer`", "`lineage-newer`", "update this skill"]),
+    ("row", 1, 5): (STAGES[1], ["`lineage-unreadable`", "`lineage-invalid`", "`lineage-conflict`",
+                                "never treat the project as a first generation"]),
+    ("row", 1, 6): (STAGES[1], ["`writable` is `false`", "continue (recommended)"]),
+    ("row", 1, 7): (STAGES[1], ["`existing_generation` is not `null`", "stop and check first (recommended)"]),
+    ("row", 1, 8): (STAGES[1], ['`nutrients` is `"edited"` or `"unknown"`', "maintainer's decisions"]),
+    ("row", 1, 9): (STAGES[1], ["`inventory.files` is 0", "inventory.skipped"]),
+    ("row", 1, 10): (STAGES[1], ["in every case that continues", "go to stage 2"]),
+    # stage 2 results
+    ("row", 2, 1): (STAGES[2], ["`too_large` is `false`: go to stage 3"]),
+    ("row", 2, 2): (STAGES[2], ['`reason` is `"usage"`', "ask again which scope"]),
+    ("row", 2, 3): (STAGES[2], ["still too large"]),
+    ("row", 2, 4): (STAGES[2], ["refuses to narrow", "batches", "nothing was written and stop"]),
+    ("row", 2, 5): (STAGES[2], ["chooses to stop: rule 7"]),
+    # stage 3 results
+    ("row", 3, 1): (STAGES[3], ["at least one feature with evidence: go to stage 4"]),
+    ("row", 3, 2): (STAGES[3], ["not enough to propose any requirement", "nothing was written, and stop"]),
+    ("row", 3, 3): (STAGES[3], ["cannot be read", "do not try another way"]),
+    ("row", 3, 4): (STAGES[3], ["context is running out", "go back to stage 2"]),
+    # stage 4 results
+    ("row", 4, 1): (STAGES[4], ["the draft is built: go to stage 5"]),
+    ("row", 4, 2): (STAGES[4], ["cannot be matched", "keep or discard"]),
+    # stage 5 results
+    ("row", 5, 1): (STAGES[5], ["accepts, changes or deletes items: update the draft"]),
+    ("row", 5, 2): (STAGES[5], ["adds a requirement", "`maintainer` as evidence"]),
+    ("row", 5, 3): (STAGES[5], ["already decided: rule 8"]),
+    ("row", 5, 4): (STAGES[5], ["every section has been decided: go to stage 6"]),
+    ("row", 5, 5): (STAGES[5], ["asks to stop: rule 7"]),
+    # stage 6 results
+    ("row", 6, 1): (STAGES[6], ["`ok` is `true`", "go to stage 7"]),
+    ("row", 6, 2): (STAGES[6], ['`reason` is `"secret"`', "without repeating the value"]),
+    ("row", 6, 3): (STAGES[6], ["format errors", "need no question"]),
+    ("row", 6, 4): (STAGES[6], ["`unsupported` or `evidence`", "became pending"]),
+    ("row", 6, 5): (STAGES[6], ["generation rules", "`lineage-item-missing`", "one question per item"]),
+    ("row", 6, 6): (STAGES[6], ["exit code 3", "same outcome of stage 1"]),
+    # stage 7 results
+    ("row", 7, 1): (STAGES[7], ["confirm: go to stage 8"]),
+    ("row", 7, 2): (STAGES[7], ["go back to the section of stage 5", "through stage 6 and this stage again"]),
+    ("row", 7, 3): (STAGES[7], ["stop: rule 7"]),
+    # stage 8 results
+    ("row", 8, 1): (STAGES[8], ["exit code 0: go to stage 9"]),
+    ("row", 8, 2): (STAGES[8], ['`reason` is `"changed"`', "go back to stage 7"]),
+    ("row", 8, 3): (STAGES[8], ['`reason` is `"conflict"`', "whole confirmed draft", "do not write it anywhere else"]),
+    ("row", 8, 4): (STAGES[8], ["any other exit code 3", "same outcome of stage 1"]),
+    ("row", 8, 5): (STAGES[8], ['`reason` is `"os-error"`', "no half-written file", "stop (recommended)"]),
+    ("row", 8, 6): (STAGES[8], ["asks to retry", "same confirmed draft", 'handle it as `"changed"`']),
+    ("row", 8, 7): (STAGES[8], ['`"invalid"` or `"secret"`', "go back to stage 6"]),
+}
+
+
+def test_coverage_table_matches_the_contract():
+    expected = contract_entries()
+
+    assert {("item", n) for n in range(1, 40)} <= expected
+    assert set(COVERAGE) == expected, (sorted(expected - set(COVERAGE)), sorted(set(COVERAGE) - expected))
+
+
+@pytest.mark.parametrize("entry", sorted(COVERAGE, key=str), ids=lambda e: "-".join(map(str, e)))
+def test_every_contract_entry_is_in_skill_md(entry):
+    name, needles = COVERAGE[entry]
+    haystack = section(name)
+    for needle in needles:
+        if isinstance(needle, tuple):
+            has_any(haystack, *needle)
+        else:
+            assert needle.lower() in haystack, (entry, needle)
+
+
+def cli_vocabulary() -> str:
+    return text(CLI_MD) + "\n" + text(DATA_MODEL_MD)
+
+
+# Backticked words in SKILL.md that are not fields or values of the script: tools, commands and placeholders.
+NOT_FIELDS = {
+    "uv", "git", "true", "false", "null", "check", "files", "validate", "write", "--scope", "--expect",
+    "git --no-pager log", "git --no-pager show", "git --no-pager ls-files", "git --no-pager blame", "nutrients.json",
+}
+
+
+def test_every_field_and_value_skill_md_names_exists_in_the_contracts():
+    """Every backticked field or value (e.g. `inventory.too_large`, `"edited"`) is defined in cli.md or data-model.md."""
+    vocabulary = cli_vocabulary()
+    unknown = []
+    for word in sorted(set(re.findall(r"`([^`\n]+)`", body()))):
+        candidate = re.sub(r"\[\d+\]", "", word.strip('"'))
+        if candidate in NOT_FIELDS or " " in candidate or "/" in candidate or candidate.startswith(("speckit-", "[", "{", "commit:")):
+            continue  # commands, file paths, placeholders and examples, not fields of the script
+        for part_name in candidate.split("."):
+            if f"`{part_name}`" not in vocabulary and f'"{part_name}"' not in vocabulary:
+                unknown.append(word)
+                break
+    assert unknown == [], unknown
+
+
+def test_every_reason_and_check_name_is_handled():
+    content = flat_body()
+    reasons = ["usage", "invalid", "secret", "changed", "os-error", "conflict", "nutrients-unreadable",
+               "nutrients-invalid", "nutrients-newer", "lineage-unreadable", "lineage-invalid", "lineage-newer",
+               "lineage-conflict"]
+    checks = ["json", "field", "id", "range", "code-block", "secret", "evidence", "unsupported", "spec", "dependency",
+              "scope", "generation", "lineage-item-missing", "origin-changed", "origin-unknown", "revision-unmarked",
+              "discard-lost", "discarded-active", "derived-unknown", "id-reused"]
+    cli = text(CLI_MD)
+    for value in reasons:
+        assert f"`{value}`" in cli or f'"{value}"' in cli, value
+        assert f"`{value}`" in content or f'`"{value}"`' in content, value
+    for value in checks:
+        assert f"`{value}`" in text(DATA_MODEL_MD), value
+        assert f"`{value}`" in content, value
