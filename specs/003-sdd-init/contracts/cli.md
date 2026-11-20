@@ -150,6 +150,7 @@ Or use Spec Kit directly: run /speckit-constitution, then /speckit-specify.
 |---|---|
 | 新導入或補齊 | `Spec Kit <版本> initialized: <n> created, <m> skipped.` |
 | 已完整導入 | `Spec Kit <版本> is already initialized. Nothing changed.` |
+| 已完整導入，只補登執行權限 | `Spec Kit <版本> is already initialized. Nothing was created.` |
 | 缺少工具 | `Missing required tools. Nothing was created. Install them and run /sdd-init again.` |
 | 無法取得版本 | `Could not get the latest stable Spec Kit release: <原因>. Nothing was created. Check the network connection and run /sdd-init again.` |
 
@@ -162,6 +163,7 @@ Git: not a git repository, and none was created. Executable bits cannot be recor
 ```
 
 已完整導入時只輸出摘要的第一行，不輸出 `Git:` 與下一步建議。
+「已完整導入，只補登執行權限」時輸出完整的四行摘要，見「補登執行權限」。
 
 補充（維護者核可 plan 時確認）：
 
@@ -170,6 +172,67 @@ Git: not a git repository, and none was created. Executable bits cannot be recor
 - (b) `Git:` 一行的 `<k> paths are uncommitted` 中，k 是本次執行後導入紀錄 `entries` 內的路徑中尚未在 `HEAD` 的數量，
   不含紀錄 `.specify/sdd-init.json` 本身，也不含專案其他未提交的內容。
 - (c) 紀錄 `.specify/sdd-init.json` 不輸出 `created` 行，也不計入摘要的 `<n> created`。
+
+### 補登執行權限
+
+`/speckit-converge` 找到的漏做工作（FR-006、SC-003、邊界情況「導入中途失敗」）：先前已複製、但沒有成功加入暫存區的 `.sh`，
+再次執行 `init` 時 MUST 補上，否則在 Windows 提交後 index 內是 100644，於 Linux clone 後無法執行。
+
+專案是 git repository 時，`init` 把紀錄內同時符合以下條件的檔案稱為「待補登的 `.sh`」：
+
+- 路徑以 `.sh` 結尾，`origin` 為 `speckit`；
+- `staged_executable` 為 false；
+- 檔案存在；
+- 不在 index，也不在 `HEAD`。
+
+對每一個待補登的 `.sh`，`init` 執行 `git add --chmod=+x`、把 `staged_executable` 設為 true，並輸出一行 `staged`
+（格式與新建的 `.sh` 相同）。`staged` 行不分新建與補登，一起依路徑排序。判定只讀取 index 與 `HEAD`，不寫入任何內容。
+
+適用的兩種情況：
+
+| 情況 | 條件 | 行為 |
+|---|---|---|
+| (1) 補齊 | 紀錄為 `applying`，或紀錄內有檔案不存在 | 照常補齊；除了這次新建的 `.sh`，待補登的 `.sh` 也加入暫存區 |
+| (2) 只補登 | 紀錄為 `complete`、紀錄內的檔案都存在，且有待補登的 `.sh` | 只做補登：MUST NOT 連線、MUST NOT 執行官方工具、MUST NOT 建立或修改紀錄以外的任何檔案；MUST NOT 只回報 `is already initialized. Nothing changed.` |
+
+情況 (1) 的輸出與摘要沿用「新導入或補齊」：`<n> created` 只算這次新建的檔案，補登的 `.sh` 不算；
+`Git:` 一行的 `<n> files were added to the index` 是這次實際加入暫存區的檔案數，包含新建與補登的 `.sh`。
+
+情況 (2) 的輸出是每個補登成功的 `.sh` 一行 `staged`，之後是四行摘要：
+
+```text
+staged    .specify/scripts/bash/check-prerequisites.sh (executable bit recorded in the git index)
+staged    .specify/scripts/bash/setup-plan.sh (executable bit recorded in the git index)
+Spec Kit 1.4.3 is already initialized. Nothing was created.
+Git: 2 files were added to the index and nothing was committed. 31 paths are uncommitted.
+Next: run /sdd-grill to be questioned until the constitution and specs are decided.
+Or use Spec Kit directly: run /speckit-constitution, then /speckit-specify.
+```
+
+- 第一行固定是 `Spec Kit <版本> is already initialized. Nothing was created.`，`<版本>` 是紀錄內的版本。
+  情況 (2) 不執行官方工具，無從得知有哪些檔案被略過，所以不輸出 `created`、`skipped`、`warning` 行，也不輸出 `<n> created, <m> skipped`。
+- `Git:` 一行沿用既有的前兩種形式：`<n>` 是這次補登成功的檔案數；全部失敗時是 `Git: nothing was added to the index. …`。
+  `<k>` 的算法與補充 (b) 相同。
+- 第 3、4 行的下一步建議逐字不變。
+- 結束碼 0。除了 index 與紀錄（`staged_executable` 的更新）之外，專案內沒有任何異動；沒有任何一個補登成功時，紀錄也不改寫。
+
+其他規則：
+
+- 沒有待補登的 `.sh` 時，「已完整導入」的輸出（只有 `… is already initialized. Nothing changed.` 一行）與零異動不變（FR-011）。
+  專案不是 git repository 時沒有待補登的 `.sh`。
+- 補登成功後再次執行 `init`，輸出「已完整導入」一行，零異動。
+- `git add --chmod=+x` 失敗時（新建與補登相同）：stderr 輸出一行 `note: <路徑> was not added to the git index: <原因>`，
+  不輸出該檔案的 `staged` 行，`staged_executable` 維持 false，結束碼仍是 0。因為 `staged_executable` 仍是 false，
+  下一次執行 `init` 會再重試；只要失敗的原因還在（例如該路徑被 `.gitignore` 排除），每次執行都會輸出情況 (2) 的四行摘要與這一行 `note:`，
+  不會輸出「已完整導入」的那一行。
+- 導入時不是 git repository、之後才 `git init` 的專案：紀錄內的 `.sh` 的 `staged_executable` 都是 false，
+  只要還不在 index 也不在 `HEAD`，再次執行 `init` 時就是待補登的 `.sh`，會被加入暫存區並輸出 `staged` 行。
+  這是想要的結果，讓專案能跨平台使用。
+- 維護者把 `staged_executable` 為 false 的 `.sh` 移出 index 之後再次執行 `init`，同樣會被重新加入暫存區：
+  再次執行 `init` 是維護者明確的動作，而「把自己建立的 `.sh` 以可執行模式加入暫存區、不 commit」本來就是 `init` 已公開的行為。
+  `staged_executable` 已是 true 的 `.sh`（`init` 曾經成功加入過）被移出 index 時，不是待補登的 `.sh`，`init` 不會再加入它。
+- 已在 index 或已在 `HEAD` 的 `.sh` 一律不動，不論它在 index 內的模式是什麼；`init` MUST NOT 改寫已在 index 的項目。
+- 導入時被略過的 `.sh`（不在紀錄內）、`origin` 不是 `speckit` 的檔案與不是 `.sh` 的檔案，都不會被補登。
 
 ### remove
 
@@ -193,7 +256,9 @@ unstaged  .specify/scripts/bash/setup-plan.sh
 
 - init 不覆蓋、不修改任何既有檔案；remove 只刪除紀錄內且內容未被修改的檔案。
 - 兩個指令都不 commit、不建立 repository、不切換分支。
-- init 對暫存區唯一的異動是加入自己建立的 `.sh`；remove 對暫存區唯一的異動是取消其中仍未 commit 的項目。
+- init 對暫存區唯一的異動是以 `git add --chmod=+x` 加入自己建立的 `.sh`：這次新建的，以及紀錄內先前建立、
+  還不在 index 也不在 `HEAD` 的（見「補登執行權限」）；已在 index 的項目不改寫。
+  remove 對暫存區唯一的異動是取消其中仍未 commit 的項目。
 - 不讀寫 `specs/`。
 - 不安裝、不升級使用者環境中的任何工具。
 

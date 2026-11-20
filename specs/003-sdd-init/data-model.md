@@ -17,7 +17,7 @@
 | `entries[].path` | string | 檔案的相對路徑 |
 | `entries[].sha256` | string | 建立時的內容雜湊（見「內容識別資訊」） |
 | `entries[].origin` | `"speckit"` \| `"sdd-init"` | 內容來自官方工具的產出，或是 sdd-init 自己的檔案 |
-| `entries[].staged_executable` | boolean | sdd-init 是否曾以 `git add --chmod=+x` 把它加入暫存區 |
+| `entries[].staged_executable` | boolean | sdd-init 是否曾以 `git add --chmod=+x` 成功把它加入暫存區；false 的 `.sh` 在之後的導入可能被補登（見「導入的動作」） |
 | `created_dirs` | array of string | 由 sdd-init 建立的目錄，移除時若為空就刪除 |
 
 規則：
@@ -78,13 +78,23 @@
 動作為 `create` 且副檔名是 `.sh` 的檔案，在專案是 git repository 時再執行 `git add --chmod=+x`，
 並把 `staged_executable` 設為 true。
 
+補登執行權限：動作為 `keep` 且副檔名是 `.sh` 的檔案，若 `origin` 為 `speckit`、`staged_executable` 為 false、
+檔案存在，且不在 index 也不在 `HEAD`，在專案是 git repository 時同樣執行 `git add --chmod=+x`，並把 `staged_executable` 設為 true。
+這涵蓋上一次複製途中失敗、上一次 `git add --chmod=+x` 失敗，以及導入時還不是 git repository 的專案。
+已在 index 或 `HEAD` 的檔案不動。`git add --chmod=+x` 失敗時 `staged_executable` 維持 false，下一次導入再重試。
+輸出與摘要見 [contracts/cli.md](./contracts/cli.md) 的「補登執行權限」。
+
 狀態轉移：
 
 ```text
 （沒有紀錄）──規劃──▶ 寫入 status=applying 的紀錄 ──複製檔案、加入暫存區──▶ status=complete
 status=applying 或缺少檔案 ──以紀錄內的版本重新規劃──▶ 補齊 ──▶ status=complete
-status=complete 且檔案齊全 ──▶ 不做任何事
+status=complete 且檔案齊全，沒有待補登的 .sh ──▶ 不做任何事
+status=complete 且檔案齊全，有待補登的 .sh ──▶ 只補登執行權限（不連線、不執行官方工具、不複製檔案）──▶ status=complete
 ```
+
+「待補登的 `.sh`」就是上面「補登執行權限」所列條件的檔案；專案不是 git repository 時沒有這種檔案。
+只補登時沒有規劃階段的動作：直接由紀錄判定，寫入的只有 index 與紀錄內的 `staged_executable`。
 
 取得版本、執行官方工具與規劃都在第一次寫入之前；這些步驟失敗時專案內沒有任何異動。
 
