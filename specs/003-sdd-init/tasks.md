@@ -72,7 +72,7 @@ description: "Task list for 003 sdd-init 導入 Spec Kit"
 - [X] T012 [US1] 在 `tests/unit/test_sdd_init.py` 加入重複執行的測試：完整導入後再執行一次，「查詢版本」與「執行官方工具」兩個替換函式都沒有被呼叫，目錄快照（含 mtime）與 `git status --porcelain` 完全相同，stdout 只有一行 `Spec Kit <版本> is already initialized. Nothing changed.`（FR-011，research.md R6）
 - [X] T013 [US1] 在 `tests/unit/test_sdd_init.py` 加入中途失敗後補齊與無效紀錄的測試：紀錄為 `applying`，或紀錄為 `complete` 但有檔案不存在時，以**紀錄內的版本**（不查詢最新版）重新產生並只補上缺少的檔案，已存在的檔案不重寫，結束後為 `complete`；複製途中拋出例外時結束碼 1，專案內留有 `applying` 的紀錄，再次執行能補齊；紀錄無法解析、`schema` 不認得或路徑違反規則時結束碼 1、stderr 說明原因、目錄快照完全不變（spec 的邊界情況，research.md R6，data-model.md「狀態轉移」）
 - [X] T014 [US1] 在 `tests/unit/test_sdd_init.py` 加入失敗時零寫入的測試：缺少 `uv`、`git`、`bash` 中的任何幾個時，每個缺少的工具一行 `missing`，一次列出全部，結束碼 3；查詢版本失敗、官方工具以非零結束、產出的 `.specify/init-options.json` 的 `speckit_version` 與要求的版本不符時，結束碼 4；這兩類失敗的摘要都只有 contracts/cli.md 表中對應的第一行，沒有 `Git:` 一行與兩行下一步建議（cli.md 補充 (a)）；stderr 含原因與處理方式；目錄快照完全不變（連 `.specify/` 都沒有建立）；替換函式各只被呼叫一次（不重試）；暫存產出的目錄已刪除（FR-010、SC-006，research.md R3、R9）
-- [ ] T015 [P] [US1] 建立 `tests/unit/test_sdd_init_skill.py`，依 contracts/skill.md 檢查 `home/skills/sdd-init/`：資料夾內只有 `SKILL.md`、`README.md`、`scripts/sdd_init.py`；SKILL.md 的 frontmatter 四個欄位與值；SKILL.md 內文含 `${CLAUDE_SKILL_DIR}/scripts/sdd_init.py`、兩條下一步建議的指令名稱，且不含中日韓文字、絕對路徑與信箱；README.md 含繁體中文，並提到 `/sdd-init`、`/sdd-init remove`、`uv`、`git`、`bash`、`.specify/sdd-init.json`、`.specify/.gitattributes`；腳本開頭有 inline metadata 且 `dependencies` 為空（FR-013）
+- [X] T015 [P] [US1] 建立 `tests/unit/test_sdd_init_skill.py`，依 contracts/skill.md 檢查 `home/skills/sdd-init/`：資料夾內只有 `SKILL.md`、`README.md`、`scripts/sdd_init.py`；SKILL.md 的 frontmatter 四個欄位與值；SKILL.md 內文含 `${CLAUDE_SKILL_DIR}/scripts/sdd_init.py`、兩條下一步建議的指令名稱，且不含中日韓文字、絕對路徑與信箱；README.md 含繁體中文，並提到 `/sdd-init`、`/sdd-init remove`、`uv`、`git`、`bash`、`.specify/sdd-init.json`、`.specify/.gitattributes`；腳本開頭有 inline metadata 且 `dependencies` 為空（FR-013）
 - [ ] T016 [P] [US1] 建立 `tests/integration/test_sdd_init_real.py`，整個檔案標記 `network`，網路失敗就是失敗、不自動跳過：在 `tmp_path` 內 `git init` 的空目錄以子程序執行 `uv run home/skills/sdd-init/scripts/sdd_init.py init`；摘要與紀錄內的版本等於測試自行從 PyPI 查到的最新穩定版；`.specify/scripts/bash/` 有 `.sh`、沒有 `.specify/scripts/powershell/`；`.claude/skills/` 下有 `speckit-*` 的 SKILL.md；再執行一次輸出 `is already initialized` 且目錄快照不變；整個導入在 2 分鐘內完成（SC-001）。只在 `tmp_path` 執行，不碰這個 repo 的 `.specify/` 與真正的 `~/.claude`（research.md R4）
 
 ### Implementation for User Story 1
@@ -83,8 +83,8 @@ description: "Task list for 003 sdd-init 導入 Spec Kit"
 - [X] T020 [US1] 在 `home/skills/sdd-init/scripts/sdd_init.py` 實作規劃：純讀取，為暫存產出的每個檔案決定 `create`、`keep` 或 `skip`（data-model.md「導入的動作」），並依 research.md R6 的表處理五種情況（已完整導入時不連線、不寫入；`applying` 或缺少檔案時使用紀錄內的版本；紀錄無效時以結束碼 1 停止）
 - [X] T021 [US1] 在 `home/skills/sdd-init/scripts/sdd_init.py` 實作執行：先寫入 `Record.status` 為 `applying` 的紀錄，再把 `create` 的檔案以位元組原樣複製（不做任何轉換，包含換行）、記錄新建的目錄到 `Record.created_dirs`，最後把 `Record.status` 改為 `complete`；MUST NOT 寫入已存在的檔案（FR-003、FR-004，data-model.md「狀態轉移」）
 - [X] T022 [US1] 在 `home/skills/sdd-init/scripts/sdd_init.py` 完成 `init` 的摘要並串起 T017 至 T021：四種情況的第一行、固定的兩行下一步建議、`Git:` 一行的第二與第三種形式（第一種形式在 T031 完成），`<k>` 與 `<n> created` 的算法依 cli.md 補充 (b)(c)；除了讀取狀態之外不執行任何會改變 repository 的 git 指令（contracts/cli.md「各種情況的摘要」「不變的保證」，research.md R10）
-- [ ] T023 [P] [US1] 撰寫 `home/skills/sdd-init/SKILL.md`（英文）：frontmatter 與內文的五項指示依 contracts/skill.md「SKILL.md」，包含非零結束碼與 `uv` 不存在時回報後停止、不重試、不改用其他方式安裝、不手動建立 `.specify/` 與 `speckit-*` 的檔案、不 commit、不 push
-- [ ] T024 [P] [US1] 撰寫 `home/skills/sdd-init/README.md`（繁體中文）：內容依 contracts/skill.md「README.md」的五項
+- [X] T023 [P] [US1] 撰寫 `home/skills/sdd-init/SKILL.md`（英文）：frontmatter 與內文的五項指示依 contracts/skill.md「SKILL.md」，包含非零結束碼與 `uv` 不存在時回報後停止、不重試、不改用其他方式安裝、不手動建立 `.specify/` 與 `speckit-*` 的檔案、不 commit、不 push
+- [X] T024 [P] [US1] 撰寫 `home/skills/sdd-init/README.md`（繁體中文）：內容依 contracts/skill.md「README.md」的五項
 
 **Checkpoint**: `init` 可在單一平台使用；T009 至 T016 通過
 
