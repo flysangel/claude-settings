@@ -708,3 +708,48 @@ def test_006_data_model_holds_the_two_approved_paragraphs_in_place():
         assert paragraph in content
         assert rule_9 < content.index(paragraph) < every_item
     assert content.index(ADDED_PARAGRAPHS[0]) < content.index(ADDED_PARAGRAPHS[1])
+
+
+# ------------------------------------------------ (T068) the folder, README
+
+
+def test_the_folder_holds_three_files():
+    found = sorted(p.relative_to(SKILL_DIR).as_posix() for p in SKILL_DIR.rglob("*")
+                   if p.is_file() and "__pycache__" not in p.parts)
+
+    assert found == ["README.md", "SKILL.md", "scripts/sdd_rebuild.py"]
+
+
+def readme() -> str:
+    return text(README_MD)
+
+
+def test_readme_is_traditional_chinese():
+    assert len(CJK.findall(readme())) > 200
+    assert not ABSOLUTE_PATH.search(readme()) and not EMAIL.search(readme())
+
+
+@pytest.mark.parametrize("words", [
+    ("/sdd-rebuild <舊專案路徑>", "/sdd-export", ".sdd-export/"),
+    ("Spec Kit", "sdd-export", "sdd-grill", "uv"),
+    ("逐項", "新需求", "教訓", "確認", "constitution", "spec", "世代紀錄", "/sdd-drive"),
+    (".specify/sdd-rebuild/", "快照", "清除"),
+    (".sdd-rebuild/lineage.json", "MUST", "提交", "derived_from", "祖先"),
+    ("已知限制", "第二次匯出", "捨棄", "略過"),
+    ("plan", "tasks", "程式碼", "不覆蓋", "push"),
+])
+def test_readme_covers(words):
+    content = readme()
+
+    for word in words:
+        assert word in content, word
+
+
+def test_readme_lists_the_three_known_limitations():
+    content = readme()
+    section_start = content.index("已知限制")
+    limits = content[section_start:]
+
+    assert "同一代" in limits and "第一次" in limits
+    assert "被捨棄" in limits and "不能重用" in limits
+    assert "舊專案的世代紀錄" in limits and "遺失" in limits
