@@ -1084,3 +1084,423 @@ def test_a_file_changed_while_an_update_was_interrupted_is_never_written(runner,
     assert code == 0
     assert (root / changed).read_bytes() == b"my plan\n"
     assert kept_modified(changed) in out
+
+
+# ================================================ US2: modified files are kept (T030)
+
+PLAN = ".specify/templates/plan-template.md"
+COMMON = ".specify/scripts/bash/common.sh"
+LEGACY = ".claude/skills/speckit-legacy/SKILL.md"
+SPECIFY_SKILL = ".claude/skills/speckit-specify/SKILL.md"
+
+
+def test_modified_files_are_kept_with_a_comparison_copy(runner, sdd_init, old_project):
+    root = old_project()
+    (root / PLAN).write_bytes(b"# my plan\n")
+    (root / COMMON).write_bytes(b"#!/usr/bin/env bash\necho mine\n")
+    commit_all(root, "my changes")
+    before = snap(root, with_mtime=True)
+
+    code, out, err = runner.run(root)
+
+    assert code == 0, err
+    updated = [p for p in UPDATED if p not in (PLAN, COMMON)]
+    sh_created = [p for p in CREATED if p.endswith(".sh")]
+    assert out == (
+        [line("updated", p) for p in updated]
+        + [line("created", p) for p in CREATED]
+        + [line("removed", p) for p in REMOVED]
+        + [kept_modified(COMMON), kept_modified(PLAN)]
+        + [staged_line(p) for p in sh_created]
+        + [
+            summary(OLD_VERSION, NEW_VERSION, len(updated), len(CREATED), len(REMOVED), 2),
+            git_added(len(sh_created)),
+            NEXT,
+        ]
+    )
+    after = snap(root, with_mtime=True)
+    record = entries(root)
+    for path in (PLAN, COMMON):
+        assert after[path] == before[path], path
+        copy = copy_of(path)
+        assert (root / copy).read_bytes() == NEW[path].encode()
+        assert record[copy] == {
+            "path": copy,
+            "sha256": sha(sdd_init, NEW[path]),
+            "origin": "sdd-update",
+            "staged_executable": False,
+        }
+        assert record[path]["sha256"] == sha(sdd_init, NEW[path])
+        assert copy not in index(root)
+        if os.name != "nt":
+            assert not os.access(root / copy, os.X_OK)
+    assert index(root)[COMMON] == "100755"
+    assert git_run(root, "diff", "--cached", "--name-only").split() == sh_created
+    dirs = read_record(root)["created_dirs"]
+    for directory in (".specify/sdd-update", ".specify/sdd-update/.specify", ".specify/sdd-update/.specify/templates"):
+        assert directory in dirs
+    # Still modified afterwards: a later update keeps it again.
+    assert sha(sdd_init, (root / PLAN).read_bytes()) != record[PLAN]["sha256"]
+
+
+def test_kept_lines_are_sorted_by_path_across_the_three_kinds(runner, old_project, make_project, sdd_init, capsys):
+    root = make_project(git=True)
+    write_tree(root, {SPECIFY_SKILL: "mine before sdd-init\n"})
+    assert init_with_version(sdd_init, root, OLD_VERSION) == 0
+    capsys.readouterr()
+    (root / PLAN).write_bytes(b"# my plan\n")
+    (root / LEGACY).write_bytes(b"my legacy\n")
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert of(out, "kept") == [kept_orphan(LEGACY), kept_foreign(SPECIFY_SKILL), kept_modified(PLAN)]
+
+
+# ================================ US2: not from sdd-init, and no longer provided (T031)
+
+
+def test_files_not_created_by_sdd_init_are_kept_and_never_recorded(runner, sdd_init, make_project, capsys):
+    root = make_project(git=True)
+    write_tree(
+        root,
+        {
+            PLAN: "# their plan\n",  # differs from the new version
+            SPECIFY_SKILL: NEW[SPECIFY_SKILL],  # already the new version
+            ".specify/templates/spec-template.md": NEW[".specify/templates/spec-template.md"],
+        },
+    )
+    assert init_with_version(sdd_init, root, OLD_VERSION) == 0
+    capsys.readouterr()
+    assert PLAN not in entries(root) and SPECIFY_SKILL not in entries(root)
+    commit_all(root, "init")
+    before = snap(root, with_mtime=True)
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert of(out, "kept") == [kept_foreign(PLAN)]
+    assert SPECIFY_SKILL not in "\n".join(out)
+    assert ".specify/templates/spec-template.md" not in "\n".join(out)
+    after = snap(root, with_mtime=True)
+    for path in (PLAN, SPECIFY_SKILL, ".specify/templates/spec-template.md"):
+        assert after[path] == before[path]
+    record = entries(root)
+    assert PLAN not in record and SPECIFY_SKILL not in record and ".specify/templates/spec-template.md" not in record
+    assert (root / copy_of(PLAN)).read_bytes() == NEW[PLAN].encode()
+    assert record[copy_of(PLAN)]["origin"] == "sdd-update"
+    assert out[-1] == NEXT
+
+
+def test_modified_file_no_longer_provided_is_kept_and_forgotten(runner, old_project):
+    root = old_project()
+    (root / LEGACY).write_bytes(b"my legacy skill\n")
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert of(out, "kept") == [kept_orphan(LEGACY)]
+    assert of(out, "removed") == []
+    assert (root / LEGACY).read_bytes() == b"my legacy skill\n"
+    assert LEGACY not in entries(root)
+    assert not (root / copy_of(LEGACY)).exists()
+    assert not any(l.startswith("Next:") for l in out)
+    assert out[-2] == summary(OLD_VERSION, NEW_VERSION, len(UPDATED), len(CREATED), 0, 1)
+
+
+def test_file_no_longer_provided_and_already_gone_is_only_forgotten(runner, old_project):
+    root = old_project()
+    (root / LEGACY).unlink()
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert LEGACY not in "\n".join(out)
+    assert LEGACY not in entries(root)
+    assert out[-2] == summary(OLD_VERSION, NEW_VERSION, len(UPDATED), len(CREATED), 0, 0)
+
+
+def test_spec_kit_file_deleted_by_the_maintainer_is_created_again(runner, sdd_init, old_project):
+    root = old_project()
+    (root / PLAN).unlink()
+    (root / ".specify/templates/spec-template.md").unlink()
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert line("created", PLAN) in out and line("created", ".specify/templates/spec-template.md") in out
+    assert (root / PLAN).read_bytes() == NEW[PLAN].encode()
+    assert entries(root)[PLAN]["sha256"] == sha(sdd_init, NEW[PLAN])
+
+
+def test_files_neither_recorded_nor_provided_are_not_looked_at(runner, old_project):
+    root = old_project()
+    mine = {
+        ".specify/extensions/mine.md": "mine\n",
+        ".claude/skills/speckit-mine/SKILL.md": "my skill\n",
+        ".claude/settings.json": "{}\n",
+    }
+    write_tree(root, mine)
+    before = snap(root, with_mtime=True)
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    after = snap(root, with_mtime=True)
+    for path in mine:
+        assert after[path] == before[path]
+        assert path not in "\n".join(out)
+        assert path not in entries(root)
+
+
+def test_a_directory_in_place_of_a_file_counts_as_modified(runner, old_project):
+    root = old_project()
+    (root / PLAN).unlink()
+    (root / PLAN).mkdir()
+    write_tree(root, {PLAN + "/inside.md": "x\n"})
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert kept_modified(PLAN) in out
+    assert (root / PLAN / "inside.md").read_bytes() == b"x\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symbolic links need extra rights on Windows")
+def test_a_symbolic_link_in_place_of_a_file_counts_as_modified(runner, old_project, tmp_path):
+    root = old_project()
+    elsewhere = tmp_path / "elsewhere.md"
+    elsewhere.write_bytes(OLD[PLAN].encode())
+    (root / PLAN).unlink()
+    os.symlink(elsewhere, root / PLAN)
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert kept_modified(PLAN) in out
+    assert os.path.islink(root / PLAN)
+    assert elsewhere.read_bytes() == OLD[PLAN].encode()
+
+
+def test_sdd_init_right_before_sdd_update_reports_the_latest_release(runner, sdd_init, make_project, capsys):
+    # Spec Kit files that sdd-init did not create; sdd-init records the version that is latest at that moment.
+    root = make_project(git=True)
+    write_versioned_official_output(root, OLD_VERSION)
+    assert init_with_version(sdd_init, root, NEW_VERSION) == 0
+    capsys.readouterr()
+    before = snap(root, with_mtime=True)
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert out == [already()]
+    assert runner.official_versions == []
+    assert snap(root, with_mtime=True) == before
+
+
+# ======================== US2: project content and comparison copies (T032)
+
+
+@pytest.mark.parametrize("constitution", ["written", "blank"])
+def test_memory_and_specs_are_never_touched(runner, old_project, constitution):
+    root = old_project()
+    if constitution == "written":
+        (root / ".specify/memory/constitution.md").write_bytes(b"# Our constitution\n\nreal principles\n")
+    write_tree(root, {"specs/001-a/spec.md": "# a\n", "specs/001-a/plan.md": "# plan a\n", "specs/002-b/spec.md": "# b\n"})
+    commit_all(root, "content")
+    before = snap(root, with_mtime=True)
+    memory_entries = {p: e for p, e in entries(root).items() if p.startswith(PROTECTED)}
+    assert ".specify/memory/.constitution-template.json" in memory_entries
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    after = snap(root, with_mtime=True)
+    for key in before:
+        if key.startswith(PROTECTED) or key.startswith("specs/"):
+            assert after[key] == before[key], key
+    assert not [k for k in after if k.startswith(PROTECTED) and k not in before]
+    assert ".specify/memory" not in "\n".join(out)
+    assert {p: e for p, e in entries(root).items() if p.startswith(PROTECTED)} == memory_entries
+    assert not (root / ".specify/sdd-update/.specify/memory").exists()
+
+
+def test_copies_from_the_previous_update_are_replaced_by_the_next_one(runner, sdd_init, old_project):
+    root = old_project()
+    (root / PLAN).write_bytes(b"# my plan\n")
+    (root / SPECIFY_SKILL).write_bytes(b"my specify\n")
+    runner.run(root)
+    commit_all(root, "updated")
+    # The maintainer scribbles in one copy and merges the other file.
+    (root / copy_of(PLAN)).write_bytes(b"notes in the copy\n")
+    (root / SPECIFY_SKILL).write_bytes(NEW[SPECIFY_SKILL].encode())
+    runner.latest = "1.2.0"
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert of(out, "kept") == [kept_modified(PLAN)]
+    assert (root / copy_of(PLAN)).read_bytes() == NEW[PLAN].encode()
+    assert not (root / copy_of(SPECIFY_SKILL)).exists()
+    assert not (root / ".specify/sdd-update/.claude").exists()
+    record = entries(root)
+    assert copy_of(SPECIFY_SKILL) not in record
+    assert record[copy_of(PLAN)]["sha256"] == sha(sdd_init, NEW[PLAN])
+    assert ".specify/sdd-update/.claude" not in read_record(root)["created_dirs"]
+    assert out[-1] == NEXT
+
+
+def test_copies_deleted_by_the_maintainer_do_not_break_the_next_update(runner, old_project):
+    root = old_project()
+    (root / PLAN).write_bytes(b"# my plan\n")
+    runner.run(root)
+    shutil.rmtree(root / ".specify/sdd-update")
+    runner.latest = "1.2.0"
+
+    code, out, err = runner.run(root)
+
+    assert code == 0, err
+    assert of(out, "kept") == [kept_modified(PLAN)]
+    assert (root / copy_of(PLAN)).read_bytes() == NEW[PLAN].encode()
+
+
+@pytest.mark.parametrize("blocker", ["copy", "parent of a copy", "parent of a new file"])
+def test_something_in_the_way_stops_before_writing(runner, old_project, blocker):
+    root = old_project()
+    (root / PLAN).write_bytes(b"# my plan\n")
+    if blocker == "copy":
+        write_tree(root, {copy_of(PLAN): "someone else's\n"})
+        expected = copy_of(PLAN)
+    elif blocker == "parent of a copy":
+        write_tree(root, {".specify/sdd-update/.specify": "a file\n"})
+        expected = ".specify/sdd-update/.specify"
+    else:
+        runner.extra_output = {".claude/skills/speckit-newone/SKILL.md": "new\n"}
+        write_tree(root, {".claude/skills/speckit-newone": "a file\n", copy_of(PLAN): "also in the way\n"})
+        expected = ".claude/skills/speckit-newone"
+    commit_all(root, "blocked")
+    before = snap(root, with_mtime=True)
+
+    code, out, err = runner.run(root)
+
+    assert code == 1
+    assert out == [
+        f"Spec Kit was not updated: {expected} is in the way. Nothing was changed. Move it away and run /sdd-update again."
+    ]
+    assert expected in err
+    assert snap(root, with_mtime=True) == before
+    assert status(root) == ""
+
+
+# ========================== US2: already the latest, with copies still to merge (T033)
+
+
+def test_already_latest_lists_kept_files_that_still_differ(runner, old_project):
+    root = old_project()
+    (root / PLAN).write_bytes(b"# my plan\n")
+    (root / COMMON).write_bytes(b"#!/usr/bin/env bash\necho mine\n")
+    runner.run(root)
+    before = snap(root, with_mtime=True)
+    before_index, before_status = git_run(root, "ls-files", "-s"), status(root)
+
+    for attempt in range(3):
+        runner.reset()
+        code, out, err = runner.run(root)
+
+        assert code == 0
+        assert out == [kept_pending(COMMON), kept_pending(PLAN), already(), NEXT], attempt
+        assert runner.official_versions == []
+        assert snap(root, with_mtime=True) == before
+        assert git_run(root, "ls-files", "-s") == before_index and status(root) == before_status
+
+
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_a_merged_file_is_no_longer_listed(runner, old_project, newline):
+    root = old_project()
+    (root / PLAN).write_bytes(b"# my plan\n")
+    (root / COMMON).write_bytes(b"#!/usr/bin/env bash\necho mine\n")
+    runner.run(root)
+    (root / PLAN).write_bytes((root / copy_of(PLAN)).read_bytes().replace(b"\n", newline))
+    before = snap(root, with_mtime=True)
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert out == [kept_pending(COMMON), already(), NEXT]
+    assert snap(root, with_mtime=True) == before
+    assert (root / copy_of(PLAN)).exists()  # not cleaned up while nothing is updated
+
+    (root / COMMON).write_bytes((root / copy_of(COMMON)).read_bytes())
+    code, out, _ = runner.run(root)
+    assert out == [already()]
+
+
+@pytest.mark.parametrize("gone", ["copy", "file"])
+def test_missing_copy_or_missing_file_is_not_listed(runner, old_project, gone):
+    root = old_project()
+    (root / PLAN).write_bytes(b"# my plan\n")
+    runner.run(root)
+    (root / (copy_of(PLAN) if gone == "copy" else PLAN)).unlink()
+
+    code, out, _ = runner.run(root)
+
+    assert code == 0
+    assert out == [already()]
+
+
+def test_copies_are_untracked_and_no_ignore_rule_is_written(runner, old_project):
+    root = old_project()
+    (root / PLAN).write_bytes(b"# my plan\n")
+    ignores_before = {k: v for k, v in snap(root).items() if k.endswith(".gitignore") or k.endswith("exclude")}
+    exclude_before = (root / ".git/info/exclude").read_bytes() if (root / ".git/info/exclude").exists() else None
+
+    runner.run(root)
+
+    assert f"?? {copy_of(PLAN)}" in status(root).splitlines()
+    assert copy_of(PLAN) not in index(root)
+    assert {k: v for k, v in snap(root).items() if k.endswith(".gitignore") or k.endswith("exclude")} == ignores_before
+    after_exclude = (root / ".git/info/exclude").read_bytes() if (root / ".git/info/exclude").exists() else None
+    assert after_exclude == exclude_before
+
+
+# ========================================== US2: the same on both platforms (T034)
+
+
+def to_crlf(root: Path) -> None:
+    """Rewrite every text file of the project with CRLF, as a Windows checkout with autocrlf would."""
+    for path in root.rglob("*"):
+        if ".git" in path.relative_to(root).parts or not path.is_file():
+            continue
+        data = path.read_bytes()
+        if b"\0" not in data:
+            path.write_bytes(data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+
+
+def test_crlf_files_are_judged_like_lf_files(runner, old_project):
+    lf, crlf = old_project(git=False), old_project(git=False)
+    for root in (lf, crlf):
+        (root / PLAN).write_bytes(b"# my plan\n")
+    to_crlf(crlf)
+
+    code_lf, out_lf, _ = runner.run(lf)
+    code_crlf, out_crlf, _ = runner.run(crlf)
+
+    assert code_lf == code_crlf == 0
+    assert out_crlf == out_lf
+    assert of(out_lf, "kept") == [kept_modified(PLAN)]
+    assert len(of(out_lf, "updated")) == len(UPDATED) - 1
+
+
+@pytest.mark.parametrize("git", [True, False])
+def test_output_and_record_do_not_depend_on_the_directory(runner, old_project, git):
+    first, second = old_project(git=git), old_project(git=git)
+    for root in (first, second):
+        (root / PLAN).write_bytes(b"# my plan\n")
+
+    _, out_first, _ = runner.run(first)
+    _, out_second, _ = runner.run(second)
+
+    assert out_first == out_second
+    assert (first / RECORD).read_bytes() == (second / RECORD).read_bytes()
+    assert "\\" not in "\n".join(out_first)
+    assert b"\\" not in (first / RECORD).read_bytes()
