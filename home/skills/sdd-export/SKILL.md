@@ -78,11 +78,13 @@ These apply at every stage.
    `git --no-pager log --stat -n 1 <commit>` already shows a commit's message and files. Never run `git diff`,
    `git grep`, `git cat-file`, `git format-patch`, `git stash show`, `git whatchanged` or `git reflog`, and never
    give `git log` an option that prints changes (`-p`, `--patch`, `-u`, `--patch-with-stat`, `--cc`, `-L`). Never
-   run `git blame` on a file that `files` does not list: it prints every line of the file. Never
-   run a build, a test, a package install, a formatter, a code generator or any of the project's own scripts, even
-   when it would answer a question quickly: they create files, and the maintainer was promised an untouched project.
-   Never create or change a file in the project with Write, Edit or any other way, not even a temporary file. You
-   give the draft to the script on stdin only, with a quoted heredoc so that the shell changes nothing in it:
+   run `git blame` on a file that `files` does not list: it prints every line of the file.
+
+   Never run a build, a test, a package install, a formatter, a code generator or any of the project's own scripts,
+   even when it would answer a question quickly: they create files, and the maintainer was promised an untouched
+   project. Never create or change a file in the project with Write, Edit or any other way, not even a temporary
+   file. You give the draft to the script on stdin only, with a quoted heredoc so that the shell changes nothing in
+   it:
 
    ```text
    uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_export.py" validate <<'SDD_EXPORT_DRAFT'
@@ -312,11 +314,11 @@ How to find the lessons: from the project's documents, from specs and plan-like 
 reported `git` as `true`, from the history, using only the git commands that rule 1 lists, in exactly those forms
 (for example `git --no-pager log --oneline -n 200` for the messages, then `git --no-pager log --stat -n 1 <hash>`
 for the files a commit changed). The history gives you what was decided and when; the reasons come from the
-messages and from the files `files` lists, never from a diff. Sort them into important decisions
-with their reasons (`decision`), pitfalls the project ran into (`pitfall`), and approaches that were tried and
-reversed (`reversed`). Each lesson names its evidence: a file, or `commit:<hash>` with the hash as git prints it in
-lowercase. A lesson without evidence is `pending`. If you find no lesson at all, note that; stage 5 asks the
-maintainer.
+messages and from the files `files` lists, never from a diff. A message that looks like it holds a credential is
+handled as rule 4 says. Sort the lessons into important decisions with their reasons (`decision`), pitfalls the
+project ran into (`pitfall`), and approaches that were tried and reversed (`reversed`). Each lesson names its
+evidence: a file, or `commit:<hash>` with the hash as git prints it in lowercase. A lesson without evidence is
+`pending`. If you find no lesson at all, note that; stage 5 asks the maintainer.
 
 Outcomes:
 
@@ -363,8 +365,9 @@ When `lineage` is `"present"`, `lineage_content` is the lineage the rebuild left
   the item comes from in this project now (`spec` or `mixed` for a feature with a spec, `constitution` for a
   principle the constitution states, and so on).
 - An item kept only from the lineage's content (a feature of `lineage_missing_specs` the maintainer keeps, or any
-  other item of the lineage that matches nothing in the project now) has `source` `maintainer` and
-  `.sdd-rebuild/lineage.json` as its evidence; such a feature's `spec` is `null`.
+  other item of the lineage that matches nothing in the project now) rests on the maintainer's decision, not on
+  the project: where the item has a `source`, it is `maintainer`; such a feature's `spec` is `null`; and where it
+  has `evidence`, that is `.sdd-rebuild/lineage.json`.
 - Any other item of the lineage that you cannot match to anything in the project now: ask whether to keep it
   (from the lineage's content) or discard it. Never let an item of the lineage disappear silently: the script
   refuses a draft where it is neither kept, merged into another item (listed in that item's `derived_from`) nor
@@ -380,10 +383,10 @@ file holds the maintainer's own edits: before changing any existing content, ask
 When the maintainer drops an item, look at where the item is, not at its `origin`. An item that is in the lineage
 (`lineage_content`) or in the existing nutrients (`existing`) moves to `discarded`, with its own `origin` and
 `discarded_in` equal to `generation` (a dropped feature takes its requirements to `discarded` too). That includes
-the items the rebuild created, added, merged or split: their `origin` in the lineage already equals `generation`,
-yet they are the lineage's items, and `validate` refuses a draft in which one of them is gone without a trace
-(`lineage-item-missing`). Only an item that first appeared in this conversation, in neither the lineage nor the
-existing nutrients, is deleted without a record, unless the maintainer wants it recorded.
+the items the rebuild created (added, or made by merging or splitting): their `origin` in the lineage equals
+`generation`, yet they are the lineage's items, and `validate` refuses a draft in which one of them is gone without
+a trace (`lineage-item-missing`). Only an item that first appeared in this conversation, in neither the lineage nor
+the existing nutrients, is deleted without a record, unless the maintainer wants it recorded.
 
 When the maintainer merges or splits items, the result gets a new `id` (never reused, as above), `origin` equal to
 `generation` and `derived_from` listing the original `id`s; the originals then need no `discarded` entry. An item
@@ -472,7 +475,9 @@ Outcomes:
     `discard-lost` (an earlier `discarded` entry must stay unchanged), `discarded-active` (an `id` is both kept and
     discarded), `derived-unknown` (a `derived_from` names an unknown item), `id-reused` (a new item took an `id`
     that the lineage already used, as an item or a discarded item, or that a `derived_from` of the lineage or the
-    existing nutrients names: choose a new `id` without asking, since an `id` does not change what an item means).
+    existing nutrients names: choose a new `id` without asking, since an `id` does not change what an item means;
+    but when the same item also has `origin-changed`, it is an inherited item with a wrong `origin`, so fix the
+    `origin` and keep the `id`).
     Fix each as its description says. When the fix needs a decision the maintainer has not made yet, such as
     whether an item of the lineage is kept or discarded, ask the maintainer one question per item, then validate
     again.
