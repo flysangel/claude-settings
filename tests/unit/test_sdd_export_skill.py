@@ -870,3 +870,72 @@ def test_every_reason_and_check_name_is_handled():
     for value in checks:
         assert f"`{value}`" in text(DATA_MODEL_MD), value
         assert f"`{value}`" in content, value
+
+
+# ------------------------------------------------------- folder and README
+
+
+def test_folder_holds_exactly_three_files():
+    files = sorted(
+        p.relative_to(SKILL_DIR).as_posix()
+        for p in SKILL_DIR.rglob("*")
+        if p.is_file() and "__pycache__" not in p.parts
+    )
+
+    assert files == ["README.md", "SKILL.md", "scripts/sdd_export.py"]
+
+
+def test_files_use_lf_line_endings():
+    for path in (SKILL_MD, README_MD, SCRIPT):
+        data = path.read_bytes()
+        assert b"\r" not in data, path.name
+        assert data.endswith(b"\n"), path.name
+
+
+def test_readme_is_traditional_chinese_without_paths_or_emails():
+    readme = text(README_MD)
+
+    assert len(CJK.findall(readme)) > 300
+    assert not ABSOLUTE_PATH.search(readme)
+    assert not EMAIL.search(readme)
+
+
+def test_readme_usage_and_prerequisites():
+    readme = text(README_MD)
+
+    for needle in ("/sdd-export", "Spec Kit", "uv", "git", "disable-model-invocation", ".gitignore", "commit"):
+        assert needle in readme, needle
+    assert "非必要" in readme or "不是必要" in readme
+    assert "維護者" in readme and ("啟動" in readme or "輸入" in readme)
+    assert "舊專案" in readme
+
+
+def test_readme_flow():
+    readme = text(README_MD)
+
+    order = [readme.index(word) for word in ("只讀", "草稿", "逐項", "確認", "寫入")]
+    assert order == sorted(order), order
+    assert "中途" in readme and "不會留下" in readme
+
+
+def test_readme_output_and_generations():
+    readme = text(README_MD)
+
+    for needle in (".sdd-export/", "nutrients.json", "README.md", ".gitattributes", "唯一", "/sdd-rebuild", "新專案",
+                   ".sdd-rebuild/lineage.json", "第一代", "世代", "origin"):
+        assert needle in readme, needle
+
+
+def test_readme_re_export_large_projects_and_secrets():
+    readme = text(README_MD)
+
+    for needle in ("再次匯出", "差異", "手動", "範圍", "分批", "機密", ".env", "無法涵蓋"):
+        assert needle in readme, needle
+
+
+def test_readme_what_it_never_does():
+    readme = text(README_MD)
+    never = readme[readme.index("## 不做的事"):]
+
+    for needle in (".sdd-export/", "建置", "測試", "Spec Kit", "提交", "刪除"):
+        assert needle in never, needle
