@@ -7,7 +7,7 @@
 ## Summary
 
 維護者在主 session 輸入 `/sdd-drive`。主 session 的 Claude 依 SKILL.md 協調：每個行動前以腳本重新計算每份 spec 的狀態與下一步，
-依編號一次一份、一個階段一個子 session，開子 session 執行 plan、tasks、implement，之後親自（經由腳本）執行測試確認完成，
+依編號一次一份、一個階段一個子 session，開子 session 執行 plan、tasks、implement，之後親自（經由腳本）執行測試，再開一個子 session 以 `speckit-converge` 對照檢查有沒有漏做（找到就停止回報），
 才往下一個階段或下一份 spec；失敗或中斷時停止並回報。子 session 因有重置時間的用量上限中斷時，在重置後自動從中斷處接續一次，不需要維護者輸入指令；
 再次中斷或上限沒有重置時間時停止並回報（FR-021 修訂，2026-11-21）。
 
@@ -24,7 +24,7 @@
 
 **Primary Dependencies**: 執行期只用 Python 標準函式庫；以 `importlib` 載入相鄰的 `../sdd-grill/scripts/sdd_grill.py`
 （Spec Kit 狀態、spec 編號、原子寫入、機密樣式；不修改它）；外部指令 `git`、`claude`（Claude Code 本身，`-p` 無頭模式）、
-該 spec 的測試指令；子 session 內以 Skill 工具呼叫 Spec Kit 的 `speckit-plan`、`speckit-tasks`、`speckit-implement`
+該 spec 的測試指令；子 session 內以 Skill 工具呼叫 Spec Kit 的 `speckit-plan`、`speckit-tasks`、`speckit-implement`、`speckit-converge`
 
 **Storage**: 檔案。目標專案的 `.specify/sdd-drive/`（`.gitignore`、`state.json`、`lock`，不入庫）、`.specify/feature.json`（只改 `feature_directory`）；
 其餘專案檔案只由子 session（經 Spec Kit）修改
@@ -60,7 +60,7 @@ SKILL.md 的結構與內容檢查比照 `tests/unit/test_sdd_rebuild_skill.py`�
 
 | 原則 | 判定 | 說明 |
 |---|---|---|
-| I. 只包裝、不修改 Spec Kit | 通過 | plan、tasks、implement 只由子 session 以 Skill 工具呼叫 `speckit-*` 進行，工作說明禁止手寫其產物（FR-006）；`run` 事後偵測 Spec Kit 範本、腳本與 `speckit-*` skill 是否被改動（D10）。在 `.specify/` 只新增自己的 `.specify/sdd-drive/`，以資料夾名稱與 `.gitignore` 第一行的註解記錄歸屬（同 005）。`.specify/feature.json` 只改 `feature_directory`（原則 I 明定的例外）。不讀不改另一個工具的 `.specify/sdd-drive-state.json` 與 Spec Kit 的 `.specify/.gitignore` |
+| I. 只包裝、不修改 Spec Kit | 通過 | plan、tasks、implement 與對照檢查只由子 session 以 Skill 工具呼叫 `speckit-*`（含 `speckit-converge`）進行，本 skill 不自行手寫檢查（FR-023）；check 階段只接受 converge 定義的「在 tasks.md 末尾附加」（D22）；工作說明禁止手寫其產物（FR-006）；`run` 事後偵測 Spec Kit 範本、腳本與 `speckit-*` skill 是否被改動（D10）。在 `.specify/` 只新增自己的 `.specify/sdd-drive/`，以資料夾名稱與 `.gitignore` 第一行的註解記錄歸屬（同 005）。`.specify/feature.json` 只改 `feature_directory`（原則 I 明定的例外）。不讀不改另一個工具的 `.specify/sdd-drive-state.json` 與 Spec Kit 的 `.specify/.gitignore` |
 | II. Windows 與 Linux 完全對等 | 通過（含一項風險） | 子 session 的啟動、判讀、檢查與用量上限的等待都在腳本內，以 Python subprocess 執行 `claude`（兩個平台都可用）；提示走 stdin，不依賴 shell 的引號；檔案鎖依平台用 `fcntl`／`msvcrt`；測試指令要求兩個平台寫法相同。可測的部分（腳本）有單元測試在兩個平台的 CI 執行；不可測的部分（真實子 session）以內容檢查與 quickstart 的人工驗收（含 Windows）涵蓋（D15）。driver 的脫離啟動依平台用對應的建立旗標，CI 在兩個平台以「終止啟動它的行程樹」驗證存活；Claude Code 在 Windows 終止背景指令的方式無法在 CI 重現，以人工驗收 15 確認，失敗時的結果是 `lost`（停止並回報，不會造成錯誤狀態）（T10） |
 | III. 保護既有檔案 | 通過 | 腳本只寫自己的資料夾與 `feature.json`；工作區不乾淨時不開始（D9）；不 stash、reset、checkout、clean、merge；分岔的分支不處理（`branch-diverged`）；受保護檔案被改動時回報不還原；`.specify/sdd-drive/` 有不明檔案時視為衝突。driver 只寫自己的資料夾；自動接續前確認工作區與中斷時相同，不同就不接續（D20）。`status`、`brief`、`watch` 只讀；`finalize`、`clear`、`cancel` 冪等 |
 | IV. 先確認再寫入 | 通過（不適用） | 本 skill 不產生或改寫 constitution 與 spec；工作說明禁止子 session 修改它們，`run` 事後偵測（FR-016）。全自動不經核可的是 plan、tasks、實作，屬維護者已接受的取捨（spec Assumptions） |
@@ -81,7 +81,7 @@ specs/008-sdd-drive/
 ├── quickstart.md        # 自動測試與人工驗收
 ├── contracts/
 │   ├── cli.md           # sdd_drive.py 的指令介面
-│   └── skill.md         # SKILL.md 的必要指示：階段 1–6 與 3B（7 個）、58 種結果的下一步；工作說明的必含事項
+│   └── skill.md         # SKILL.md 的必要指示：階段 1–6 與 3B（7 個）、60 種結果的下一步（含 check 階段）；工作說明的必含事項
 └── tasks.md             # Phase 2（/speckit-tasks 產生，不在本階段）
 ```
 
@@ -130,7 +130,9 @@ README.md                        # repo 的說明：更新「目前狀態」並�
 | FR-004、SC-001 不等核可 | SKILL.md 通則 5；`succeeded` 直接回到 `status` | 內容檢查；人工驗收 1 |
 | FR-005 技術選型依 constitution | 工作說明 | `brief` 的單元測試 |
 | FR-006 透過 Spec Kit | 工作說明要求 Skill 工具；產物檢查；受保護檔案偵測 | `brief` 與 `run` 的單元測試；人工驗收 2 |
-| FR-007、SC-002 完成＝任務全勾＋測試通過；範本不算 | data-model「spec 的狀態」；`test` 親自執行 | 單元測試（範本、部分勾選、`tasks_hash` 改變後需重測、測試失敗） |
+| FR-007、SC-002 完成＝任務全勾＋測試通過＋對照檢查沒有漏做；範本不算 | data-model「spec 的狀態」；`test` 親自執行；check 以檔案判定（D22） | 單元測試（範本、部分勾選、`tasks_hash` 或 HEAD 改變後需重測、測試失敗、未檢查不算完成） |
+| FR-023 以子 session 透過 speckit-converge 檢查；找到漏做即失敗、停止、不修正 | check 階段、`gaps-found`、`findings`；工作說明禁止修正 | 單元測試（各種 check 結果）；`brief` 的單元測試；內容檢查（階段 3 的對應列）；人工驗收 4b |
+| FR-024 再次啟動先補做、重新測試與檢查；有變動不沿用 | 附加的任務使狀態回到 implement；結果以 `tasks_hash`、HEAD 綁定 | 單元測試（gaps-found 後的下一步、變動後重測重檢、converged 後不重複）；人工驗收 4b |
 | FR-009、SC-003 失敗即停止 | `failed` 疊加使 `next` 停在同一份；SKILL.md 階段 3、4 | 單元測試；人工驗收 4 |
 | FR-010、SC-005 回報 | SKILL.md 階段 5；`run`、`test` 的輸出 | 內容檢查；人工驗收 4、5 |
 | FR-011、SC-004 依檔案判定、不重做 | 狀態每次由檔案計算；工作說明只做未完成的部分 | 單元測試（各狀態與接續）；人工驗收 5 |
@@ -157,7 +159,8 @@ README.md                        # repo 的說明：更新「目前狀態」並�
 
 1. **T1 每個階段一個子 session**（而不是 spec 字面上的「一個子 session 依序處理」）：為了逐階段選模型、不採信子 session、便宜的接續。
 2. **T3 子 session 允許所有 Bash 指令**（只禁止 `git push`，並以 `acceptEdits`、`--permission-prompts none` 執行）。
-3. **T5 不納入 `speckit-converge`**：spec 沒有這一關；要納入需要修訂 spec。
+3. **T5 已納入 `speckit-converge`**（維護者 2026-11-21 決定，FR-023、FR-024）：代價是每份 spec 多一個 check 子 session（預設 `opus`）的用量與時間，找到漏做就停止，需要維護者再次啟動。
+   新的取捨：**T14** 導入前已完成的 spec（本 repo 的 001–007）也要各跑一次對照檢查，第一次執行可能在較早的 spec 停下；**T15** converge 對「多做的工作」（`unrequested`）也會附加任務而停止流程。
 4. **T4 一律不 push**：「完成」是本機測試通過，不含兩個平台的 CI。
 5. **T2 測試指令取自 plan.md 的 `**Testing**:` 行**；**T7 中斷被發現時先回報、下一次才接續**。
 6. **用量上限的實際訊息無法實測**（research E5、E9）：被拒絕時的 `rate_limit_info` 形狀依程式內容推得；判斷不出來一律不自動接續（停止），以人工驗收 11 確認。
@@ -170,7 +173,7 @@ README.md                        # repo 的說明：更新「目前狀態」並�
 
 ## 仍待釐清的事項
 
-沒有。只用 Claude Code 能滿足所有 MUST（research E2、E3、E6、E8、E9、E11 與 D1、D17–D21）；上面的取捨（含 T9–T13）由維護者在核可時決定。
+沒有。只用 Claude Code 能滿足所有 MUST（research E2、E3、E6、E8、E9、E11、E12 與 D1、D17–D22）；上面的取捨（含 T9–T13）由維護者在核可時決定。
 
 ## Complexity Tracking
 
