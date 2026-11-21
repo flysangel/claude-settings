@@ -591,7 +591,11 @@ def _load_sdd_rebuild():
 @pytest.fixture(scope="session")
 def sdd_rebuild(sdd_export, sdd_grill):
     # sdd_export and sdd_grill are loaded first, so the script shares those very modules (and the tests' patches).
-    return _load_sdd_rebuild()
+    module = _load_sdd_rebuild()
+    # E() and G() read the neighbour cache directly; load it here so no test depends on another test having done so.
+    _, _, missing = module.neighbours()
+    assert missing == []
+    return module
 
 
 def export_fixture(name: str) -> dict:
