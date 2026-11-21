@@ -15,7 +15,11 @@ uv run --with pytest pytest
 ```
 
 預期：全部通過；`test_claude_md.py::test_referenced_skills_exist_in_home_skills` 不再 skip（6 個 skill 都有 `SKILL.md`）。
-腳本的每一種 `outcome` 與 `reason` 由假的 `claude`（`SDD_DRIVE_CLAUDE`）覆蓋，不會啟動真的子 session。
+腳本的每一種 `outcome` 與 `reason` 由假的 `claude`（`SDD_DRIVE_CLAUDE`）覆蓋，不會啟動真的子 session。用量上限的部分：
+假的 `claude` 依情境輸出 stream-json，包括 `status: "rejected"` 的 `rate_limit_event`（時間窗有 `resetsAt`、只有 `overage`、缺 `resetsAt`、只有文字、
+花費上限＋5 小時時間窗的組合），測試以環境變數把「現在時間」與等待間隔縮短，驗證：可等待與不可等待的判斷、driver 等待後以 `--resume` 自動接續一次、
+自動接續後再次中斷時停止、`cancel`、等待期間工作區改變時不接續、`finalize` 把消失的 driver 記為 `lost`、失敗次數不變、手動啟動後計數重設、
+等待期間第二個 `run` 得到 `running`。另以「終止啟動 driver 的行程樹」（Linux：`killpg` 加 `kill`；Windows：`taskkill /T /F`）驗證 driver 仍存活並完成（兩個平台的 CI）。
 
 ## 人工驗收（真實的子 session；在暫存目錄的假專案進行，不在本 repo）
 
@@ -35,7 +39,11 @@ uv run --with pytest pytest
 | 8 | 在 plan.md 的 `**Testing**:` 行移除指令、勾選全部任務後 `/sdd-drive` | 回報無法以測試確認完成並停止 | Edge Case |
 | 9 | 在沒有 `.specify/` 的資料夾輸入 `/sdd-drive` | 說明先執行 `/sdd-init` 等，不開子 session | Edge Case、FR-014 |
 | 10 | 不是 git repository 的專案（Spec Kit 已導入、有一份小 spec） | 說明無法依版本紀錄判斷變更；仍完成該 spec | Edge Case |
-| 11 | 實際遇到用量上限時（無法刻意製造） | 回報為用量上限、不是失敗、未計入重試；恢復後 `/sdd-drive` 以同一 session 接續；記下實際的 `api_error_status` 與訊息，若分類為 `api-error` 或 `interrupted` 而不是 `usage-limit`，回報以調整樣式（行為不變） | FR-021、FR-022、SC-009、research E5 |
-| 12 | 在 Windows 上重複 1–3 | 結果相同 | 原則 II、FR-017 |
+| 11 | 實際遇到有重置時間的用量上限時（無法刻意製造；例如 5 小時時間窗用完） | 回報原因、上限種類、重置的當地時間與進度，並說明會自動接續；不輸入任何指令，重置後子 session 以同一 session 自動接續一次並完成該階段；若主 session 也被擋下，Claude Code 的自動繼續讓主 session 在重置後繼續流程（或維護者回來後輸入任何訊息繼續）；失敗次數不變。記下 driver 保存的 `limit`（`types`、`resets_at`），確認與 Claude Code 顯示的訊息一致 | FR-021、FR-022、SC-009、SC-010、research E9、E10 |
+| 12 | 遇到沒有重置時間的上限（例如每月花費上限用完、方案的時間窗仍有額度） | 回報為沒有重置時間、不自動接續、停止；之後 `/sdd-drive` 手動接續 | FR-021 |
+| 13 | 在 11 的等待期間輸入 `/sdd-drive`，再要求取消 | 第一次回報正在等待與接續時間；要求取消後回報已取消並停止；重置後沒有子 session 被啟動 | D20、FR-012 |
+| 14 | 在 11 的等待期間關閉終端機（結束 Claude Code），重置後再開啟並輸入 `/sdd-drive` | 子 session 已在重置後自動接續一次；`/sdd-drive` 先回報「你不在時」的結果，再繼續下一步 | D20、T9 |
+| 15 | 在 Windows 上重複 11（或以假的 `claude` 讓真實的 driver 在 Claude Code 的背景指令中等待超過其 `timeout`） | driver 撐過背景指令被終止，仍在時間到後接續；若被終止，`/sdd-drive` 回報 `lost` 並停止（記錄結果以決定 T10） | 原則 II、T10、research E11 |
+| 16 | 在 Windows 上重複 1–3 | 結果相同 | 原則 II、FR-017 |
 
 驗收結束後刪除暫存專案；`claude purge <暫存目錄>` 可清除該目錄的 Claude Code 紀錄。
