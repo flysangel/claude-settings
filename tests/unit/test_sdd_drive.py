@@ -271,6 +271,11 @@ def hold_lock(root: Path):
             holder.wait(timeout=30)
 
 
+def snapshot_without_lock(root: Path) -> dict:
+    """tree_snapshot minus the lock file: while it is locked, Windows refuses to read its bytes."""
+    return {k: v for k, v in tree_snapshot(root).items() if k != ".specify/sdd-drive/lock"}
+
+
 def wait_for(predicate, seconds: float = 30.0):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -605,13 +610,36 @@ def test_held_lock_reports_running_and_refuses_writers(drive_module, tmp_path):
     with hold_lock(root):
         data = status(drive_module, root)
         assert data["running"] is True and data["next"]["action"] == "wait"
-        before = tree_snapshot(root)
+        before = snapshot_without_lock(root)
         for argv in (["run", "--spec", "001-alpha", "--phase", "check", "--model", "opus", "--reason", "r"],
                      ["test", "--spec", "001-alpha"], ["finalize"], ["clear"]):
             result = drive(drive_module, root, *argv)
             assert (result.code, result.json["reason"]) == (1, "running"), argv
-        assert tree_snapshot(root) == before
+        assert snapshot_without_lock(root) == before
+        assert (root / ".specify/sdd-drive/lock").is_file()
     assert status(drive_module, root)["running"] is False
+
+
+def test_script_never_reads_the_lock_file_while_it_is_held(drive_module, tmp_path, monkeypatch):
+    """On Windows a locked byte range cannot be read; the fingerprint, the tree hashes and status must skip it."""
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (1, 1)}})
+    write_state(root, blank_state(attempts=[attempt(1, phase="implement")]))
+    lock_path = root / ".specify" / "sdd-drive" / "lock"
+    real_read_bytes = Path.read_bytes
+
+    def refuse_read_bytes(self):
+        if self.name == "lock" and self.parent.name == "sdd-drive":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_read_bytes(self)
+
+    with hold_lock(root):
+        assert lock_path.is_file()
+        monkeypatch.setattr(Path, "read_bytes", refuse_read_bytes)
+        (root / "specs" / "001-alpha" / "dirty.txt").write_bytes(b"x")
+        assert drive_module.worktree_fingerprint(root).startswith("sha256:")
+        hashes = drive_module.tree_hashes(root, True)
+        assert not any(k.startswith(".specify/sdd-drive") for k in hashes)
+        assert status(drive_module, root)["running"] is True
 
 
 def test_lock_is_released_when_the_holder_is_killed(drive_module, tmp_path):
