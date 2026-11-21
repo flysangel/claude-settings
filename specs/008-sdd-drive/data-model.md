@@ -48,7 +48,7 @@
   "launch": null,
   "driver": null,
   "tests": [
-    {"spec": "007-sdd-rebuild", "tasks_hash": "sha256:…", "command": "uv run --with pytest pytest", "exit_code": 0, "at": "2026-11-21T09:58:00Z"}
+    {"spec": "007-sdd-rebuild", "tasks_hash": "sha256:…", "command": "uv run --with pytest pytest", "exit_code": 0, "head": "3f2a…", "at": "2026-11-21T09:58:00Z"}
   ]
 }
 ```
@@ -58,7 +58,7 @@
 | `tool`、`schema` | 腳本 | 等於 `"sdd-drive"`、`1` |
 | `attempts[].id` | 腳本，由 1 遞增 | 正整數、嚴格遞增 |
 | `spec` | 腳本（spec 資料夾名稱） | 格式驗證：符合 Spec Kit 的編號前綴（005 的 `spec_number`），不含 `/`、`\` |
-| `phase` | 腳本 | `plan`、`tasks`、`implement` |
+| `phase` | 腳本 | `plan`、`tasks`、`implement`、`check` |
 | `session_id` | 腳本（啟動前以 `uuid4` 產生；`resume` 時沿用） | UUID 格式 |
 | `resume` | 腳本 | 布林 |
 | `model` | 主 session 的 `--model` | 格式驗證 `^[A-Za-z0-9._\[\]-]{1,64}$` |
@@ -69,7 +69,10 @@
 | `detail` | 腳本 | `null` 或物件：`code`（列舉，見下）、`paths`（字串陣列，**機密掃描**）、`text`（**機密掃描**，≤ 500 字元，取自 `claude` 的錯誤文字） |
 | `report` | 子 session 的 `structured_output` | `null` 或符合「子 session 的回報」；字串欄位**機密掃描** |
 | `worktree` | 腳本：嘗試結束時工作區的指紋（D8） | `null` 或 `sha256:` 加 64 個十六進位字元 |
-| `task_ids` | 腳本：tasks 階段 `succeeded` 時的任務編號（如 `T001`） | `null` 或符合 `^T\d{3,}$` 的字串陣列 |
+| `task_ids` | 腳本：tasks 階段 `succeeded` 時的任務編號（如 `T001`）；check 階段 `gaps-found` 時為原有編號加上附加的編號 | `null` 或符合 `^T\d{3,}$` 的字串陣列 |
+| `convergence` | 腳本：只出現在 `check` 的嘗試（D22） | `null`、`converged`、`tasks-appended` |
+| `tasks_hash` | 腳本：嘗試結束時這個 spec 的 `tasks.md` 雜湊 | `null` 或同 `worktree` 的格式 |
+| `appended` | 腳本：check 附加的任務編號 | `null` 或符合 `^T\d{3,}$` 的字串陣列 |
 | `attempts[].auto` | 腳本：這筆嘗試是否為 driver 的自動接續（D19） | 布林 |
 | `attempts[].limit` | 腳本：`outcome` 為 `usage-limit` 時依 D17 從 `rate_limit_info` 計算 | `null` 或物件：`waitable`（布林）、`types`（字串陣列，元素屬於 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet`、`seven_day_overage_included`、`overage`、`unknown`）、`resets_at`（`waitable` 時為 `YYYY-MM-DDTHH:MM:SSZ`，否則 `null`）、`overage_status`（`null` 或 `allowed`、`allowed_warning`、`rejected`） |
 | `attempts[].auto_resume` | 腳本（D18–D20），只出現在 `usage-limit` 的嘗試 | `null`、`waiting`、`started`、`cancelled`、`skipped-changed`、`lost`、`not-waitable`、`already-auto` |
@@ -77,6 +80,7 @@
 | `driver` | driver：取得鎖後寫入、結束前清除 | `null` 或 `{"token": UUID, "pid": 正整數, "phase": "running"\|"waiting"\|"resuming", "attempt": 嘗試 id, "waiting_until": 時間或 null, "started_at": 時間}` |
 | `tests[].spec` | 腳本 | 同 `spec` |
 | `tests[].tasks_hash` | 腳本 | 同 `worktree` 的格式 |
+| `tests[].head` | 腳本：執行測試時的 HEAD（非 git 時為 `null`） | `null` 或 40／64 個十六進位字元 |
 | `tests[].command` | 腳本，取自 plan.md | **機密掃描**（來自專案檔案的內容，寫入時已掃描；命中時不執行、不寫入，見 cli.md `test`） |
 | `tests[].exit_code` | 腳本 | 整數 |
 
@@ -86,7 +90,8 @@
 - `limit`、`auto_resume`、`launch`、`driver` 都是腳本計算的欄位，只做格式驗證（不掃描機密）；`rate_limit_info` 的其他欄位與子 session 的其他輸出不保存。
 - `launch` 存在且 `at` 在 60 秒內：其他指令視同 `running`（driver 正在取得鎖）；超過 60 秒且鎖未被持有：視為啟動失敗，`run` 的 `watch` 回報 `launch-failed`，`finalize` 清除它。
 - `detail.code` 列舉：`launch`、`usage-limit`、`api-error`、`no-result`、`no-report`、`child-failed`、`plan-missing`、`tasks-missing`、`tasks-unfinished`、
-  `tasks-removed`、`protected-changed`、`pushed`、`uncommitted`、`resume-failed`。
+  `tasks-removed`、`protected-changed`、`pushed`、`uncommitted`、`resume-failed`、`check-no-tasks`、`check-rewrote-tasks`、`check-touched-files`、`report-mismatch`。
+- `outcome` 另有 `gaps-found`（只在 `check`）：對照檢查在 `tasks.md` 附加了任務（D22），計入失敗。
 
 ## spec 的狀態（每次由檔案重新計算，D5）
 
@@ -98,7 +103,8 @@
 | plan 已產生、tasks 未產生 | `planned` | `tasks` |
 | tasks 已產生、勾選數為 0 | `tasked` | `implement` |
 | 有未勾選的任務 | `implementing` | `implement` |
-| 全部勾選、`tests` 中有該 spec 在目前 `tasks_hash` 下 `exit_code: 0` 的紀錄 | `done` | `null` |
+| 全部勾選、有該 spec 的 `check` 嘗試 `outcome: succeeded`、`convergence: converged`，且其 `tasks_hash` 等於目前的雜湊 | `done` | `null` |
+| 全部勾選、`tests` 中有該 spec 在目前 `tasks_hash` 與目前 HEAD（非 git 時只比 `tasks_hash`）下 `exit_code: 0` 的紀錄 | `implementing` | `check` |
 | 全部勾選、沒有上述紀錄 | `implementing` | `test` |
 
 - 「plan 已產生」「tasks 已產生」的判定與「未填寫的範本」見 D5：與範本內容相同、或第一個 `# ` 標題仍含範本佔位字串（plan 為 `[FEATURE]`，tasks 為 `[FEATURE NAME]`）、
@@ -106,7 +112,9 @@
 - 任務行：`^\s*- \[( |x|X)\] (T\d{3,})\b`；勾選為 `x` 或 `X`。
 - **失敗的疊加**：若該 spec 在 `next_phase` 上的最後一筆嘗試是 `failed` 或 `verify-failed`，或（`next_phase` 為 `test`）最後一筆測試紀錄的
   `exit_code` 非 0，`state` 改為 `failed`，`next_phase` 不變（維護者處理後再次執行就從失敗的步驟重試，US4-3）。
-- `failures`：該 spec 每個階段的失敗次數 = `outcome` 為 `failed` 或 `verify-failed` 的嘗試數，加上（test）`exit_code` 非 0 的測試數。
+- 對照檢查找到漏做（`gaps-found`）後，附加的任務未勾選，依上表回到 `implementing`／`implement`；不套用失敗的疊加（下一步本來就是補做），`failures.check` 加一。
+  `tasks.md` 之後的任何改變（補做時勾選、維護者手動處理）都使先前的測試與檢查紀錄失效（以 `tasks_hash` 比對，FR-024）。
+- `failures`：該 spec 每個階段的失敗次數 = `outcome` 為 `failed`、`verify-failed` 或 `gaps-found` 的嘗試數，加上（test）`exit_code` 非 0 的測試數。
   `usage-limit`、`api-error`、`interrupted`、`launch-failed` 不計入（FR-021、SC-009）。
 
 ## 下一步（`status` 的 `next`）
@@ -136,6 +144,7 @@
 ## 自動接續的狀態轉移（D18–D20）
 
 ```text
+（plan、tasks、implement、check 四個階段都適用）
 run（auto:false）── usage-limit ──┬─ limit.waitable=false ─────────────→ auto_resume=not-waitable，driver 結束 → 停止
                                  ├─ 被中斷的嘗試 auto=true ───────────→ auto_resume=already-auto，driver 結束 → 停止
                                  └─ 可等待且 auto=false → auto_resume=waiting（driver.phase=waiting）
@@ -169,6 +178,7 @@ run（auto:false）── usage-limit ──┬─ limit.waitable=false ──�
   "required": ["status", "summary"],
   "properties": {
     "status": {"enum": ["completed", "failed"]},
+    "convergence": {"enum": ["converged", "tasks-appended"]},
     "summary": {"type": "string", "maxLength": 1000},
     "failure": {
       "type": "object",
@@ -185,6 +195,7 @@ run（auto:false）── usage-limit ──┬─ limit.waitable=false ──�
 }
 ```
 
+- `convergence` 只在 check 階段填寫（子 session 的說法，僅供比對；判定以檔案為準，D22）。
 - `status: failed` 時 MUST 有 `failure`；`tasks` 列出做不到的任務編號（`blocked-task`）。
 - 腳本讀取 `structured_output` 後再以同一份結構驗證；不符合時視為沒有回報（`interrupted`、`detail.code: "no-report"`）。
 
