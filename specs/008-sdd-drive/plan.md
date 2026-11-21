@@ -76,12 +76,12 @@ SKILL.md 的結構與內容檢查比照 `tests/unit/test_sdd_rebuild_skill.py`�
 ```text
 specs/008-sdd-drive/
 ├── plan.md              # 本文件
-├── research.md          # 實測紀錄 E1–E12、決策 D1–D22、經驗的處理 O1–O8、設計取捨 T1–T15
+├── research.md          # 實測紀錄 E1–E12、決策 D1–D23、經驗的處理 O1–O8、設計取捨 T1–T15
 ├── data-model.md        # 本 skill 的檔案、紀錄、spec 狀態、下一步、受保護檔案、子 session 的回報
 ├── quickstart.md        # 自動測試與人工驗收
 ├── contracts/
 │   ├── cli.md           # sdd_drive.py 的指令介面
-│   └── skill.md         # SKILL.md 的必要指示：階段 1–6 與 3B（7 個）、60 種結果的下一步（含 check 階段）；工作說明的必含事項
+│   └── skill.md         # SKILL.md 的必要指示：階段 1–6 與 3B（7 個）、61 種結果的下一步（含 check 階段與既有的基準）；工作說明的必含事項
 └── tasks.md             # Phase 2（/speckit-tasks 產生，不在本階段）
 ```
 
@@ -132,6 +132,7 @@ README.md                        # repo 的說明：更新「目前狀態」並�
 | FR-006 透過 Spec Kit | 工作說明要求 Skill 工具；產物檢查；受保護檔案偵測 | `brief` 與 `run` 的單元測試；人工驗收 2 |
 | FR-007、SC-002 完成＝任務全勾＋測試通過＋對照檢查沒有漏做；範本不算 | data-model「spec 的狀態」；`test` 親自執行；check 以檔案判定（D22） | 單元測試（範本、部分勾選、`tasks_hash` 或 HEAD 改變後需重測、測試失敗、未檢查不算完成） |
 | FR-023 以子 session 透過 speckit-converge 檢查；找到漏做即失敗、停止、不修正 | check 階段、`gaps-found`、`findings`；工作說明禁止修正 | 單元測試（各種 check 結果）；`brief` 的單元測試；內容檢查（階段 3 的對應列）；人工驗收 4b |
+| FR-025 既有的基準不檢查 | `baseline` 於第一次寫入時凍結；有 `implement` 嘗試即不再是基準；`clear` 後沒有基準（D23） | 單元測試（基準只測試、補做後需檢查、清除後沒有基準、第一次 `status` 與寫入後一致）；人工驗收 4a |
 | FR-024 再次啟動先補做、重新測試與檢查；有變動不沿用 | 附加的任務使狀態回到 implement；結果以 `tasks_hash`、HEAD 綁定 | 單元測試（gaps-found 後的下一步、變動後重測重檢、converged 後不重複）；人工驗收 4b |
 | FR-009、SC-003 失敗即停止 | `failed` 疊加使 `next` 停在同一份；SKILL.md 階段 3、4 | 單元測試；人工驗收 4 |
 | FR-010、SC-005 回報 | SKILL.md 階段 5；`run`、`test` 的輸出 | 內容檢查；人工驗收 4、5 |
@@ -155,12 +156,13 @@ README.md                        # repo 的說明：更新「目前狀態」並�
 
 ## 設計取捨（核可時請特別注意）
 
-詳見 [research.md](./research.md)「設計取捨」T1–T15（T1–T13 已於 2026-11-21 核可，T5 改為納入）。重點：
+詳見 [research.md](./research.md)「設計取捨」T1–T15（全部已於 2026-11-21 核可；T5 改為納入、T14 改為既有的基準不檢查）。重點：
 
 1. **T1 每個階段一個子 session**（而不是 spec 字面上的「一個子 session 依序處理」）：為了逐階段選模型、不採信子 session、便宜的接續。
 2. **T3 子 session 允許所有 Bash 指令**（只禁止 `git push`，並以 `acceptEdits`、`--permission-prompts none` 執行）。
 3. **T5 已納入 `speckit-converge`**（維護者 2026-11-21 決定，FR-023、FR-024）：代價是每份 spec 多一個 check 子 session（預設 `opus`）的用量與時間，找到漏做就停止，需要維護者再次啟動。
-   新的取捨：**T14** 導入前已完成的 spec（本 repo 的 001–007）也要各跑一次對照檢查，第一次執行可能在較早的 spec 停下；**T15** converge 對「多做的工作」（`unrequested`）也會附加任務而停止流程。
+   **T14（維護者決定，FR-025）**：導入前已完成的 spec 是既有的基準，只測試、不做對照檢查（research D23；本 repo 的 001–007 即是）；紀錄被 `clear` 後偏向需要檢查。
+   **T15（已核可）**：converge 對「多做的工作」（`unrequested`）也會附加任務而停止流程。
 4. **T4 一律不 push**：「完成」是本機測試通過，不含兩個平台的 CI。
 5. **T2 測試指令取自 plan.md 的 `**Testing**:` 行**；**T7 中斷被發現時先回報、下一次才接續**。
 6. **用量上限的實際訊息無法實測**（research E5、E9）：被拒絕時的 `rate_limit_info` 形狀依程式內容推得；判斷不出來一律不自動接續（停止），以人工驗收 11 確認。
@@ -173,7 +175,7 @@ README.md                        # repo 的說明：更新「目前狀態」並�
 
 ## 仍待釐清的事項
 
-沒有。只用 Claude Code 能滿足所有 MUST（research E2、E3、E6、E8、E9、E11、E12 與 D1、D17–D22）；上面的取捨（含 T9–T13）由維護者在核可時決定。
+沒有。只用 Claude Code 能滿足所有 MUST（research E2、E3、E6、E8、E9、E11、E12 與 D1、D17–D23）；上面的取捨（含 T9–T13）由維護者在核可時決定。
 
 ## Complexity Tracking
 
