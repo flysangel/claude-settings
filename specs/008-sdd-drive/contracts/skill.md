@@ -22,7 +22,7 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 | 欄位 | 值 |
 |---|---|
 | `name` | `sdd-drive` |
-| `description` | 英文；在 spec 確認後，由子 session 依編號把每份 spec 依序做完 plan、tasks、implement，不等核可，只在失敗或中斷時停止並回報；需要 Spec Kit；只由維護者以 `/sdd-drive` 啟動 |
+| `description` | 英文；在 spec 確認後，由子 session 依編號把每份 spec 依序做完 plan、tasks、implement、測試與對照檢查，不等核可，只在失敗或中斷時停止並回報；需要 Spec Kit；只由維護者以 `/sdd-drive` 啟動 |
 | `disable-model-invocation` | `true`（FR-001：只由維護者手動啟動；sdd-grill、sdd-rebuild 不會自動觸發） |
 
 沒有其他欄位（不設 `argument-hint`：本 spec 不提供指定範圍的參數）。
@@ -34,7 +34,7 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 
 ### 通則（任何階段都適用）
 
-1. **主 session 只協調**：主 session MUST NOT 親自執行 plan、tasks、implement，MUST NOT 呼叫 `speckit-plan`、`speckit-tasks`、`speckit-implement`，
+1. **主 session 只協調**：主 session MUST NOT 親自執行 plan、tasks、implement 或對照檢查，MUST NOT 呼叫 `speckit-plan`、`speckit-tasks`、`speckit-implement`、`speckit-converge`，
    MUST NOT 撰寫或修改 plan、tasks、程式碼或測試；唯一的工作是執行 `sdd_drive.py`、等待、回報（FR-002、SC-007；字樣：`never run`、`speckit-implement`）。
    子 session 無法啟動或一再失敗時也一樣，絕不改為親自做（Edge Case；字樣：`do not take over`）。
 2. **每個行動前先 `status`**：決定下一步只依 `status` 的輸出，不憑記憶或先前的輸出；上下文被壓縮或對話重新開始後也一樣（FR-011、D8；字樣：`status`、`memory`）。
@@ -46,7 +46,7 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 5. **不提問、不等核可**：流程中不向維護者提問、不請維護者核可 plan 或 tasks；只有在停止時回報（FR-004、SC-001；字樣：`do not ask`）。
 6. **git**：主 session 自己 MUST NOT commit、push、stash、reset、checkout 檔案、merge 或刪除分支；一律不 push，結束報告提醒維護者自行 push 並確認 CI（D11、T4；字樣：`never push`）。
 7. **不捨棄變更**：MUST NOT 為了讓流程繼續而捨棄、還原、stash 或替維護者 commit 任何未提交的變更；受保護的檔案被改動時也不還原（FR-015、D9、D10；字樣：`uncommitted`）。
-8. **模型**：每次 `run` 前依 `next.hints` 與階段評估模型並寫一句英文理由（準則見 D3：plan 預設 `opus`、tasks 預設 `sonnet`、implement 依性質；
+8. **模型**：每次 `run` 前依 `next.hints` 與階段評估模型並寫一句英文理由（準則見 D3、D22：plan 預設 `opus`、tasks 預設 `sonnet`、implement 依性質、check（對照檢查）預設 `opus`；
    不預設 `fable`，使用時理由要說明為何較便宜的模型不夠；同一次流程不得每個子 session 都用最強的模型；接續時沿用 `next.model`）（FR-019、SC-008；字樣：`model`、`reason`、`sonnet`、`opus`）。
 9. **機密**：理由與回報中不寫機密值；腳本以 `(not shown...)` 取代的內容不要嘗試找出原值（原則 V；字樣：`secret`）。
 10. **未預期的結果**：見本文件開頭（字樣：`unexpected`）。
@@ -101,7 +101,9 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 |---|---|
 | `outcome: succeeded` | 回到階段 3 或 4 的開頭（先 `status`）；不等核可（FR-004、FR-008） |
 | `outcome: failed` | 停止整個流程，不開始後面的 spec；回報 spec、階段、`failure.kind`、`failure.step`、`failure.reason`、該階段累計失敗次數；`requirements` 時說明需要維護者修正 spec 或 constitution（FR-016）；`blocked-task` 時列出任務編號，說明這些任務需要維護者或 push 才能完成；提醒子 session 若留下未提交的變更由維護者決定如何處理；說明修正後再次 `/sdd-drive` 會從這個階段重試（FR-009、FR-010、US3、US4-3） |
-| `outcome: verify-failed` | 同 `failed`，原因依 `detail.code` 說明：`plan-missing`／`tasks-missing`（子 session 宣稱完成但產物不存在或仍是範本）、`tasks-unfinished`（仍有未勾選任務）、`tasks-removed`（任務被刪除）、`protected-changed`（列出被改的 constitution、spec 或 Spec Kit 檔案；未還原，請維護者檢查）、`pushed`（remote-tracking refs 改變，請維護者確認遠端）、`uncommitted`（留下未提交的變更；未捨棄）（FR-007、FR-015、FR-016） |
+| `outcome: verify-failed` | 同 `failed`，原因依 `detail.code` 說明：`plan-missing`／`tasks-missing`（子 session 宣稱完成但產物不存在或仍是範本）、`tasks-unfinished`（仍有未勾選任務）、`tasks-removed`（任務被刪除）、`protected-changed`（列出被改的 constitution、spec 或 Spec Kit 檔案；未還原，請維護者檢查）、`pushed`（remote-tracking refs 改變，請維護者確認遠端）、`uncommitted`（留下未提交的變更；未捨棄）；check 階段另有 `check-no-tasks`（子 session 說找到漏做但 tasks.md 沒有變化，不當成完成也不當成漏做）、`check-rewrote-tasks`（tasks.md 被改寫、勾選或刪除任務，而不是只在末尾附加）、`check-touched-files`（動到 tasks.md 以外的檔案，列出路徑；未還原）；修正後再次 `/sdd-drive` 會重新檢查（FR-007、FR-015、FR-016、D22） |
+| `outcome: succeeded`（`phase: check`、`convergence: converged`） | 回報對照檢查沒有找到漏做，這份 spec 判定完成（任務全勾、測試通過、檢查通過）；回到階段 3 或 4 的開頭，開始下一份 spec（FR-007、FR-008） |
+| `outcome: gaps-found` | 停止整個流程，不自動修正，不開始後面的 spec；以 `findings` 逐項列出（編號、描述、`source_ref`、`gap_type`；超過 50 項時註明總數），說明這些已作為未勾選任務附加到 tasks.md 並已 commit、該 spec 的對照檢查失敗次數；說明再次 `/sdd-drive` 會先補做這些任務，再重新測試與對照檢查；維護者認為某項不必做時可以自己在 tasks.md 處理；`detail.code: report-mismatch` 時另說明子 session 的說法與檔案不符、以檔案為準（FR-023、FR-024、D22） |
 | `status: waiting`（`auto_resume: waiting`） | 依通則 13 回報，說明 driver 會在 `waiting_until` 自動接續一次、維護者不必輸入指令、要取消可以直接說；以背景執行 `watch`（階段 3B）（FR-021、SC-010） |
 | `status: running`（時間到，子 session 仍在執行） | 不回報細節，以背景執行 `watch`（階段 3B） |
 | `status: launch-failed` | 回報 driver 無法啟動；不親自實作，停止（FR-014） |
@@ -153,7 +155,7 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 
 | 結果 | 下一步 |
 |---|---|
-| `passed: true` | 回報這些 spec（`covers`）測試通過、判定完成；回到階段 3 或 4 的開頭 |
+| `passed: true` | 回報這些 spec（`covers`）測試通過；尚未判定完成，下一步是對照檢查（`next.phase: check`）；回到階段 3 或 4 的開頭（FR-007、FR-023） |
 | `passed: false` | 停止，不開始後面的 spec；回報 spec、測試指令、結束碼、`output_tail` 的重點，以及失敗次數；說明修正後再次 `/sdd-drive` 會重新測試（FR-009、FR-010） |
 | `no-test-command` | 回報無法以測試確認完成（plan.md 沒有可執行的測試指令），不判定為完成，停止（Edge Case） |
 | `running`、`pending-finalize`、`not-next`、`dirty` 等 | 同階段 3 的對應列 |
@@ -165,7 +167,7 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 
 1. 每份 spec 的狀態（依最後一次 `status`）：已完成、目前的 spec 與階段、尚未開始。
 2. 停止的原因：失敗時 spec、步驟、原因與累計失敗次數；中斷時中斷的種類並明說「不是失敗」；用量上限依通則 13，並說明是否已自動接續過（D19）。
-3. 本次每個子 session 的 spec、階段、`outcome`、要求的模型與實際模型、理由（FR-020）。
+3. 本次每個子 session 的 spec、階段、`outcome`、要求的模型與實際模型、理由（FR-020）；對照檢查找到漏做時列出每一項（`findings`）。
 4. 下一步：再次 `/sdd-drive` 會做什麼；全部完成時提醒維護者自行 push 並確認兩個平台的 CI，以及 tasks.md 的 Notes 中需要維護者親自做的項目（T4、O1）。
 
 維護者只讀這份報告就要知道是哪一份、哪個步驟與原因，不需要開啟子 session 的紀錄（SC-005）。
@@ -174,22 +176,24 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 
 由 `sdd_drive.py` 的固定範本產生（D12），`tests/unit/test_sdd_drive.py` 以 `brief` 的輸出檢查每個階段都包含下列事項：
 
-| 事項 | plan | tasks | implement |
-|---|---|---|---|
-| 目標：只做這一份 spec 的這一個階段；spec 目錄與分支 | ✓ | ✓ | ✓ |
-| 以 Skill 工具呼叫的 skill：`speckit-plan`／`speckit-tasks`／`speckit-implement`；MUST NOT 手寫這些 skill 的產物 | ✓ | ✓ | ✓ |
-| 不提問、不等核可；技術決定依 constitution、spec 與既有設計自行決定並記下理由 | ✓ | ✓ | ✓ |
-| 需求有矛盾或不足：以 `failed`、`kind: requirements` 回報，MUST NOT 修改 spec.md 或 constitution | ✓ | ✓ | ✓ |
-| MUST NOT 修改 Spec Kit 的範本、腳本與 `speckit-*` skill，MUST NOT 修改其他 spec 的資料夾、`.specify/sdd-drive/` | ✓ | ✓ | ✓ |
-| `**Testing**:` 行以反引號寫出可直接執行、兩個平台寫法相同的測試指令，放在該行第一個反引號區段 | ✓ | | |
-| 需要維護者或 push 才能完成的項目寫在 Notes，不寫成勾選任務；任務行格式 `- [ ] T001 …` | | ✓ | |
-| 只做未勾選的任務；做完一項就勾選；MUST NOT 刪除、改寫或合併任務；做不到的以 `blocked-task` 回報並列出編號 | | | ✓ |
-| 完成前執行測試指令（腳本填入）並使其通過；新測試不得依賴執行順序 | | | ✓ |
-| git：每完成一份文件或一組任務就 commit 到目前分支，訊息遵循專案與使用者的 CLAUDE.md；結束時不得留下未提交的變更；MUST NOT push、切換或建立分支、amend、rebase、reset、merge、stash、clean | ✓ | ✓ | ✓ |
-| 不是 git repository 時：不 commit（取代上一列） | ✓ | ✓ | ✓ |
-| 接續時（`--resume` 或 `--fresh`）：先重新檢查檔案狀態，從未完成的部分繼續，不重做已完成的部分 | ✓ | ✓ | ✓ |
-| 機密值不得寫入檔案、commit 或回報 | ✓ | ✓ | ✓ |
-| 回報：以結構化輸出回報 `status`、`summary`（做了什麼、commit 了哪些）、失敗時的 `failure` | ✓ | ✓ | ✓ |
+| 事項 | plan | tasks | implement | check |
+|---|---|---|---|---|
+| 目標：只做這一份 spec 的這一個階段；spec 目錄與分支 | ✓ | ✓ | ✓ | ✓ |
+| 以 Skill 工具呼叫的 skill：`speckit-plan`／`speckit-tasks`／`speckit-implement`／`speckit-converge`；MUST NOT 手寫這些 skill 的產物 | ✓ | ✓ | ✓ | ✓ |
+| 不提問、不等核可；技術決定依 constitution、spec 與既有設計自行決定並記下理由 | ✓ | ✓ | ✓ | ✓ |
+| 需求有矛盾或不足：以 `failed`、`kind: requirements` 回報，MUST NOT 修改 spec.md 或 constitution | ✓ | ✓ | ✓ | ✓ |
+| MUST NOT 修改 Spec Kit 的範本、腳本與 `speckit-*` skill，MUST NOT 修改其他 spec 的資料夾、`.specify/sdd-drive/` | ✓ | ✓ | ✓ | ✓ |
+| `**Testing**:` 行以反引號寫出可直接執行、兩個平台寫法相同的測試指令，放在該行第一個反引號區段 | ✓ | | | |
+| 需要維護者或 push 才能完成的項目寫在 Notes，不寫成勾選任務；任務行格式 `- [ ] T001 …` | | ✓ | | |
+| 只做未勾選的任務；做完一項就勾選；MUST NOT 刪除、改寫或合併任務；做不到的以 `blocked-task` 回報並列出編號 | | | ✓ | |
+| 完成前執行測試指令（腳本填入）並使其通過；新測試不得依賴執行順序 | | | ✓ | |
+| 唯一的寫入是 `speckit-converge` 在 tasks.md 末尾附加的 Convergence 段落；MUST NOT 修改程式碼、測試、plan.md、spec.md 或其他檔案，MUST NOT 勾選、改寫、刪除或重新編號既有任務，MUST NOT 自行修正找到的問題 | | | | ✓ |
+| check 的 git：有附加時以一個 commit 提交 tasks.md（只含這個檔案）；沒有發現時 MUST NOT 產生任何 commit 或檔案變更 | | | | ✓ |
+| git：每完成一份文件或一組任務就 commit 到目前分支，訊息遵循專案與使用者的 CLAUDE.md；結束時不得留下未提交的變更；MUST NOT push、切換或建立分支、amend、rebase、reset、merge、stash、clean | ✓ | ✓ | ✓ | ✓（commit 的時機依上一列） |
+| 不是 git repository 時：不 commit（取代上一列） | ✓ | ✓ | ✓ | ✓ |
+| 接續時（`--resume` 或 `--fresh`）：先重新檢查檔案狀態，從未完成的部分繼續，不重做已完成的部分 | ✓ | ✓ | ✓ | ✓ |
+| 機密值不得寫入檔案、commit 或回報 | ✓ | ✓ | ✓ | ✓ |
+| 回報：以結構化輸出回報 `status`、`summary`（做了什麼、commit 了哪些）、失敗時的 `failure`；check 另回報 `convergence` | ✓ | ✓ | ✓ | ✓ |
 
 ## README.md
 
