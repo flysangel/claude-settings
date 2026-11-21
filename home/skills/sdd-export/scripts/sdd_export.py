@@ -342,6 +342,12 @@ SINGULAR = {"principles": "principle", "features": "feature", "requirements": "r
             "discarded": "discarded item"}
 
 
+TOP_LEVEL = "(top level)"
+NOT_SHOWN = "(not shown)"
+HIDDEN_DETAIL = "this message would repeat text that looks like a secret, so it is not shown"
+SECRET_KEY_DETAIL = "a field name here looks like a secret; remove that field"
+
+
 class Problem:
     """One error: the check that failed, the field path, a sentence that never repeats a secret value."""
 
@@ -352,13 +358,27 @@ class Problem:
         self.secret = secret
 
     def as_dict(self) -> dict:
-        return {"check": self.check, "path": self.path, "detail": self.detail}
+        # A last safety net: a path or a sentence that would repeat something looking like a secret (an id, a name)
+        # is replaced, never printed.
+        path = NOT_SHOWN if looks_like_secret(self.path) else self.path
+        detail = HIDDEN_DETAIL if looks_like_secret(self.detail) else self.detail
+        return {"check": self.check, "path": path, "detail": detail}
 
 
 def join(path: str, key) -> str:
     if isinstance(key, int):
         return f"{path}[{key}]"
     return f"{path}.{key}" if path else key
+
+
+def secret_key(key) -> bool:
+    """A field name that looks like a secret: it is reported at the path of the object that holds it."""
+    return isinstance(key, str) and looks_like_secret(key)
+
+
+def holder(path: str) -> str:
+    """The path of the object itself, as it is reported when one of its field names looks like a secret."""
+    return path or TOP_LEVEL
 
 
 PATH_TOKEN = re.compile(r"([^.\[\]]+)|\[(\d+)\]")
@@ -415,7 +435,9 @@ def check_keys(obj: dict, path: str, required, problems: list[Problem], forbidde
         if key not in obj:
             problems.append(Problem("field", join(path, key), f"the key {key} is missing"))
     for key in obj:
-        if key in forbidden:
+        if secret_key(key):
+            problems.append(Problem("secret", holder(path), SECRET_KEY_DETAIL, secret=True))
+        elif key in forbidden:
             problems.append(Problem("field", join(path, key), f"{key} is filled in by the script; leave it out"))
         elif key not in required:
             problems.append(Problem("field", join(path, key), f"{key} is not a field of the nutrients; remove it"))
@@ -468,7 +490,8 @@ def strings_of(value, path: str = ""):
         yield path, value
     elif isinstance(value, dict):
         for key, item in value.items():
-            yield from strings_of(item, join(path, key))
+            # Never build a path from a field name that looks like a secret; check_keys reports that name.
+            yield from strings_of(item, holder(path) if secret_key(key) else join(path, key))
     elif isinstance(value, list):
         for index, item in enumerate(value):
             yield from strings_of(item, join(path, index))
@@ -1081,6 +1104,9 @@ def load_nutrients(path: Path) -> tuple[str, dict | None, list[Problem]]:
     problems = structure_problems(data, draft=False)
     if is_int(data.get("schema")) and data["schema"] != SCHEMA:
         problems.append(Problem("field", "schema", f"must be {SCHEMA}"))
+    # Hand edits after the export may have added a secret: such nutrients are invalid, and only the field paths
+    # are reported, so that the value never reaches the output.
+    check_secrets(data, problems)
     check_evidence(data, None, problems)
     check_specs(data, None, problems)
     check_scope(data, None, problems)
@@ -1216,8 +1242,10 @@ def load_lineage(path: Path) -> tuple[str, dict | None, list[Problem]]:
     if schema_is_newer(data.get("schema")):
         return "newer", None, []
     problems = lineage_problems(data)
+    # Like the nutrients: a lineage edited by hand to hold a secret is invalid, and only the paths are reported.
+    check_secrets(data, problems)
     if problems:
-        return "invalid", None, problems
+        return "invalid", None, sorted_problems(problems)
     return "present", data, []
 
 

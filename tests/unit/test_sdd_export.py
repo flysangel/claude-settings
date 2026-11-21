@@ -3268,3 +3268,159 @@ def test_lineages_that_break_the_writing_rules_are_refused(sdd_export, tmp_path,
     result = run_export(sdd_export, root, "check")
 
     assert (result.code, result.out["reason"]) == (3, reason)
+
+
+# ======================================== secrets in the existing nutrients and lineage
+
+# A made-up token in the shape of a GitHub token; no real credential.
+FAKE_TOKEN = "ghp_" + "Zq8FakeTok" * 3
+
+
+def leaks(result) -> bool:
+    return FAKE_TOKEN in result.raw.decode("utf-8") or FAKE_TOKEN in result.err
+
+
+def set_lesson_text(data, value):
+    data["lessons"][0]["text"] = value
+
+
+def add_top_key(data, value):
+    data[f"https://u:{FAKE_TOKEN}@h.example.com"] = "x"
+
+
+def add_item_key(data, value):
+    data["lessons"][0][f"{FAKE_TOKEN}.x"] = "x"
+
+
+SECRET_EDITS = [
+    (set_lesson_text, f"password={FAKE_TOKEN}", "lessons[0].text", "secret"),
+    (set_lesson_text, f"前文\n{FAKE_TOKEN}\n後文", "lessons[0].text", "secret"),
+    (lambda d, v: d["features"][0]["requirements"][0].update(text=f"「{v}」"), FAKE_TOKEN,
+     "features[0].requirements[0].text", "secret"),
+    (lambda d, v: d["features"][0]["requirements"][0]["evidence"].append(v), FAKE_TOKEN,
+     "features[0].requirements[0].evidence[1]", "secret"),
+    (lambda d, v: d.update(project=v), FAKE_TOKEN, "project", "secret"),
+    (add_top_key, None, "(top level)", "secret"),
+    (add_item_key, None, "lessons[0]", "secret"),
+]
+
+
+def edited_nutrients(sdd_export, tmp_path, change, value) -> Path:
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    path = root / ".sdd-export" / "nutrients.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    change(data, value)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return root
+
+
+@pytest.mark.parametrize("change, value, path, check", SECRET_EDITS)
+def test_check_refuses_existing_nutrients_that_hold_a_secret(sdd_export, tmp_path, change, value, path, check):
+    root = edited_nutrients(sdd_export, tmp_path, change, value)
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 3
+    assert result.out["reason"] == "nutrients-invalid"
+    assert result.out["export_dir"] == "invalid"
+    assert result.out["existing"] is None
+    assert {"check": check, "path": path} in [{k: e[k] for k in ("check", "path")} for e in result.out["errors"]]
+    assert not leaks(result)
+
+
+@pytest.mark.parametrize("change, value, path, check", SECRET_EDITS)
+def test_every_command_hides_a_secret_in_the_existing_nutrients(sdd_export, tmp_path, change, value, path, check):
+    root = edited_nutrients(sdd_export, tmp_path, change, value)
+    state = run_export(sdd_export, root, "check").out["state"]
+    results = [
+        run_export(sdd_export, root, "files"),
+        validate(sdd_export, root, draft()),
+        run_export(sdd_export, root, "write", "--expect", state, stdin=dump(draft())),
+    ]
+
+    for result in results:
+        assert (result.code, result.out["reason"]) == (3, "nutrients-invalid")
+        assert not leaks(result)
+    assert FAKE_TOKEN not in (root / ".sdd-export" / "README.md").read_text(encoding="utf-8")
+
+
+def test_a_secret_id_in_the_existing_nutrients_is_not_repeated(sdd_export, tmp_path):
+    """An id may be sk- and lowercase letters: a valid id that looks like a key; no detail may repeat it."""
+    secret_id = "sk-" + "fakeidvalue" * 3
+
+    def change(data, value):
+        data["lessons"].append({**data["lessons"][0], "id": value})
+        data["lessons"].append({**data["lessons"][0], "id": value})
+
+    root = edited_nutrients(sdd_export, tmp_path, change, secret_id)
+    result = run_export(sdd_export, root, "check")
+
+    assert result.out["reason"] == "nutrients-invalid"
+    assert secret_id not in result.raw.decode("utf-8") and secret_id not in result.err
+
+
+def secret_lineage_project(tmp_path: Path, change) -> Path:
+    record = lineage_record()
+    change(record)
+    return lineage_project(tmp_path, record)
+
+
+LINEAGE_EDITS = [
+    (lambda r: r["lessons"][0].update(text=f"token: {FAKE_TOKEN}"), "lessons[0].text"),
+    (lambda r: r["source"].update(project=FAKE_TOKEN), "source.project"),
+    (lambda r: r["features"][0].update({f"x.{FAKE_TOKEN}.y": 1}), "features[0]"),
+]
+
+
+@pytest.mark.parametrize("change, path", LINEAGE_EDITS)
+def test_check_refuses_a_lineage_that_holds_a_secret(sdd_export, tmp_path, change, path):
+    root = secret_lineage_project(tmp_path, change)
+    result = run_export(sdd_export, root, "check")
+
+    assert (result.code, result.out["reason"]) == (3, "lineage-invalid")
+    assert result.out["lineage"] == "invalid"
+    assert result.out["lineage_content"] is None
+    assert path in [e["path"] for e in result.out["errors"] if e["check"] == "secret"]
+    assert not leaks(result)
+
+
+@pytest.mark.parametrize("change, path", LINEAGE_EDITS)
+def test_every_command_hides_a_secret_in_the_lineage(sdd_export, tmp_path, change, path):
+    root = secret_lineage_project(tmp_path, change)
+    for result in (run_export(sdd_export, root, "files"), validate(sdd_export, root, gen2_draft()),
+                   run_export(sdd_export, root, "write", "--expect", "none", stdin=dump(gen2_draft()))):
+        assert (result.code, result.out["reason"]) == (3, "lineage-invalid")
+        assert not leaks(result)
+    assert not (root / ".sdd-export").exists()
+
+
+def test_own_nutrients_and_lineage_are_read_back(sdd_export, tmp_path):
+    """What sdd-export wrote passed its secret check, so reading it back must not refuse it."""
+    root = lineage_project(tmp_path)
+    write_ok(sdd_export, root, gen2_draft())
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 0, result.out
+    assert result.out["existing"] is not None and result.out["lineage_content"] == lineage_record()
+
+
+@pytest.mark.parametrize(
+    "name, where",
+    [
+        (f"{FAKE_TOKEN}.x", "lessons[0]"),
+        (f"x.{FAKE_TOKEN}.y", "lessons[0]"),
+        (f"https://u:{FAKE_TOKEN}@h.example.com", "lessons[0]"),
+        (f"https://u:{FAKE_TOKEN}@h.example.com", "(top level)"),
+        (FAKE_TOKEN, "scope"),
+    ],
+)
+def test_a_draft_field_name_that_looks_like_a_secret_is_not_repeated(sdd_export, tmp_path, name, where):
+    root = project(tmp_path)
+    data = draft()
+    target = {"lessons[0]": data["lessons"][0], "(top level)": data, "scope": data["scope"]}[where]
+    target[name] = "x"
+    result = validate(sdd_export, root, data)
+
+    assert (result.code, result.out["reason"]) == (1, "secret")
+    assert where in [e["path"] for e in errors_for(result, "secret")]
+    assert not leaks(result)

@@ -705,7 +705,7 @@ def test_hand_edited_nutrients_with_a_secret_stop_at_check(sdd_rebuild, sdd_expo
     data = json.loads(path.read_bytes())
     data["lessons"][0]["text"] = f"password={FAKE_TOKEN}"
     path.write_bytes(sdd_export.serialize(data, "nutrients"))
-    assert ok(run_export(sdd_export, old, "check"))["export_dir"] == "ours"  # 006 still reads them as its own
+    own = run_export(sdd_export, old, "check")  # 006 refuses them itself, with the same paths that 007 shows
     results = recording(monkeypatch)
     new = make_rebuild_new(tmp_path, "gen2")
     check = run_rebuild(sdd_rebuild, new, "check", "--old", str(old))
@@ -713,6 +713,9 @@ def test_hand_edited_nutrients_with_a_secret_stop_at_check(sdd_rebuild, sdd_expo
 
     assert (check.code, check.out["reason"], check.out["nutrients"]) == (3, "nutrients-invalid", None)
     assert [(e["check"], e["path"]) for e in check.out["nutrients_errors"]] == [("secret", "lessons[0].text")]
+    assert (own.code, own.out["reason"], own.out["existing"]) == (3, "nutrients-invalid", None)
+    assert own.out["errors"] == check.out["nutrients_errors"]
+    assert FAKE_TOKEN not in own.raw.decode("utf-8") + own.err
     assert (first.code, first.out["reason"]) == (1, "source")
     assert not (new / ".specify" / "sdd-rebuild").exists() and not (new / ".sdd-rebuild").exists()
     assert leaked(results) == []
