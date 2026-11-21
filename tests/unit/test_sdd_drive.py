@@ -1643,3 +1643,195 @@ def test_baseline_never_gets_a_check_session(m, tmp_path, monkeypatch):
     assert (nxt["spec"], nxt["phase"]) == ("002-beta", "plan")
     assert run_phase(m, root, "001-alpha", "check", "opus", "r").json["reason"] == "not-next"
     assert calls(tmp_path) == []
+
+
+# ======================================================== T035 failures and verification
+
+
+@pytest.mark.parametrize("kind", ["requirements", "blocked-task", "tests", "tooling", "other"])
+def test_failed_report_is_recorded_and_counted(m, tmp_path, monkeypatch, kind):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (3, 1)}, "002-beta": {}})
+    report = {"status": "failed", "summary": "could not", "tasks": ["T003"] if kind == "blocked-task" else [],
+              "failure": {"kind": kind, "step": "T002", "reason": "needs a push"}}
+    scenarios(monkeypatch, {"do": [], "report": report})
+    result = run_phase(m, root, "001-alpha", "implement")
+    assert result.code == 0
+    view = result.json["attempts"][0]
+    assert (view["outcome"], view["counts_as_failure"]) == ("failed", True)
+    assert view["failure"] == {"kind": kind, "step": "T002", "reason": "needs a push",
+                               "tasks": ["T003"] if kind == "blocked-task" else []}
+    data = status(m, root)
+    assert (data["specs"][0]["state"], data["specs"][0]["next_phase"], data["specs"][0]["failures"]) == (
+        "failed", "implement", {"implement": 1})
+    assert (data["next"]["spec"], data["next"]["phase"], data["next"]["action"]) == ("001-alpha", "implement", "run")
+
+
+def implementing(tmp_path, remote=False, tasks=(3, 0)):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": tasks}})
+    git_run(root, "switch", "--quiet", "-c", "001-alpha")
+    if remote:
+        bare_remote(tmp_path, root)
+    write_state(root, blank_state(attempts=[attempt(1, phase="tasks", task_ids=["T001", "T002", "T003"])]))
+    return root
+
+
+@pytest.mark.parametrize("scenario,code,paths", [
+    ({"do": ["implement-partial"]}, "tasks-unfinished", []),
+    ({"do": ["implement", "remove-task"]}, "tasks-removed", ["specs/001-alpha/tasks.md"]),
+    ({"do": ["implement", "touch-spec"]}, "protected-changed", ["specs/001-alpha/spec.md"]),
+    ({"do": ["implement", "touch-constitution"]}, "protected-changed", [".specify/memory/constitution.md"]),
+    ({"do": ["implement", "touch-template"]}, "protected-changed", [".specify/templates/plan-template.md"]),
+    ({"do": ["implement", "dirty"], "commit_only": ["specs/001-alpha/tasks.md", "src"]}, "uncommitted",
+     ["left-behind.txt"]),
+])
+def test_verify_failed_codes(m, tmp_path, monkeypatch, scenario, code, paths):
+    root = implementing(tmp_path)
+    scenarios(monkeypatch, scenario)
+    view = run_phase(m, root, "001-alpha", "implement").json["attempts"][0]
+    assert (view["outcome"], view["detail"]["code"], view["detail"]["paths"]) == ("verify-failed", code, paths)
+    if code == "uncommitted":
+        assert (root / "left-behind.txt").read_text() == "not committed\n"
+        assert "left-behind.txt" in git_run(root, "status", "--porcelain")
+    if code == "protected-changed":
+        assert "Changed." in (root / paths[0]).read_text()
+    row = status(m, root)["specs"][0]
+    assert row["failures"] == {"implement": 1}
+    if code == "tasks-unfinished":
+        # Still on the implement phase: the failure is laid over it (data-model "失敗的疊加").
+        assert (row["state"], row["next_phase"]) == ("failed", "implement")
+
+
+def test_push_is_verify_failed(m, tmp_path, monkeypatch):
+    root = implementing(tmp_path, remote=True)
+    scenarios(monkeypatch, {"do": ["implement", "push"]})
+    view = run_phase(m, root, "001-alpha", "implement").json["attempts"][0]
+    assert view["detail"]["code"] == "pushed"
+
+
+def test_second_spec_failing_never_starts_the_third(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (1, 1)}, "002-beta": {},
+                                         "003-gamma": {}})
+    assert drive(m, root, "test", "--spec", "001-alpha").json["passed"] is True
+    scenarios(monkeypatch, {"do": [], "report": {"status": "failed", "summary": "x",
+                                                 "failure": {"kind": "requirements", "step": "plan", "reason": "conflict"}}})
+    assert run_phase(m, root, "002-beta", "plan").json["attempts"][0]["outcome"] == "failed"
+    for _ in range(2):
+        nxt = status(m, root)["next"]
+        assert (nxt["spec"], nxt["phase"]) == ("002-beta", "plan")
+    assert run_phase(m, root, "003-gamma", "plan").json["reason"] == "not-next"
+    assert all("specs/003-gamma" not in c["stdin"] for c in calls(tmp_path))
+
+
+def test_retry_after_a_failure_starts_from_the_failed_phase(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, {"do": [], "report": {"status": "failed", "summary": "x",
+                                                 "failure": {"kind": "other", "step": "s", "reason": "r"}}},
+              {"test_command": PASS_CMD})
+    run_phase(m, root, "001-alpha", "plan")
+    data = run_phase(m, root, "001-alpha", "plan").json
+    assert data["attempts"][0]["outcome"] == "succeeded"
+    assert data["failures"] == {"plan": 1}
+    assert status(m, root)["specs"][0]["state"] == "planned"
+
+
+def test_permission_denials_are_tool_names_only(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, {"test_command": PASS_CMD, "result": {"permission_denials": [
+        {"tool_name": "Bash", "tool_input": {"command": "rm -rf x"}}, {"tool_name": "Bash", "tool_input": {}},
+        {"tool_name": "WebFetch", "tool_input": {"url": "u"}}]}})
+    data = run_phase(m, root, "001-alpha", "plan").json
+    assert data["attempts"][0]["permission_denials"] == ["Bash", "WebFetch"]
+    assert "rm -rf" not in state_file(root).read_text(encoding="utf-8")
+
+
+# ======================================================== T036 non-failures and finalize
+
+
+@pytest.mark.parametrize("scenario,outcome,code", [
+    ({"do": [], "result": {"is_error": True, "api_error_status": 401, "result": "Invalid API key"}}, "api-error", "api-error"),
+    ({"do": [], "result": {"is_error": True, "api_error_status": 404, "result": "model not found"}}, "api-error", "api-error"),
+    ({"do": [], "result": {"is_error": True, "subtype": "error_max_turns", "result": None}}, "api-error", "api-error"),
+    ({"do": [], "no_result": True}, "interrupted", "no-result"),
+    ({"do": [], "report": None}, "interrupted", "no-report"),
+    ({"do": [], "report": {"status": "completed"}}, "interrupted", "no-report"),
+])
+def test_non_failure_endings_are_not_counted(m, tmp_path, monkeypatch, scenario, outcome, code):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, scenario)
+    data = run_phase(m, root, "001-alpha", "plan").json
+    view = data["attempts"][0]
+    assert (view["outcome"], view["detail"]["code"], view["counts_as_failure"]) == (outcome, code, False)
+    if code == "api-error":
+        assert view["detail"]["text"] in ("Invalid API key", "model not found", "error_max_turns")
+    assert data["failures"] == {}
+    nxt = status(m, root)["next"]
+    assert (nxt["action"], nxt["last_outcome"], nxt["session_id"]) == ("resume", outcome, view["session_id"])
+
+
+def test_missing_claude_executable_is_launch_failed(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    monkeypatch.setenv("SDD_DRIVE_CLAUDE", json.dumps([str(tmp_path / "no-such-claude")]))
+    data = run_phase(m, root, "001-alpha", "plan").json
+    view = data["attempts"][0]
+    assert (view["outcome"], view["detail"]["code"], view["counts_as_failure"]) == ("launch-failed", "launch", False)
+    assert status(m, root)["next"]["action"] == "run"
+
+
+def pending(root, **changes):
+    write_state(root, blank_state(attempts=[attempt(1, outcome=None, started_at=T0)], **changes))
+
+
+def test_pending_attempt_needs_finalize(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    pending(root)
+    data = status(m, root)
+    assert data["pending_finalize"] is True
+    assert (data["next"]["action"], data["next"]["spec"], data["next"]["phase"]) == ("finalize", "001-alpha", "plan")
+    assert run_phase(m, root, "001-alpha", "plan").json["reason"] == "pending-finalize"
+
+
+def test_stale_driver_record_needs_finalize(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    write_state(root, blank_state(attempts=[attempt(1)], driver={"token": UUID2, "pid": 99999, "phase": "running",
+                                                                 "attempt": 1, "waiting_until": None, "started_at": T0}))
+    assert status(m, root)["next"]["action"] == "finalize"
+
+
+def test_finalize_records_interrupted_with_the_fingerprint(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    pending(root, launch={"token": UUID2, "at": T0})
+    write_tree(root, {"half-done.txt": "x"})
+    result = drive(m, root, "finalize")
+    assert result.code == 0
+    data = result.json
+    assert list(data) == ["spec", "phase", "model", "started_at", "outcome", "auto_resume", "state_after"]
+    assert (data["spec"], data["phase"], data["model"], data["started_at"], data["outcome"]) == (
+        "001-alpha", "plan", "opus", T0, "interrupted")
+    assert data["state_after"] == {"state": "not-started", "next_phase": "plan", "tasks_total": 0, "tasks_open": 0}
+    state = read_state(root)
+    record = state["attempts"][0]
+    assert record["detail"]["code"] == "no-result" and record["worktree"] == m.worktree_fingerprint(root)
+    assert state["launch"] is None and state["driver"] is None
+    after = status(m, root)
+    assert after["leftovers"] is True and after["next"]["action"] == "resume"
+    assert after["specs"][0]["failures"] == {}
+
+
+def test_finalize_nothing_running_and_idempotent(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    write_state(root, blank_state(attempts=[attempt(1)]))
+    assert drive(m, root, "finalize").json["reason"] == "nothing-to-finalize"
+    pending(root)
+    with hold_lock(root):
+        assert drive(m, root, "finalize").json["reason"] == "running"
+    assert drive(m, root, "finalize").code == 0
+    first = read_state(root)
+    assert drive(m, root, "finalize").json["reason"] == "nothing-to-finalize"
+    assert read_state(root) == first
+
+
+def test_run_exit_code_is_zero_when_the_child_fails(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, {"do": [], "exit": 1, "report": {"status": "failed", "summary": "x",
+                                                             "failure": {"kind": "other", "step": "s", "reason": "r"}}})
+    assert run_phase(m, root, "001-alpha", "plan").code == 0
