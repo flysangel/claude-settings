@@ -18,6 +18,7 @@ import signal
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -835,6 +836,96 @@ def test_script_never_reads_the_lock_file_while_it_is_held(drive_module, tmp_pat
         assert not any(k.startswith(".specify/sdd-drive") for k in hashes)
         assert drive_module.own_dir_state(root) == "ours"
         assert status(drive_module, root)["running"] is True
+
+
+class FakeMsvcrt:
+    """msvcrt.locking on top of flock, so the Windows branch of Lock runs here; it also checks how it is called."""
+    LK_UNLCK, LK_NBLCK = 0, 2
+
+    def __init__(self):
+        self.calls = []
+
+    def locking(self, fd, mode, nbytes):
+        import fcntl
+
+        self.calls.append((mode, nbytes, os.lseek(fd, 0, os.SEEK_CUR)))
+        assert nbytes == 1 and os.lseek(fd, 0, os.SEEK_CUR) == 0, "lock byte 0 of the file"
+        if mode == self.LK_NBLCK:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise PermissionError(13, "Permission denied") from None
+        elif mode == self.LK_UNLCK:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        else:
+            raise AssertionError(f"unexpected mode {mode}")
+
+
+def test_windows_lock_branch(drive_module, tmp_path, monkeypatch):
+    """Elsewhere FakeMsvcrt stands in for msvcrt; on Windows the real one is used."""
+    m = drive_module
+    m.load_grill()
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    fake = FakeMsvcrt()
+    if os.name != "nt":
+        monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr(m, "WINDOWS", True)
+    assert m.lock_held(root) is False and not (root / LOCK_REL).exists()  # the probe never creates the file
+    first = m.Lock(root)
+    assert first.try_acquire() is True
+    assert m.lock_held(root) is True
+    assert m.Lock(root).try_acquire() is False
+    first.release()
+    assert m.lock_held(root) is False
+    second = m.Lock(root)
+    assert second.acquire(1) is True
+    second.release()
+    if os.name != "nt":
+        assert {mode for mode, _, _ in fake.calls} == {fake.LK_NBLCK, fake.LK_UNLCK}
+
+
+class FakePopen:
+    """Records the creation flags; refuses CREATE_BREAKAWAY_FROM_JOB the way a job object without breakaway does."""
+
+    def __init__(self, log, refuse_breakaway=True, refuse_all=False, code=0):
+        self.log, self.refuse_breakaway, self.refuse_all, self.code = log, refuse_breakaway, refuse_all, code
+
+    def __call__(self, args, **kwargs):
+        flags = kwargs.get("creationflags", 0)
+        self.log.append(flags)
+        if self.refuse_all or (self.refuse_breakaway and flags & 0x01000000):
+            raise OSError(5, "Access is denied")
+        assert "start_new_session" not in kwargs
+        return types.SimpleNamespace(wait=lambda timeout=None: self.code)
+
+
+def test_start_driver_windows_flags_and_breakaway_fallback(drive_module, tmp_path, monkeypatch):
+    m = drive_module
+    monkeypatch.setattr(m, "WINDOWS", True)
+    log: list = []
+    monkeypatch.setattr(m.subprocess, "Popen", FakePopen(log))
+    assert m.start_driver(tmp_path, UUID1) is True
+    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, first with CREATE_BREAKAWAY_FROM_JOB, then without it
+    assert log == [0x01000208, 0x208]
+    log.clear()
+    monkeypatch.setattr(m.subprocess, "Popen", FakePopen(log, refuse_breakaway=False))
+    assert m.start_driver(tmp_path, UUID1) is True and log == [0x01000208]
+    log.clear()
+    monkeypatch.setattr(m.subprocess, "Popen", FakePopen(log, refuse_all=True))
+    assert m.start_driver(tmp_path, UUID1) is False and log == [0x01000208, 0x208]
+    monkeypatch.setattr(m.subprocess, "Popen", FakePopen([], refuse_breakaway=False, code=1))
+    assert m.start_driver(tmp_path, UUID1) is False
+
+
+def test_driver_starter_windows_branch(drive_module, monkeypatch):
+    """The middle process's own Windows branch, run in this process with os.name and Popen replaced."""
+    log: list = []
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "Popen", FakePopen(log))
+        patch.setattr(sys, "argv", ["-c", "python", "sdd_drive.py", "_drive", "--token", UUID1])
+        patch.setattr(os, "name", "nt")
+        exec(compile(drive_module.DRIVER_STARTER, "<starter>", "exec"), {"__name__": "__main__"})
+    assert log == [0x01000208, 0x208]
 
 
 def test_lock_is_released_when_the_holder_is_killed(drive_module, tmp_path):
