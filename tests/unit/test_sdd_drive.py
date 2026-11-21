@@ -1251,3 +1251,395 @@ def test_two_specs_in_order(m, tmp_path, monkeypatch):
                     [("002-beta", p) for p in ("plan", "tasks", "implement", "test", "check")]
     assert branch_of(root) == "002-beta"
     assert git_run(root, "merge-base", "--is-ancestor", "001-alpha", "002-beta") == ""
+
+
+# ======================================================== T026 test
+
+
+def ready_for_test(tmp_path, name="proj", command=PASS_CMD, extra_specs=None, baseline=True):
+    specs = {"001-alpha": {"plan": True, "tasks": (2, 2), "command": command}}
+    specs.update(extra_specs or {})
+    root = make_project(tmp_path, name, specs=specs)
+    if not baseline:
+        write_state(root, blank_state())
+    return root
+
+
+def test_test_must_be_the_next_test(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (2, 1)}})
+    result = drive(m, root, "test", "--spec", "001-alpha")
+    assert (result.code, result.json["reason"]) == (1, "not-next")
+    assert not state_file(root).exists()
+
+
+def test_test_refuses_dirty_running_and_pending(m, tmp_path):
+    root = ready_for_test(tmp_path)
+    write_tree(root, {"mine.txt": "x"})
+    assert drive(m, root, "test", "--spec", "001-alpha").json["reason"] == "dirty"
+    (root / "mine.txt").unlink()
+    write_state(root, blank_state(baseline=["001-alpha"], attempts=[attempt(1, outcome=None)]))
+    assert drive(m, root, "test", "--spec", "001-alpha").json["reason"] == "pending-finalize"
+    write_state(root, blank_state(baseline=["001-alpha"]))
+    with hold_lock(root):
+        assert drive(m, root, "test", "--spec", "001-alpha").json["reason"] == "running"
+
+
+@pytest.mark.parametrize("plan", ["# Plan: a\n\n**Testing**: pytest\n", "# Plan: a\n\n**Testing**: `N/A`\n",
+                                  "# Plan: a\n\n**Testing**: `none`\n", "# Plan: a\n\n**Testing**: `TBD`\n",
+                                  "# Plan: a\n\nno line\n", "# Plan: a\n\n**Testing**: `run --token=SECRETVALUE`\n"])
+def test_no_test_command(m, tmp_path, plan):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": plan, "tasks": (1, 1)}})
+    result = drive(m, root, "test", "--spec", "001-alpha")
+    assert (result.code, result.json["reason"]) == (1, "no-test-command")
+    assert "SECRETVALUE" not in result.text
+    assert "detail" in result.json
+    assert not state_file(root).exists() or read_state(root)["tests"] == []
+
+
+def test_test_runs_in_the_root_with_empty_stdin(m, tmp_path):
+    script = 'import os, sys; open("seen.txt", "w").write(os.getcwd() + "|" + sys.stdin.read())'
+    command = f'"{PY}" -c "{script}"'.replace('"seen.txt"', "'seen.txt'").replace('"w"', "'w'").replace('"|"', "'|'")
+    root = ready_for_test(tmp_path, command=command)
+    write_tree(root, {".gitignore": "seen.txt\n"})
+    commit_all(root)
+    result = drive(m, root, "test", "--spec", "001-alpha")
+    assert result.json["passed"] is True, result.json
+    cwd, _, stdin = (root / "seen.txt").read_text().partition("|")
+    assert Path(cwd).resolve() == root.resolve() and stdin == ""
+
+
+def test_passing_test_records_every_covered_spec(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (1, 1)},
+                                         "002-beta": {"plan": True, "tasks": (1, 1)},
+                                         "003-gamma": {"plan": True, "tasks": (1, 1), "command": FAIL_CMD},
+                                         "004-delta": {"plan": True, "tasks": (1, 1)}})
+    nxt = status(m, root)["next"]
+    assert nxt["covers"] == ["001-alpha", "002-beta"] and nxt["test_command"] == PASS_CMD
+    result = drive(m, root, "test", "--spec", "001-alpha").json
+    assert list(result) == ["spec", "command", "exit_code", "passed", "covers", "duration_seconds", "output_tail"]
+    assert result["covers"] == ["001-alpha", "002-beta"] and result["passed"] is True
+    tests = read_state(root)["tests"]
+    assert [t["spec"] for t in tests] == ["001-alpha", "002-beta"]
+    assert all(t["exit_code"] == 0 and t["head"] == head_of(root) for t in tests)
+    assert list(tests[0]) == ["spec", "tasks_hash", "command", "exit_code", "head", "at"]
+    assert status(m, root)["next"]["spec"] == "003-gamma"
+
+
+def test_failing_test_records_only_the_spec_and_counts(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (1, 1), "command": FAIL_CMD},
+                                         "002-beta": {"plan": True, "tasks": (1, 1), "command": FAIL_CMD}})
+    result = drive(m, root, "test", "--spec", "001-alpha").json
+    assert (result["passed"], result["exit_code"], result["covers"]) == (False, 3, ["001-alpha"])
+    assert result["output_tail"] == ["boom"]
+    assert [t["spec"] for t in read_state(root)["tests"]] == ["001-alpha"]
+    row = status(m, root)["specs"][0]
+    assert (row["state"], row["next_phase"], row["failures"]) == ("failed", "test", {"test": 1})
+    assert status(m, root)["next"]["spec"] == "001-alpha"
+
+
+def test_output_tail_is_the_last_40_lines_with_secret_lines_hidden(m, tmp_path):
+    # The secret is assembled at run time so that the command itself does not look like a secret.
+    script = ("[print('line', i) for i in range(60)]; print('key tok' + 'en=' + 'gh' + 'p_' + 'a' * 30); "
+              "print('end')")
+    root = ready_for_test(tmp_path, command=f'"{PY}" -c "{script}"')
+    before = tree_snapshot(root)
+    result = drive(m, root, "test", "--spec", "001-alpha").json
+    assert len(result["output_tail"]) == 40
+    assert result["output_tail"][-2:] == ["(line not shown: looks like a secret)", "end"]
+    assert result["output_tail"][0] == "line 22"
+    assert SECRET_VALUE not in state_file(root).read_text(encoding="utf-8")
+    after = {k: v for k, v in tree_snapshot(root).items() if not k.startswith(".specify/sdd-drive")}
+    assert after == before
+
+
+def test_non_git_test_records_null_head(m, tmp_path):
+    root = make_project(tmp_path, git=False, specs={"001-alpha": {"plan": True, "tasks": (1, 1)}})
+    assert drive(m, root, "test", "--spec", "001-alpha").json["passed"] is True
+    assert read_state(root)["tests"][0]["head"] is None
+
+
+# ======================================================== T027 completion and the existing baseline
+
+
+def checked_spec(tmp_path, baseline=(), **state_changes):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (2, 2)}, "002-beta": {}})
+    write_state(root, blank_state(baseline=baseline, **state_changes))
+    return root
+
+
+def first_row(m, root):
+    return status(m, root)["specs"][0]
+
+
+def test_unchecked_tasks_keep_next_on_the_spec(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (2, 1)}, "002-beta": {}})
+    data = status(m, root)
+    assert (data["specs"][0]["state"], data["specs"][0]["next_phase"]) == ("implementing", "implement")
+    assert data["next"]["spec"] == "001-alpha"
+
+
+def test_all_checked_without_test_record_needs_test(m, tmp_path):
+    root = checked_spec(tmp_path)
+    assert (first_row(m, root)["state"], first_row(m, root)["next_phase"]) == ("implementing", "test")
+    assert status(m, root)["next"]["action"] == "test"
+
+
+def test_passed_test_at_current_hash_and_head_needs_check(m, tmp_path):
+    root = checked_spec(tmp_path)
+    write_state(root, blank_state(tests=[test_record("001-alpha", hash_of(m, root, "001-alpha"), head=head_of(root))]))
+    row = first_row(m, root)
+    assert (row["state"], row["next_phase"]) == ("implementing", "check")
+    nxt = status(m, root)["next"]
+    assert (nxt["action"], nxt["phase"], nxt["hints"]["check_failures"]) == ("run", "check", 0)
+
+
+def test_new_commit_after_the_test_needs_a_new_test(m, tmp_path):
+    root = checked_spec(tmp_path)
+    write_state(root, blank_state(tests=[test_record("001-alpha", hash_of(m, root, "001-alpha"), head=head_of(root))]))
+    write_tree(root, {"src/new.py": "x"})
+    commit_all(root)
+    assert first_row(m, root)["next_phase"] == "test"
+
+
+def test_non_git_compares_only_the_tasks_hash(m, tmp_path):
+    root = make_project(tmp_path, git=False, specs={"001-alpha": {"plan": True, "tasks": (2, 2)}})
+    write_state(root, blank_state(tests=[test_record("001-alpha", hash_of(m, root, "001-alpha"))]))
+    assert first_row(m, root)["next_phase"] == "check"
+
+
+def test_converged_check_at_current_hash_is_done(m, tmp_path):
+    root = checked_spec(tmp_path)
+    current = hash_of(m, root, "001-alpha")
+    write_state(root, blank_state(attempts=[attempt(1, phase="check", convergence="converged", tasks_hash=current)]))
+    assert first_row(m, root)["state"] == "done"
+    assert status(m, root)["next"]["spec"] == "002-beta"
+
+
+def test_changed_tasks_invalidate_old_test_and_check_records(m, tmp_path):
+    root = checked_spec(tmp_path)
+    current = hash_of(m, root, "001-alpha")
+    write_state(root, blank_state(attempts=[attempt(1, phase="check", convergence="converged", tasks_hash=current)],
+                                  tests=[test_record("001-alpha", current, head=head_of(root))]))
+    add_spec(root, "001-alpha", plan=True, tasks=tasks_text("001-alpha", 2, 2) + "\nNotes changed.\n")
+    commit_all(root)
+    assert first_row(m, root)["next_phase"] == "test"
+
+
+def test_failed_last_test_is_failed_state(m, tmp_path):
+    root = checked_spec(tmp_path)
+    current = hash_of(m, root, "001-alpha")
+    write_state(root, blank_state(tests=[test_record("001-alpha", current, exit_code=1, head=head_of(root))]))
+    row = first_row(m, root)
+    assert (row["state"], row["next_phase"], row["failures"]) == ("failed", "test", {"test": 1})
+
+
+def test_baseline_needs_only_a_test_at_the_current_hash(m, tmp_path):
+    root = checked_spec(tmp_path, baseline=["001-alpha"])
+    row = first_row(m, root)
+    assert (row["state"], row["next_phase"], row["baseline"]) == ("implementing", "test", True)
+    old_head = "0" * 40
+    write_state(root, blank_state(baseline=["001-alpha"],
+                                  tests=[test_record("001-alpha", hash_of(m, root, "001-alpha"), head=old_head)]))
+    row = first_row(m, root)
+    assert (row["state"], row["next_phase"]) == ("done", None)
+
+
+def test_baseline_never_has_next_phase_check(m, tmp_path):
+    root = checked_spec(tmp_path, baseline=["001-alpha"])
+    for record in ([], [test_record("001-alpha", hash_of(m, root, "001-alpha"), head=head_of(root))]):
+        write_state(root, blank_state(baseline=["001-alpha"], tests=record))
+        assert first_row(m, root)["next_phase"] != "check"
+
+
+def test_baseline_with_an_implement_attempt_follows_the_normal_rules(m, tmp_path):
+    root = checked_spec(tmp_path, baseline=["001-alpha"])
+    write_state(root, blank_state(baseline=["001-alpha"], attempts=[attempt(1, phase="implement")],
+                                  tests=[test_record("001-alpha", hash_of(m, root, "001-alpha"), head=head_of(root))]))
+    row = first_row(m, root)
+    assert (row["baseline"], row["next_phase"]) == (False, "check")
+
+
+def test_after_clear_there_is_no_baseline(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (2, 2)}})
+    assert first_row(m, root)["baseline"] is True
+    assert drive(m, root, "clear").json == {"cleared": True, "baseline_reset": True}
+    state = read_state(root)
+    assert (state["baseline"], state["baseline_reset"]) == ([], True)
+    assert first_row(m, root)["baseline"] is False
+    assert drive(m, root, "test", "--spec", "001-alpha").json["passed"] is True
+    assert first_row(m, root)["next_phase"] == "check"
+
+
+def test_first_status_matches_the_written_baseline(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (1, 1)},
+                                         "002-beta": {"plan": True, "tasks": (1, 1)},
+                                         "003-gamma": {"plan": True, "tasks": (1, 0)}})
+    before = [r["baseline"] for r in status(m, root)["specs"]]
+    assert drive(m, root, "test", "--spec", "001-alpha").json["covers"] == ["001-alpha", "002-beta"]
+    assert read_state(root)["baseline"] == ["001-alpha", "002-beta"]
+    assert [r["baseline"] for r in status(m, root)["specs"]] == before == [True, True, False]
+    assert [r["state"] for r in status(m, root)["specs"]] == ["done", "done", "tasked"]
+
+
+# ======================================================== T028 check
+
+
+def ready_for_check(m, tmp_path, monkeypatch, *, remote=False):
+    """001 implemented by this skill (implement attempt), tested at the current HEAD; next is check."""
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (3, 3)}, "002-beta": {}})
+    git_run(root, "switch", "--quiet", "-c", "001-alpha")
+    if remote:
+        bare_remote(tmp_path, root)
+    write_state(root, blank_state(attempts=[attempt(1, phase="implement", task_ids=["T001", "T002", "T003"])],
+                                  tests=[test_record("001-alpha", hash_of(m, root, "001-alpha"), head=head_of(root))]))
+    assert status(m, root)["next"]["phase"] == "check"
+    return root
+
+
+def run_check(m, root, monkeypatch, scenario):
+    scenarios(monkeypatch, scenario)
+    result = run_phase(m, root, "001-alpha", "check", "opus", "Careful comparison.")
+    assert result.code == 0, result.out
+    return result.json
+
+
+def test_check_converged_is_done_at_once(m, tmp_path, monkeypatch):
+    root = ready_for_check(m, tmp_path, monkeypatch)
+    start = head_of(root)
+    data = run_check(m, root, monkeypatch, {"report": {"status": "completed", "summary": "Converged",
+                                                       "convergence": "converged"}})
+    view = data["attempts"][0]
+    assert (view["outcome"], view["convergence"], view["findings"]) == ("succeeded", "converged", None)
+    assert head_of(root) == start
+    assert data["state_after"]["state"] == "done"
+    nxt = status(m, root)["next"]
+    assert (nxt["spec"], nxt["phase"]) == ("002-beta", "plan")
+    assert read_state(root)["attempts"][-1]["tasks_hash"] == hash_of(m, root, "001-alpha")
+
+
+def test_check_said_appended_but_nothing_changed(m, tmp_path, monkeypatch):
+    root = ready_for_check(m, tmp_path, monkeypatch)
+    data = run_check(m, root, monkeypatch, {"report": {"status": "completed", "summary": "x",
+                                                       "convergence": "tasks-appended"}})
+    view = data["attempts"][0]
+    assert (view["outcome"], view["detail"]["code"]) == ("verify-failed", "check-no-tasks")
+    assert status(m, root)["specs"][0]["state"] == "failed"
+
+
+def test_check_gaps_found(m, tmp_path, monkeypatch):
+    root = ready_for_check(m, tmp_path, monkeypatch)
+    data = run_check(m, root, monkeypatch, {"do": ["append"], "commit_only": ["specs/001-alpha/tasks.md"],
+                                            "report": {"status": "completed", "summary": "x",
+                                                       "convergence": "tasks-appended"}})
+    view = data["attempts"][0]
+    assert (view["outcome"], view["convergence"], view["counts_as_failure"]) == ("gaps-found", "tasks-appended", True)
+    assert view["detail"] is None
+    assert view["findings"] == [
+        {"id": "T004", "text": "Implement the missing retry", "source_ref": "FR-008", "gap_type": "missing"},
+        {"id": "T005", "text": "Remove the unrequested cache", "source_ref": "plan.md", "gap_type": "unrequested"},
+    ]
+    assert view["findings_total"] == 2
+    record = read_state(root)["attempts"][-1]
+    assert record["appended"] == ["T004", "T005"]
+    assert record["task_ids"] == ["T001", "T002", "T003", "T004", "T005"]
+    assert data["failures"] == {"check": 1}
+    row = status(m, root)["specs"][0]
+    assert (row["state"], row["next_phase"]) == ("implementing", "implement")
+    assert status(m, root)["next"]["spec"] == "001-alpha"
+
+
+def test_check_said_converged_but_appended_is_report_mismatch(m, tmp_path, monkeypatch):
+    root = ready_for_check(m, tmp_path, monkeypatch)
+    data = run_check(m, root, monkeypatch, {"do": ["append"], "commit_only": ["specs/001-alpha/tasks.md"],
+                                            "report": {"status": "completed", "summary": "x",
+                                                       "convergence": "converged"}})
+    view = data["attempts"][0]
+    assert (view["outcome"], view["detail"]["code"]) == ("gaps-found", "report-mismatch")
+
+
+@pytest.mark.parametrize("scenario,code,paths", [
+    ({"do": ["rewrite-tasks"]}, "check-rewrote-tasks", ["specs/001-alpha/tasks.md"]),
+    ({"do": ["append-bad"]}, "check-rewrote-tasks", ["specs/001-alpha/tasks.md"]),
+    ({"do": ["touch-code"]}, "check-touched-files", ["src/extra.py"]),
+    ({"do": ["touch-plan"]}, "check-touched-files", ["specs/001-alpha/plan.md"]),
+    ({"do": ["touch-spec"]}, "protected-changed", ["specs/001-alpha/spec.md"]),
+    ({"do": ["touch-constitution"]}, "protected-changed", [".specify/memory/constitution.md"]),
+    ({"do": ["append"], "commit": False}, "uncommitted", ["specs/001-alpha/tasks.md"]),
+])
+def test_check_verify_failures_are_not_reverted(m, tmp_path, monkeypatch, scenario, code, paths):
+    root = ready_for_check(m, tmp_path, monkeypatch)
+    data = run_check(m, root, monkeypatch, dict(scenario, report={"status": "completed", "summary": "x"}))
+    view = data["attempts"][0]
+    assert (view["outcome"], view["detail"]["code"]) == ("verify-failed", code), view
+    if paths is not None:
+        assert view["detail"]["paths"] == paths
+    assert view["findings"] is None
+    if scenario.get("commit") is False:
+        assert "specs/001-alpha/tasks.md" in git_run(root, "status", "--porcelain")
+
+
+def test_check_rewrite_with_checked_task_is_detected(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (3, 3)}})
+    git_run(root, "switch", "--quiet", "-c", "001-alpha")
+    text = tasks_text("001-alpha", 3, 3) + "\n- [ ] T004 already open\n"
+    add_spec(root, "001-alpha", plan=True, tasks=text.replace("- [ ] T004 already open", "- [x] T004 already open"))
+    commit_all(root)
+    write_state(root, blank_state(attempts=[attempt(1, phase="implement")],
+                                  tests=[test_record("001-alpha", hash_of(m, root, "001-alpha"), head=head_of(root))]))
+    path = root / "specs/001-alpha/tasks.md"
+    scenarios(monkeypatch, {"do": [], "files": {"specs/001-alpha/tasks.md": path.read_text().replace("- [x] T001", "- [ ] T001")},
+                            "report": {"status": "completed", "summary": "x"}})
+    view = run_phase(m, root, "001-alpha", "check", "opus", "r").json["attempts"][0]
+    assert view["detail"]["code"] == "check-rewrote-tasks"
+
+
+def test_check_push_is_pushed(m, tmp_path, monkeypatch):
+    root = ready_for_check(m, tmp_path, monkeypatch, remote=True)
+    data = run_check(m, root, monkeypatch, {"do": ["append", "push"], "commit_only": ["specs/001-alpha/tasks.md"],
+                                            "report": {"status": "completed", "summary": "x"}})
+    assert data["attempts"][0]["detail"]["code"] == "pushed"
+
+
+def test_gaps_found_then_implement_test_check_again_without_looping(m, tmp_path, monkeypatch):
+    root = ready_for_check(m, tmp_path, monkeypatch)
+    run_check(m, root, monkeypatch, {"do": ["append"], "commit_only": ["specs/001-alpha/tasks.md"]})
+    scenarios(monkeypatch, {})
+    assert run_phase(m, root, "001-alpha", "implement").json["attempts"][0]["outcome"] == "succeeded"
+    assert len(calls(tmp_path)) == 2  # nothing ran on its own after gaps-found
+    nxt = status(m, root)["next"]
+    assert (nxt["action"], nxt["spec"]) == ("test", "001-alpha")
+    assert drive(m, root, "test", "--spec", "001-alpha").json["passed"] is True
+    nxt = status(m, root)["next"]
+    assert (nxt["phase"], nxt["hints"]["check_failures"]) == ("check", 1)
+    data = run_check(m, root, monkeypatch, {"report": {"status": "completed", "summary": "Converged",
+                                                       "convergence": "converged"}})
+    assert data["state_after"]["state"] == "done"
+
+
+def test_findings_are_capped_cleaned_and_parsed(m, tmp_path, monkeypatch):
+    root = ready_for_check(m, tmp_path, monkeypatch)
+    path = root / "specs/001-alpha/tasks.md"
+    lines = ["", "## Phase 2: Convergence", ""]
+    lines.append(f"- [ ] T004 Store the key {SECRET_VALUE} per FR-001 (missing)")
+    lines.append("- [ ] T005 " + "Long " * 100 + "per FR-002 (partial)")
+    lines.append("- [ ] T006 No reference here")
+    lines += [f"- [ ] T{n:03d} Item {n} per FR-003 (contradicts)" for n in range(7, 70)]
+    text = path.read_text(encoding="utf-8") + "\n".join(lines) + "\n"
+    data = run_check(m, root, monkeypatch, {"do": [], "files": {"specs/001-alpha/tasks.md": text},
+                                            "commit_only": ["specs/001-alpha/tasks.md"]})
+    view = data["attempts"][0]
+    assert view["outcome"] == "gaps-found"
+    assert view["findings_total"] == 66 and len(view["findings"]) == 50
+    assert view["findings"][0]["text"] == SECRET_TEXT
+    assert len(view["findings"][1]["text"]) <= 300
+    assert view["findings"][2] == {"id": "T006", "text": "No reference here", "source_ref": None, "gap_type": None}
+    assert SECRET_VALUE not in json.dumps(data)
+
+
+def test_baseline_never_gets_a_check_session(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (2, 2)}, "002-beta": {}})
+    assert drive(m, root, "test", "--spec", "001-alpha").json["passed"] is True
+    nxt = status(m, root)["next"]
+    assert (nxt["spec"], nxt["phase"]) == ("002-beta", "plan")
+    assert run_phase(m, root, "001-alpha", "check", "opus", "r").json["reason"] == "not-next"
+    assert calls(tmp_path) == []

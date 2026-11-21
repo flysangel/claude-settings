@@ -16,7 +16,7 @@ Environment:
     "tasks"       number of tasks the "tasks" action writes (default 3)
     "test_command" command written on the **Testing**: line by "plan"
     "files"       {relative path: text} written before committing
-    "commit"      false to leave the changes uncommitted (default true)
+    "commit"      false to leave the changes uncommitted (default true; for check only with "commit_only")
     "commit_only" list of paths to commit instead of everything
     "sleep"       seconds to sleep before answering
     "report"      the structured_output (default {"status": "completed", "summary": "done"}); null leaves it out
@@ -200,7 +200,7 @@ def main() -> int:
         act(action, spec_dir, scenario)
     for rel, text in (scenario.get("files") or {}).items():
         write(Path(rel), text)
-    if is_git() and scenario.get("commit", True):
+    if is_git() and scenario.get("commit", phase != "check" or bool(scenario.get("commit_only"))):
         if scenario.get("commit_only"):
             git("add", "--", *scenario["commit_only"])
         else:
