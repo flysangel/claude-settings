@@ -48,6 +48,9 @@ RECORD_PATH = ".specify/sdd-init.json"
 SCHEMA = 1
 GITATTRIBUTES_PATH = ".specify/.gitattributes"
 GITATTRIBUTES_RULE = "scripts/bash/*.sh text eol=lf"
+COPIES_DIR = ".specify/sdd-update/"
+COPY_SUFFIX = ".new"
+ORIGINS = ("speckit", "sdd-init", "sdd-update")
 
 NEXT_STEPS = (
     "Next: run /sdd-grill to be questioned until the constitution and specs are decided.",
@@ -282,6 +285,22 @@ def is_recordable_dir(path: object) -> bool:
     return len(parts) >= 3 and parts[:2] == [".claude", "skills"] and _is_speckit_skill(parts[2])
 
 
+def _copy_rule_problem(path: str, origin: str, staged_executable: bool) -> str | None:
+    """Why an entry breaks the rules for sdd-update's comparison copies, or None.
+
+    Copies (origin sdd-update) live under .specify/sdd-update/, end in .new and are
+    never staged; nothing else may live there.
+    """
+    inside = path.startswith(COPIES_DIR)
+    if origin != "sdd-update":
+        return f"is under {COPIES_DIR} but its origin is {origin}" if inside else None
+    if not inside or not path.endswith(COPY_SUFFIX) or len(path) <= len(COPIES_DIR) + len(COPY_SUFFIX):
+        return f"comes from sdd-update but is not a {COPIES_DIR}<path>{COPY_SUFFIX} copy"
+    if staged_executable:
+        return "comes from sdd-update but is marked as staged"
+    return None
+
+
 def serialize_record(record: Record) -> bytes:
     data = {
         "schema": SCHEMA,
@@ -347,10 +366,13 @@ def load_record(root: Path) -> Record | None:
         sha = raw.get("sha256")
         if not isinstance(sha, str) or not _SHA256.fullmatch(sha):
             raise unreadable(f"the entry for {raw['path']} has no valid sha256")
-        if raw.get("origin") not in ("speckit", "sdd-init"):
+        if raw.get("origin") not in ORIGINS:
             raise unreadable(f"the entry for {raw['path']} has an unknown origin")
         if not isinstance(raw.get("staged_executable"), bool):
             raise unreadable(f"the entry for {raw['path']} has no staged_executable flag")
+        problem = _copy_rule_problem(raw["path"], raw["origin"], raw["staged_executable"])
+        if problem:
+            raise unreadable(f"the entry for {raw['path']} {problem}")
         entries.append(Entry(raw["path"], sha, raw["origin"], raw["staged_executable"]))
     if any(not isinstance(d, str) for d in raw_dirs):
         raise unreadable("created_dirs holds something that is not a path")
@@ -505,33 +527,87 @@ def _blocked_parent(root: Path, path: str) -> str | None:
     return None
 
 
+# Shared with sdd-update, which loads this file: the parts of the output that name the skill.
+
+
+def missing_tools() -> list[str]:
+    return sorted(name for name in REQUIRED_TOOLS if find_tool(name) is None)
+
+
+def report_missing_tools(missing: list[str], skill: str = "sdd-init", nothing: str = "created") -> None:
+    """The missing lines, the summary and the stderr details for missing required tools."""
+    git_bash_missing = "bash" in missing and is_windows()
+    for name in missing:
+        emit("missing", f"{name} ({GIT_BASH_NOTE})" if name == "bash" and git_bash_missing else name)
+    print(f"Missing required tools. Nothing was {nothing}. Install them and run /{skill} again.")
+    error(
+        f"error: required tools are missing: {', '.join(missing)}",
+        f"Install them, make sure they are on PATH, then run /{skill} again. "
+        "On Windows, bash is Git Bash, which comes with Git for Windows.",
+        GIT_BASH_HELP if git_bash_missing else "",
+    )
+
+
+def report_invalid_record(exc: InvalidRecord, skill: str = "sdd-init") -> None:
+    """The stderr lines for a record that exists but cannot be used."""
+    error(
+        f"error: {RECORD_PATH} is not a record this version of {skill} can use: {exc.reason}.",
+        "Nothing was changed. The file may belong to another tool or a newer sdd-init; "
+        f"move it away or restore it, then run /{skill} again.",
+    )
+
+
+def failure_reason(exc: Exception) -> str:
+    """One line saying why getting the version or running the official tool failed."""
+    return _one_line(exc.reason if isinstance(exc, StepFailed) else str(exc)) or type(exc).__name__
+
+
+def report_unavailable(exc: Exception, skill: str = "sdd-init", nothing: str = "created") -> None:
+    """The summary and the stderr details when the version or the official tool is not available."""
+    reason = failure_reason(exc)
+    print(
+        f"Could not get the latest stable Spec Kit release: {reason}. Nothing was {nothing}. "
+        f"Check the network connection and run /{skill} again."
+    )
+    error(
+        f"error: {reason}",
+        getattr(exc, "detail", ""),
+        f"Nothing was {nothing}. Check the network connection and that uv can download "
+        f"{PACKAGE} from PyPI, then run /{skill} again. "
+        f"{skill} does not retry and does not install Spec Kit any other way.",
+    )
+
+
+def write_own_gitattributes(staging: Path) -> Path:
+    """Write sdd-init's own .specify/.gitattributes into the staging directory and return its path."""
+    own = staging / "own" / "gitattributes"
+    own.parent.mkdir(parents=True, exist_ok=True)
+    own.write_bytes((GITATTRIBUTES_RULE + "\n").encode("utf-8"))
+    return own
+
+
+def scripts_without_lf_eol(root: Path, scripts) -> list[str]:
+    """The given .sh paths whose effective eol in git is not lf, sorted."""
+    return sorted(p for p in scripts if effective_eol(root, p) != "lf")
+
+
 def cmd_init(resolve_version, run_official) -> int:
-    missing = sorted(name for name in REQUIRED_TOOLS if find_tool(name) is None)
+    missing = missing_tools()
     if missing:
-        git_bash_missing = "bash" in missing and is_windows()
-        for name in missing:
-            emit("missing", f"{name} ({GIT_BASH_NOTE})" if name == "bash" and git_bash_missing else name)
-        print("Missing required tools. Nothing was created. Install them and run /sdd-init again.")
-        error(
-            f"error: required tools are missing: {', '.join(missing)}",
-            "Install them, make sure they are on PATH, then run /sdd-init again. "
-            "On Windows, bash is Git Bash, which comes with Git for Windows.",
-            GIT_BASH_HELP if git_bash_missing else "",
-        )
+        report_missing_tools(missing)
         return EXIT_MISSING_TOOLS
 
     root = find_project_root(Path.cwd())
     try:
         record = load_record(root)
     except InvalidRecord as exc:
-        error(
-            f"error: {RECORD_PATH} is not a record this version of sdd-init can use: {exc.reason}.",
-            "Nothing was changed. The file may belong to another tool or a newer sdd-init; "
-            "move it away or restore it, then run /sdd-init again.",
-        )
+        report_invalid_record(exc)
         return EXIT_FAILED
 
-    if record and record.status == "complete" and all((root / e.path).is_file() for e in record.entries):
+    # sdd-update's comparison copies may be deleted at any time; they never count as missing.
+    if record and record.status == "complete" and all(
+        (root / e.path).is_file() for e in record.entries if e.origin != "sdd-update"
+    ):
         pending = unstaged_scripts(root, record.entries) if is_git_work_tree(root) else []
         if not pending:
             print(f"Spec Kit {record.speckit_version} is already initialized. Nothing changed.")
@@ -549,27 +625,13 @@ def cmd_init(resolve_version, run_official) -> int:
             _check_generated_version(out_dir, version)
             generated = _generated_files(out_dir)
         except Exception as exc:
-            reason = _one_line(exc.reason if isinstance(exc, StepFailed) else str(exc)) or type(exc).__name__
-            print(
-                f"Could not get the latest stable Spec Kit release: {reason}. Nothing was created. "
-                "Check the network connection and run /sdd-init again."
-            )
-            error(
-                f"error: {reason}",
-                getattr(exc, "detail", ""),
-                "Nothing was created. Check the network connection and that uv can download "
-                f"{PACKAGE} from PyPI, then run /sdd-init again. "
-                "sdd-init does not retry and does not install Spec Kit any other way.",
-            )
+            report_unavailable(exc)
             return EXIT_UNAVAILABLE
 
         sources = {path: out_dir / path for path in generated}
         origins = {path: "speckit" for path in generated}
         if GITATTRIBUTES_PATH not in sources:
-            own = staging / "own" / "gitattributes"
-            own.parent.mkdir()
-            own.write_bytes((GITATTRIBUTES_RULE + "\n").encode("utf-8"))
-            sources[GITATTRIBUTES_PATH] = own
+            sources[GITATTRIBUTES_PATH] = write_own_gitattributes(staging)
             origins[GITATTRIBUTES_PATH] = "sdd-init"
 
         return _apply_init(root, record, version, sources, origins)
@@ -662,7 +724,7 @@ def _apply_init(root: Path, record: Record | None, version: str, sources: dict, 
     warn = False
     if GITATTRIBUTES_PATH in skip and origins[GITATTRIBUTES_PATH] == "sdd-init":
         scripts = [p for p in sources if p.endswith(".sh")] or [".specify/scripts/bash/check.sh"]
-        warn = not in_git or any(effective_eol(root, p) != "lf" for p in scripts)
+        warn = not in_git or bool(scripts_without_lf_eol(root, scripts))
 
     entries = {path: entry for path, entry in recorded.items() if os.path.lexists(root / path)}
     # .sh copied by an earlier run that never reached the git index are staged with the new ones.

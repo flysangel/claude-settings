@@ -1660,3 +1660,147 @@ def test_remove_unstages_what_a_later_init_staged(runner, sdd_init, make_project
     assert code == 0
     assert of(out, "unstaged") == [line("unstaged", p) for p in OFFICIAL_SH]
     assert index(root) == {} and status(root) == ""
+
+
+# ============================ 004: entries written by sdd-update (comparison copies)
+
+COPY_OF_PLAN = ".specify/sdd-update/.specify/templates/plan-template.md.new"
+
+
+def with_entry(**fields) -> dict:
+    data = valid_record_dict()
+    data["entries"].append(
+        {"path": COPY_OF_PLAN, "sha256": "e" * 64, "origin": "sdd-update", "staged_executable": False, **fields}
+    )
+    return data
+
+
+def test_record_accepts_comparison_copies_from_sdd_update(sdd_init, tmp_path):
+    write_raw_record(tmp_path, with_entry())
+
+    record = sdd_init.load_record(tmp_path)
+
+    copy = {e.path: e for e in record.entries}[COPY_OF_PLAN]
+    assert copy.origin == "sdd-update" and copy.staged_executable is False
+    # Same schema, same key order and sorting when written back.
+    sdd_init.write_record(tmp_path, record)
+    parsed = json.loads((tmp_path / RECORD).read_bytes().decode("utf-8"), object_pairs_hook=list)
+    assert [k for k, _ in parsed] == ["schema", "status", "speckit_version", "init_options", "entries", "created_dirs"]
+    data = read_record(tmp_path)
+    assert data["schema"] == 1
+    assert [e["path"] for e in data["entries"]] == sorted(e["path"] for e in data["entries"])
+    assert [list(e) for e in data["entries"]] == [["path", "sha256", "origin", "staged_executable"]] * 2
+
+
+def _other_origin_under_copies() -> dict:
+    data = valid_record_dict()
+    data["entries"][0]["path"] = ".specify/sdd-update/.specify/templates/a.md.new"
+    return data
+
+
+BAD_COPY_RECORDS = {
+    "copy outside sdd-update": with_entry(path=".specify/templates/plan-template.md.new"),
+    "copy without .new": with_entry(path=".specify/sdd-update/.specify/templates/plan-template.md"),
+    "copy staged": with_entry(staged_executable=True),
+    "copy is the directory itself": with_entry(path=".specify/sdd-update/.new"),
+    "speckit under sdd-update": _other_origin_under_copies(),
+    "sdd-init under sdd-update": with_entry(origin="sdd-init"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(BAD_COPY_RECORDS))
+def test_records_breaking_the_copy_rules_are_invalid(sdd_init, tmp_path, name):
+    write_raw_record(tmp_path, BAD_COPY_RECORDS[name])
+
+    with pytest.raises(sdd_init.InvalidRecord) as info:
+        sdd_init.load_record(tmp_path)
+
+    # Treated like an unknown schema.
+    assert info.value.kind == "unreadable"
+
+
+@pytest.mark.parametrize("name", sorted(BAD_COPY_RECORDS))
+def test_init_and_remove_refuse_records_breaking_the_copy_rules(runner, make_project, name):
+    root = make_project(git=False)
+    write_raw_record(root, BAD_COPY_RECORDS[name])
+    write_tree(root, {".specify/templates/a.md": "x\n", COPY_OF_PLAN: "copy\n"})
+    before = snap(root, with_mtime=True)
+
+    code, out, err = runner.run(root, "init")
+
+    assert code == 1
+    assert ".specify/sdd-init.json" in err
+    assert snap(root, with_mtime=True) == before
+    assert runner.version_calls == 0 and runner.official_versions == []
+
+    code, out, err = runner.run(root, "remove")
+
+    assert code == 0
+    assert out == [NOTHING_REMOVED]
+    assert snap(root, with_mtime=True) == before
+
+
+def add_copy_entry(sdd_init, root: Path, path: str, content: bytes, write: bool = True) -> None:
+    """Add a comparison copy to the record, the way sdd-update writes one."""
+    record = sdd_init.load_record(root)
+    if write:
+        write_tree(root, {path: content})
+    record.entries.append(sdd_init.Entry(path, sdd_init.content_hash(content), "sdd-update", False))
+    parts = path.split("/")[:-1]
+    record.created_dirs.extend("/".join(parts[:depth]) for depth in range(2, len(parts) + 1))
+    sdd_init.write_record(root, record)
+
+
+@pytest.mark.parametrize("git", [True, False])
+def test_missing_comparison_copy_still_counts_as_fully_initialized(runner, sdd_init, make_project, git):
+    root = make_project(git=git)
+    runner.run(root, "init")
+    add_copy_entry(sdd_init, root, COPY_OF_PLAN, b"new plan\n", write=False)
+    before = snap(root, with_mtime=True)
+    before_status = status(root) if git else None
+    runner.version_calls = 0
+    runner.official_versions.clear()
+
+    code, out, err = runner.run(root, "init")
+
+    assert code == 0
+    assert out == [f"Spec Kit {FAKE_VERSION} is already initialized. Nothing changed."]
+    assert runner.version_calls == 0 and runner.official_versions == []
+    assert snap(root, with_mtime=True) == before
+    if git:
+        assert status(root) == before_status
+
+
+def test_missing_spec_kit_file_is_still_restored_when_a_copy_is_missing_too(runner, sdd_init, make_project):
+    root = make_project(git=False)
+    runner.run(root, "init")
+    add_copy_entry(sdd_init, root, COPY_OF_PLAN, b"new plan\n", write=False)
+    gone = ".specify/templates/plan-template.md"
+    (root / gone).unlink()
+    runner.official_versions.clear()
+
+    code, out, _ = runner.run(root, "init")
+
+    assert code == 0
+    assert runner.official_versions == [FAKE_VERSION]
+    assert of(out, "created") == [line("created", gone)]
+    assert not (root / COPY_OF_PLAN).exists()
+    assert read_record(root)["status"] == "complete"
+
+
+def test_remove_deletes_unchanged_copies_keeps_changed_ones_and_their_empty_directories(runner, sdd_init, make_project):
+    root = make_project(git=False)
+    runner.run(root, "init")
+    unchanged = ".specify/sdd-update/.claude/skills/speckit-plan/SKILL.md.new"
+    add_copy_entry(sdd_init, root, unchanged, b"new skill\n")
+    add_copy_entry(sdd_init, root, COPY_OF_PLAN, b"new plan\n")
+    (root / COPY_OF_PLAN).write_bytes(b"my notes\n")
+
+    code, out, _ = runner.run(root, "remove")
+
+    assert code == 0
+    assert line("deleted", unchanged) in of(out, "deleted")
+    assert of(out, "kept") == [line("kept", f"{COPY_OF_PLAN} (modified since init)")]
+    assert not (root / unchanged).exists()
+    assert not (root / ".specify/sdd-update/.claude").exists()
+    assert (root / COPY_OF_PLAN).read_bytes() == b"my notes\n"

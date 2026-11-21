@@ -1,0 +1,134 @@
+{
+  "tool": "sdd-rebuild",
+  "schema": 1,
+  "generation": 3,
+  "rebuilt_at": "2026-11-22",
+  "source": {
+    "project": "my-tool",
+    "generation": 2,
+    "nutrients_schema": 1
+  },
+  "principles": [
+    {
+      "id": "cross-platform",
+      "origin": 1,
+      "title": "Windows 與 Linux 完全對等",
+      "text": "每個功能在 Windows 與 Linux MUST 有相同的行為。",
+      "revised": [],
+      "derived_from": [],
+      "source": "constitution"
+    }
+  ],
+  "features": [
+    {
+      "id": "deploy",
+      "origin": 1,
+      "title": "一行部署",
+      "summary": "維護者以一行指令把設定安裝到家目錄。",
+      "revised": [],
+      "derived_from": [],
+      "source": "spec",
+      "spec_dir": "specs/001-deploy",
+      "spec": "specs/001-deploy/spec.md",
+      "depends_on": [],
+      "requirements": [
+        {
+          "id": "deploy-no-overwrite",
+          "origin": 1,
+          "kind": "functional",
+          "text": "目標已有不是本工具建立的檔案時，MUST 停止並列出衝突，不覆蓋。",
+          "revised": [
+            2
+          ],
+          "derived_from": [],
+          "source": "spec"
+        }
+      ]
+    },
+    {
+      "id": "overview",
+      "origin": 3,
+      "title": "部署總覽",
+      "summary": "維護者可以一次看到已部署的檔案與差異。",
+      "revised": [],
+      "derived_from": [
+        "status",
+        "report"
+      ],
+      "source": "spec",
+      "spec_dir": "specs/002-overview",
+      "spec": "specs/003-report/spec.md",
+      "depends_on": [
+        "deploy"
+      ],
+      "requirements": [
+        {
+          "id": "overview-list",
+          "origin": 3,
+          "kind": "functional",
+          "text": "列出已部署的檔案，並標出與來源不同的檔案。",
+          "revised": [],
+          "derived_from": [
+            "status-list",
+            "report-diff"
+          ],
+          "source": "spec"
+        }
+      ]
+    }
+  ],
+  "lessons": [
+    {
+      "id": "atomic-write",
+      "origin": 1,
+      "kind": "pitfall",
+      "title": "寫入中斷留下半份檔案",
+      "text": "直接覆寫設定檔時中斷會留下半份內容；改為寫暫存檔再取代。",
+      "revised": [],
+      "derived_from": []
+    },
+    {
+      "id": "spec-first",
+      "origin": 2,
+      "kind": "decision",
+      "title": "先寫 spec 再實作",
+      "text": "重建後先補 spec 再實作，因為需求比較不會漂移。",
+      "revised": [],
+      "derived_from": []
+    }
+  ],
+  "discarded": [
+    {
+      "id": "deploy-symlink",
+      "kind": "requirement",
+      "origin": 1,
+      "discarded_in": 2,
+      "text": "以符號連結部署。",
+      "reason": "Windows 需要管理員權限，重建時捨棄。"
+    },
+    {
+      "id": "json-format",
+      "kind": "lesson",
+      "origin": 1,
+      "discarded_in": 2,
+      "text": "因為標準函式庫可以解析，設定使用 JSON。",
+      "reason": "維護者決定捨棄"
+    },
+    {
+      "id": "audit",
+      "kind": "feature",
+      "origin": 2,
+      "discarded_in": 3,
+      "text": "部署紀錄。",
+      "reason": "改用 git 歷史即可。"
+    },
+    {
+      "id": "audit-log",
+      "kind": "requirement",
+      "origin": 2,
+      "discarded_in": 3,
+      "text": "每次部署都記錄時間與變更的檔案。",
+      "reason": "改用 git 歷史即可。"
+    }
+  ]
+}
