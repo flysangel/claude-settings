@@ -638,7 +638,7 @@ NAMES = re.compile(r"`([a-z][a-z0-9_.-]*[a-z0-9])`")
 OTHER_NAMES = {
     # names of sdd-export, sdd-grill and Spec Kit that the skill refers to
     "files", "secret_files", "secret_hits", "write", "speckit-constitution", "speckit-specify", "sdd-export",
-    "sdd-grill", "sdd-rebuild", "tools/deploy.py", "home", "zh-tw", "spec.md", "saved", "uv",
+    "sdd-grill", "sdd-rebuild", "tools/deploy.py", "home", "zh-tw", "spec.md", "saved", "uv", "lineage-invalid",
 }
 
 
@@ -864,7 +864,7 @@ def test_an_unreadable_progress_is_not_opened():
 
 
 def test_no_export_from_here_when_the_old_lineage_holds_a_secret():
-    # sdd-export's own check prints the old lineage's content; stage 2 must not run it then.
+    # sdd-export refuses the same lineage (lineage-invalid) and would stop at its first step; stage 2 stops first.
     assert has_block(section(2), "old_lineage_errors", "`secret`", "stop")
 
 
@@ -943,3 +943,41 @@ def test_rule_4_edits_only_the_spec_claimed_for_the_feature():
     rule = next(b.lower() for b in blocks(section("rules")) if b.startswith("4."))
 
     assert "claim" in rule and "recorded" in rule
+
+
+# ------------- (F1) the new project's lineage is never opened; check gives what is needed of it
+
+
+def test_rebuilt_takes_the_generation_from_check_without_opening_the_lineage():
+    block = next(b.lower() for b in blocks(section(1)) if "`rebuilt`" in b)
+
+    assert "rebuilt_generation" in block
+    assert negated(block) and "open" in block and ".sdd-rebuild/lineage.json" in block
+
+
+def test_nothing_tells_you_to_read_the_new_lineage():
+    """A sentence that names lineage.json after read or open, about the new project, also says not to."""
+    for block in blocks(body()):
+        for sentence in re.split(r"(?<=[.:;])\s", block.lower()):
+            if re.search(r"\b(read|open)\b.*lineage\.json", sentence) and "old project" not in sentence:
+                assert negated(sentence), sentence
+    rule = next(b.lower() for b in blocks(section("rules")) if b.startswith("1. "))
+    assert "lineage.json" in rule and negated(rule)
+
+
+def test_rebuild_conflict_tells_files_apart_from_an_unusable_lineage():
+    block = next(b.lower() for b in blocks(section(1)) if "`rebuild-conflict`" in b)
+
+    assert "rebuild_conflicts" in block and "rebuild_errors" in block
+    secret = block[block.index("`secret`"):]
+    assert ".sdd-rebuild/lineage.json" in secret and "remove" in secret and "path" in secret
+    assert negated(secret) and "open" in secret
+    # never a way out that loses the record of the generation
+    assert "delet" in block and negated(block[block.index("delet") - 40:block.index("delet")])
+
+
+def test_lineage_rebuild_conflict_follows_stage_1():
+    block = next(b.lower() for b in blocks(section(12)) if "`rebuild-conflict`" in b)
+
+    assert "rebuild_errors" in block and "stage 1" in block
+    assert "without opening" in block or (negated(block) and "open" in block)

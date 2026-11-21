@@ -59,8 +59,9 @@ These apply at every stage.
    know about the old project comes from the output of `check` (the nutrients and the state of its old lineage).
    The plan, tasks and code of the old project never reach the new project. The one exception is the export in
    stage 2, done under sdd-export's own rules and only after the maintainer agreed. In the new project, read only
-   the constitution (`.specify/memory/constitution.md`), `spec.md` files under `specs/` and `.sdd-rebuild/lineage.json`,
-   when a stage tells you to.
+   the constitution (`.specify/memory/constitution.md`) and `spec.md` files under `specs/`, when a stage tells you
+   to. Never open the new project's `.sdd-rebuild/lineage.json`: a hand edit may have put anything in it, and what
+   you need of it, `check` prints.
 2. **Never write to the old project.** Outside the confirmed export of stage 2, never create, change or delete
    anything in the old project, and never run any command there (git included): the old project may be the
    maintainer's working copy.
@@ -226,12 +227,21 @@ Do not try to work around a problem by writing, moving or deleting anything your
 - `reason` is `same-project`, `old-inside-new` or `new-inside-old`: the old project is this project, or one
   contains the other; writing in one would then change the other. Explain which, with both paths. Nothing was
   written. Stop.
-- `reason` is `rebuilt`: this project was rebuilt already (read `generation` from `.sdd-rebuild/lineage.json` to say
-  which generation it is). A project is rebuilt only once: to add requirements, use `/sdd-grill`; to make the next
+- `reason` is `rebuilt`: this project was rebuilt already; `rebuilt_generation` from `check` says which generation
+  it is (do not open `.sdd-rebuild/lineage.json` for it). A project is rebuilt only once: to add requirements, use `/sdd-grill`; to make the next
   generation, run `/sdd-export` in this project and rebuild into another new project. Nothing was written. Stop.
-- `reason` is `rebuild-conflict`: `.sdd-rebuild/` cannot be used by this skill. List `rebuild_conflicts` (files it
-  did not write); when the list is empty, `.sdd-rebuild/lineage.json` cannot be read or does not match the lineage
-  format. Ask the maintainer to deal with it. Nothing was written. Stop.
+- `reason` is `rebuild-conflict`: `.sdd-rebuild/` cannot be used by this skill. Two causes, told apart by
+  `rebuild_conflicts`:
+  - It lists paths: `.sdd-rebuild/` holds files this skill did not write. List them and ask the maintainer to move
+    or rename them.
+  - It is empty: `.sdd-rebuild/lineage.json` is this skill's file but cannot be used (it is not valid JSON, comes
+    from a newer version, or breaks the lineage rules). List the `check` and `path` of each entry of
+    `rebuild_errors`. An entry whose `check` is `secret` means that the text at that path, or a field name in the
+    object at that path, looks like a secret value, probably added by hand: ask the maintainer to remove it from
+    `.sdd-rebuild/lineage.json` themselves. Do not open that file to look for it; the path is all you report.
+    Otherwise ask the maintainer to restore the file, for example from git history.
+  In both cases never suggest deleting `.sdd-rebuild/` or the lineage: it is the record of this project's
+  generation, and the next export needs it. Nothing was written. Stop.
 - `reason` is `nutrients-conflict`: the old project's `.sdd-export/` holds files sdd-export did not create. List
   `conflicts` (paths in the old project) and ask the maintainer to deal with them in the old project. Nothing was
   written. Stop.
@@ -253,8 +263,8 @@ sdd-export's own instructions; doing so writes `.sdd-export/` into the old proje
 
 First, if `export_skill` from `check` is `false`, the sdd-export skill is not installed next to this one: tell the
 maintainer that it must be deployed for the export, that nothing was written, and stop. Likewise, if
-`old_lineage_errors` from `check` holds a `check` named `secret`, do not export from here: sdd-export's own `check`
-prints the old project's lineage as it is, value included. Tell the maintainer that the old project's
+`old_lineage_errors` from `check` holds a `check` named `secret`, do not export from here: sdd-export reads the same
+lineage and refuses it (`lineage-invalid`), so the export would stop at its first step. Tell the maintainer that the old project's
 `.sdd-rebuild/lineage.json` looks like it holds a secret value at that path, ask them to remove it there and run
 `/sdd-rebuild` again; nothing was written. Stop.
 
@@ -681,7 +691,9 @@ Outcomes:
 - `lineage-changed`: `.sdd-rebuild/lineage.json` exists with other content (perhaps it was put there by hand). Name
   its path; do not open it or quote its content, which may hold anything; never overwrite or change it yourself. Ask
   the maintainer to look at it. Stop.
-- `rebuild-conflict`: `.sdd-rebuild/` holds something this skill did not write (`rebuild_conflicts`). Show it. Stop.
+- `rebuild-conflict`: `.sdd-rebuild/` holds something this skill did not write (`rebuild_conflicts`), or its
+  `lineage.json` cannot be used (`rebuild_conflicts` is empty; `rebuild_errors` says why). Handle it as the same
+  outcome of stage 1, without opening the file and without suggesting to delete `.sdd-rebuild/`. Stop.
 - `invalid` (with `errors`): the confirmed progress cannot change, so this means the progress file was edited by
   hand. Show `errors`. Stop.
 - `internal` (with `errors`): sdd-export does not accept the composed lineage. This is a defect of sdd-rebuild: the

@@ -83,6 +83,8 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
   "specs": [{"dir": "specs/001-deploy", "number": "001"}],
   "rebuild_dir": "none",
   "rebuild_conflicts": [],
+  "rebuild_errors": [],
+  "rebuilt_generation": null,
   "progress": "present",
   "changed": [],
   "saved": { "...": "progress.json 的完整內容，或 null" },
@@ -109,6 +111,8 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 | `export_skill` | `<skill>/../sdd-export/SKILL.md` 是否存在（US4 的匯出要讀它） |
 | `speckit`、`missing`、`constitution`、`numbering`、`specs` | 同 005 的 `check` |
 | `rebuild_dir`、`rebuild_conflicts` | data-model「`.sdd-rebuild/`」；`conflict` 時列出不屬於本功能的路徑 |
+| `rebuild_errors` | `rebuild_dir` 為 `invalid` 時，006 `load_lineage` 對新專案 `lineage.json` 的錯誤（同 006 的 `errors` 格式，經同樣的取代：路徑或說明含機密樣式時為 `(not shown)`）；含機密樣式時每個命中一項 `check: "secret"` 與欄位路徑，不含值；其他情況 `[]` |
+| `rebuilt_generation` | `rebuild_dir` 為 `ours` 時新專案世代紀錄的 `generation`（整數；SKILL.md 以它說明第幾代，不開啟該檔）；其他情況 `null` |
 | `progress` | `"none"`、`"present"`、`"unreadable"`、`"conflict"` |
 | `changed` | 進度存在時，新專案指紋中改變的項目（`constitution`、`specs`、`head`） |
 | `saved` | 進度的完整內容（`present` 時；含機密樣式的進度是 `unreadable`，不輸出） |
@@ -217,7 +221,7 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 
 前提：進度已確認。步驟：
 
-1. `rebuild_dir` 為 `conflict` 或 `invalid`：結束碼 3、`rebuild-conflict`，不寫入。
+1. `rebuild_dir` 為 `conflict` 或 `invalid`：結束碼 3、`rebuild-conflict`，不寫入；輸出 `rebuild_conflicts` 與 `rebuild_errors`（同 `check`）。
 2. 執行 `verify`；不通過時 `mismatch-documents`，不寫入。
 3. 以快照與進度組成世代紀錄，依序執行三層驗證（research R6）：007 的檢查（含 `secret`）不通過時 `invalid`；
    006 的 `lineage_problems` 或 `generation_problems(L, L, None)` 不通過時 `internal`（輸出 `errors`），都不寫入。

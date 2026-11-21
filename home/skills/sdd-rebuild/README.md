@@ -13,7 +13,8 @@
 - 舊專案要先執行過 `/sdd-export`。還沒有養分時，本 skill 可以照 sdd-export 的規則代為匯出：匯出前後都會請你確認，
   而且只在舊專案寫入 `.sdd-export/`；你也可以選擇自己到舊專案執行 `/sdd-export` 再回來。
 - 只能由維護者輸入 `/sdd-rebuild` 啟動（`disable-model-invocation: true`），Claude 不會主動使用。
-- 一個專案只重建一次：新專案已有 `.sdd-rebuild/lineage.json` 時會停止。要加需求用 `/sdd-grill`；要再生下一代，
+- 一個專案只重建一次：新專案已有 `.sdd-rebuild/lineage.json` 時會停止，並告訴你這是第幾代（由腳本提供，Claude 不開啟該檔）。
+  該檔被手動加入看起來像機密的文字時，只告訴你是哪個欄位，請你自己移除。要加需求用 `/sdd-grill`；要再生下一代，
   在這個專案執行 `/sdd-export` 後另開新專案。
 
 ## 前置需求

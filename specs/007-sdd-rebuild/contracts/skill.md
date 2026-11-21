@@ -36,7 +36,8 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 ### 通則（任何階段都適用）
 
 1. **兩個專案**：目前目錄是新專案；舊專案只經由腳本讀取。MUST NOT 以 Read、Grep、Glob 或任何指令讀取舊專案的檔案（plan、tasks、程式碼、
-   spec 都不讀），唯一的例外是階段 2 的匯出（FR-004、FR-014；字樣：`old project`、`plan`、`tasks`）。
+   spec 都不讀），唯一的例外是階段 2 的匯出（FR-004、FR-014；字樣：`old project`、`plan`、`tasks`）。新專案只讀 constitution 與 `specs/`
+   下的 `spec.md`；MUST NOT 開啟新專案的 `.sdd-rebuild/lineage.json`（世代編號由 `check` 的 `rebuilt_generation` 提供）。
 2. **不修改舊專案**：除了階段 2 經維護者確認的匯出，MUST NOT 在舊專案建立、修改或刪除任何檔案，MUST NOT 在舊專案執行任何 git 指令以外的指令
    （FR-004；字樣：`never write`）。
 3. **確認前不寫入**：最終摘要確認之前，MUST NOT 呼叫 `speckit-*`、`claim`、`lineage`、`focus`，MUST NOT 以任何方式修改 constitution、spec、
@@ -52,7 +53,7 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
    維持養分的繁體中文（006 schema 1 固定）（字樣：`Traditional Chinese`）。
 8. **機密**：機密值 MUST NOT 出現在對話、進度、產生的文件與世代紀錄中；只記錄「需要什麼」（原則 V；字樣：`secret`）。
    腳本也掃描從舊專案與進度讀到的內容，命中時只給 `check: "secret"` 與欄位路徑；向維護者說明是哪個檔案、哪個路徑，
-   MUST NOT 為了找出值而開啟該檔案（舊專案的 `nutrients.json`、`lineage.json`、新專案的進度檔只經由腳本的輸出取得）。
+   MUST NOT 為了找出值而開啟該檔案（舊專案的 `nutrients.json`、`lineage.json`、新專案的進度檔與 `.sdd-rebuild/lineage.json` 只經由腳本的輸出取得）。
 9. **保存**：每一個決定之後以 `save` 保存完整進度（stdin，quoted heredoc），讓中斷後能接續（字樣：`save`、`heredoc`）。
 10. **維護者在確認前要求結束**：確認進度已保存，告訴維護者再執行 `/sdd-rebuild` 會接續、或在接續時選擇重新開始；
     不產生任何文件，停止（Edge Cases「維護者中途結束」）。
@@ -79,8 +80,8 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 | `old-required` | 詢問路徑（第 13 項） |
 | `old-missing`、`old-not-folder` | 回報路徑無效；請維護者確認路徑後再執行；停止（FR-019） |
 | `same-project`、`old-inside-new`、`new-inside-old` | 回報兩個路徑的關係（互相包含時在新專案寫入就會改到舊專案，或反之）；停止（Edge Cases） |
-| `rebuilt` | 說明這個專案已經重建過（第幾代）；一個專案只重建一次：要加需求用 `/sdd-grill`，要再生下一代就在這個專案 `/sdd-export` 後另開新專案；停止 |
-| `rebuild-conflict` | 列出 `rebuild_conflicts` 或錯誤；`.sdd-rebuild/` 不是本功能能使用的狀態，請維護者處理；停止 |
+| `rebuilt` | 說明這個專案已經重建過（第幾代，取自 `rebuilt_generation`；MUST NOT 為此開啟 `.sdd-rebuild/lineage.json`）；一個專案只重建一次：要加需求用 `/sdd-grill`，要再生下一代就在這個專案 `/sdd-export` 後另開新專案；停止 |
+| `rebuild-conflict` | `rebuild_conflicts` 不為空時列出那些不是本功能寫入的檔案，請維護者移走或改名；為空時是本功能的 `lineage.json` 無法使用，列出 `rebuild_errors` 的 `check` 與路徑（`secret` 時說明新專案的 `.sdd-rebuild/lineage.json` 在該路徑看起來含機密值，請維護者自行移除，MUST NOT 開啟該檔），其他原因請維護者還原該檔；MUST NOT 建議刪除 `.sdd-rebuild/` 或世代紀錄；停止 |
 | `nutrients-conflict` | 列出 `conflicts`（舊專案的 `.sdd-export/` 有不是 sdd-export 的檔案）；請維護者在舊專案處理；停止 |
 | `nutrients-unreadable`、`nutrients-invalid` | 列出 `nutrients_errors` 的欄位路徑；請維護者修正養分，或在舊專案再執行 `/sdd-export`；`check` 為 `secret` 時說明舊專案的 `.sdd-export/nutrients.json` 在該路徑看起來含機密值，請維護者在舊專案移除後重跑，MUST NOT 開啟該檔案；停止（FR-019） |
 | `nutrients-newer` | 說明養分來自較新的 sdd-export，請維護者更新 skill（重新部署本 repo 的 `home/`）；停止（Edge Cases） |
@@ -90,7 +91,7 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 15. 說明舊專案還沒有養分，將依 sdd-export 的規則對舊專案匯出，會在舊專案寫入 `.sdd-export/`（只有這個資料夾），匯出前後都需要維護者確認；
     以一題詢問：先匯出（建議）、我自己到舊專案執行 `/sdd-export` 後再回來、停止。
 16. `export_skill` 為 `false` 時不能匯出：說明需要部署 sdd-export，停止。`old_lineage_errors` 有 `check: "secret"` 時也不從這裡匯出
-    （006 的 `check` 會原樣印出舊世代紀錄）：說明舊專案的 `.sdd-rebuild/lineage.json` 在該路徑看起來含機密值，請維護者移除後重跑，停止。
+    （006 讀取同一份世代紀錄時會判為 `lineage-invalid`，匯出在第一步就會停下）：說明舊專案的 `.sdd-rebuild/lineage.json` 在該路徑看起來含機密值，請維護者移除後重跑，停止。
 17. 匯出的指示：以 Read 讀取 `${CLAUDE_SKILL_DIR}/../sdd-export/SKILL.md`，依它的「Rules for the whole run」與 Stage 1 至 Stage 9 執行，
     **只做下列替換**，其他規則（含機密、只讀、git 允許清單、一題一項）原樣遵守（字樣：`../sdd-export/SKILL.md`、`--project`、`-C`）：
     - 腳本是 `${CLAUDE_SKILL_DIR}/../sdd-export/scripts/sdd_export.py`，每個指令加上 `--project "<old.path>"`；
@@ -269,7 +270,7 @@ SKILL.md MUST 指示：告訴維護者發生了什麼、哪些已寫入（依進
 | 成功（含 `unchanged: true`） | 階段 13 |
 | `mismatch-documents` | 同階段 11 |
 | `lineage-changed` | `.sdd-rebuild/lineage.json` 在途中被寫入不同的內容：只指出路徑，MUST NOT 開啟或引用其內容（它可能是手動放入的）；不覆蓋；請維護者檢查；停止 |
-| `rebuild-conflict` | 列出；停止 |
+| `rebuild-conflict` | 同階段 1 的 `rebuild-conflict`（依 `rebuild_conflicts` 與 `rebuild_errors` 區分；不開啟該檔、不建議刪除）；停止 |
 | `invalid` | 確認後進度不可能再變，出現代表進度檔被手動修改；回報 `errors`；停止 |
 | `internal` | 回報 `errors`，說明這是 sdd-rebuild 的缺陷、世代紀錄沒有寫入、已產生的文件保留；請維護者回報；停止 |
 | `os-error` | 回報；世代紀錄沒有寫入（或與之前相同）；修正後再執行 `/sdd-rebuild` 會從這一步繼續；停止 |

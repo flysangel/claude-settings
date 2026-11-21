@@ -26,7 +26,7 @@
   | `"empty"` | 空的資料夾 |
   | `"ours"` | 只有上表的檔案（`.gitattributes` 可缺），`lineage.json` 存在且 006 的 `load_lineage` 為 `present` |
   | `"conflict"` | 路徑是檔案；有上表以外的項目；沒有 `lineage.json` 卻有其他檔案；`lineage.json` 的 `tool` 不是 `sdd-rebuild` |
-  | `"invalid"` | `lineage.json` 存在但 `load_lineage` 為 `unreadable`、`invalid` 或 `newer` |
+  | `"invalid"` | `lineage.json` 存在但 `load_lineage` 為 `unreadable`、`invalid` 或 `newer`（`invalid` 包含被手動加入機密樣式的情況；錯誤只有 `check` 與欄位路徑，輸出於 `check` 的 `rebuild_errors`） |
 
 - `.specify/feature.json` 不是本功能的檔案；只有 `focus` 改寫它的 `feature_directory`（原則 I 的例外，同 005）。
 - 舊專案：本功能的腳本只讀 `.sdd-export/nutrients.json`、`.sdd-export/README.md`（006 判斷手動編輯所需）與 `.sdd-rebuild/lineage.json`，
