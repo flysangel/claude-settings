@@ -69,7 +69,7 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 | `no-specs` | 說明先以 `/sdd-grill` 或 `/sdd-rebuild` 產生 spec，停止 |
 | `claude-missing` | 說明找不到 `claude` 指令、無法開子 session，停止；不親自實作 |
 | `conflict` | 說明 `.specify/sdd-drive/` 有不是本 skill 的檔案，請維護者確認；不刪除，停止 |
-| `state-unreadable` | 指出欄位路徑（不含值），說明紀錄只影響失敗次數與測試紀錄，可請維護者同意後 `clear`；未同意前停止 |
+| `state-unreadable` | 指出欄位路徑（不含值），說明紀錄影響失敗次數、測試與檢查紀錄，以及哪些 spec 是既有的基準；可請維護者同意後 `clear`，並說明清除後沒有任何 spec 是基準、已完成的 spec 會各再測試與對照檢查一次；未同意前停止；MUST NOT 建議手動刪除 `.specify/sdd-drive/`（D23） |
 | `running: true`、`driver.phase` 為 `running` 或 `resuming` | 回報已有執行中的流程、它正在處理的 spec 與階段、開始時間、是否為自動接續；不開第二個子 session、不 `finalize`；以背景執行 `watch` 接手（階段 3B）（FR-012、Edge Case） |
 | `running: true`、`driver.phase: waiting` | 依通則 13 回報正在等待用量重置：哪一份 spec 的哪個階段、上限種類、預計自動接續的時間、目前進度；說明維護者若要取消自動接續可以直接說；以背景執行 `watch` 接手（階段 3B）（D20） |
 | `running: true`、只有 `launch`（driver 正在取得鎖） | 以背景執行 `watch`（階段 3B） |
@@ -78,7 +78,7 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 | `dirty` 不為空且 `leftovers: false` | 列出路徑，說明子 session 會 commit，請維護者先自行提交或處理這些變更；不捨棄、不開子 session，停止（Edge Case、FR-015） |
 | `next.action: none` | 回報每份 spec 都已完成、沒有待處理的 spec；不開子 session，停止（US4-4） |
 | `git: false` | 說明不是 git repository，無法依版本紀錄判斷變更、子 session 不會 commit；繼續（Edge Case） |
-| `next.action` 為 `run`、`resume`、`test` | 宣告：要處理哪些 spec（`state` 不是 `done` 的，依編號）、從哪一份的哪個階段開始、已完成的有哪些、各 spec 的失敗次數；然後進入階段 3 或 4（US1-1） |
+| `next.action` 為 `run`、`resume`、`test` | 宣告：要處理哪些 spec（`state` 不是 `done` 的，依編號）、從哪一份的哪個階段開始、已完成的有哪些、哪些是既有的基準（`baseline: true`，只測試、不做對照檢查）、各 spec 的失敗次數；然後進入階段 3 或 4（US1-1） |
 
 ### 階段 2：處理被中斷的嘗試（`finalize`）
 
@@ -155,7 +155,8 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 
 | 結果 | 下一步 |
 |---|---|
-| `passed: true` | 回報這些 spec（`covers`）測試通過；尚未判定完成，下一步是對照檢查（`next.phase: check`）；回到階段 3 或 4 的開頭（FR-007、FR-023） |
+| `passed: true`，spec 是既有的基準（`baseline: true`） | 回報這些既有的基準測試通過、判定完成，不做對照檢查（維護者要驗證時可自行執行 Spec Kit 的對照檢查）；回到階段 3 或 4 的開頭（FR-025） |
+| `passed: true`，其他 spec | 回報這些 spec（`covers`）測試通過；尚未判定完成，下一步是對照檢查（`next.phase: check`）；回到階段 3 或 4 的開頭（FR-007、FR-023） |
 | `passed: false` | 停止，不開始後面的 spec；回報 spec、測試指令、結束碼、`output_tail` 的重點，以及失敗次數；說明修正後再次 `/sdd-drive` 會重新測試（FR-009、FR-010） |
 | `no-test-command` | 回報無法以測試確認完成（plan.md 沒有可執行的測試指令），不判定為完成，停止（Edge Case） |
 | `running`、`pending-finalize`、`not-next`、`dirty` 等 | 同階段 3 的對應列 |
