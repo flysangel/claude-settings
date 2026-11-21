@@ -204,8 +204,9 @@ def schema_is_newer(value) -> bool:
 
 # ------------------------------------------------------------------ secrets
 
-# The same patterns as sdd-grill, copied rather than loaded across skills. Deliberately conservative:
-# a safety net, not a replacement for the skill's instructions.
+# The same patterns as sdd-grill, copied rather than loaded across skills (this skill runs without sdd-grill), so
+# both call the same texts secrets; tests/unit/test_sdd_secret_patterns.py fails when the two copies differ.
+# Deliberately conservative: a safety net, not a replacement for the skill's instructions.
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
     re.compile(r"(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{20,}"),
@@ -213,9 +214,9 @@ SECRET_PATTERNS = [
     re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}"),
     re.compile(r"(?<![A-Za-z0-9])xox[abpr]-[A-Za-z0-9-]{10,}"),
     re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}"),
-    # Anchored at the start of the scheme (unlike sdd-grill's copy) so a long run of letters is scanned once,
-    # not once per letter; it matches the same lines.
-    re.compile(r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
+    # A URL with a user and a password. The scheme is the whole run of scheme characters before "://" and holds a
+    # letter; starting only where that run starts scans a long run once, not once per character.
+    re.compile(r"(?<![A-Za-z0-9+.-])[0-9+.-]*[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
     re.compile(r"(?i)(?<![A-Za-z])(password|secret|token|api[_-]?key)\s*[=:]\s*\S"),
 ]
 
@@ -342,6 +343,12 @@ SINGULAR = {"principles": "principle", "features": "feature", "requirements": "r
             "discarded": "discarded item"}
 
 
+TOP_LEVEL = "(top level)"
+NOT_SHOWN = "(not shown)"
+HIDDEN_DETAIL = "this message would repeat text that looks like a secret, so it is not shown"
+SECRET_KEY_DETAIL = "a field name here looks like a secret; remove that field"
+
+
 class Problem:
     """One error: the check that failed, the field path, a sentence that never repeats a secret value."""
 
@@ -352,13 +359,27 @@ class Problem:
         self.secret = secret
 
     def as_dict(self) -> dict:
-        return {"check": self.check, "path": self.path, "detail": self.detail}
+        # A last safety net: a path or a sentence that would repeat something looking like a secret (an id, a name)
+        # is replaced, never printed.
+        path = NOT_SHOWN if looks_like_secret(self.path) else self.path
+        detail = HIDDEN_DETAIL if looks_like_secret(self.detail) else self.detail
+        return {"check": self.check, "path": path, "detail": detail}
 
 
 def join(path: str, key) -> str:
     if isinstance(key, int):
         return f"{path}[{key}]"
     return f"{path}.{key}" if path else key
+
+
+def secret_key(key) -> bool:
+    """A field name that looks like a secret: it is reported at the path of the object that holds it."""
+    return isinstance(key, str) and looks_like_secret(key)
+
+
+def holder(path: str) -> str:
+    """The path of the object itself, as it is reported when one of its field names looks like a secret."""
+    return path or TOP_LEVEL
 
 
 PATH_TOKEN = re.compile(r"([^.\[\]]+)|\[(\d+)\]")
@@ -415,7 +436,9 @@ def check_keys(obj: dict, path: str, required, problems: list[Problem], forbidde
         if key not in obj:
             problems.append(Problem("field", join(path, key), f"the key {key} is missing"))
     for key in obj:
-        if key in forbidden:
+        if secret_key(key):
+            problems.append(Problem("secret", holder(path), SECRET_KEY_DETAIL, secret=True))
+        elif key in forbidden:
             problems.append(Problem("field", join(path, key), f"{key} is filled in by the script; leave it out"))
         elif key not in required:
             problems.append(Problem("field", join(path, key), f"{key} is not a field of the nutrients; remove it"))
@@ -468,7 +491,8 @@ def strings_of(value, path: str = ""):
         yield path, value
     elif isinstance(value, dict):
         for key, item in value.items():
-            yield from strings_of(item, join(path, key))
+            # Never build a path from a field name that looks like a secret; check_keys reports that name.
+            yield from strings_of(item, holder(path) if secret_key(key) else join(path, key))
     elif isinstance(value, list):
         for index, item in enumerate(value):
             yield from strings_of(item, join(path, index))
@@ -1081,6 +1105,9 @@ def load_nutrients(path: Path) -> tuple[str, dict | None, list[Problem]]:
     problems = structure_problems(data, draft=False)
     if is_int(data.get("schema")) and data["schema"] != SCHEMA:
         problems.append(Problem("field", "schema", f"must be {SCHEMA}"))
+    # Hand edits after the export may have added a secret: such nutrients are invalid, and only the field paths
+    # are reported, so that the value never reaches the output.
+    check_secrets(data, problems)
     check_evidence(data, None, problems)
     check_specs(data, None, problems)
     check_scope(data, None, problems)
@@ -1092,13 +1119,13 @@ def load_nutrients(path: Path) -> tuple[str, dict | None, list[Problem]]:
 def export_folder(root: Path) -> dict:
     """The state of .sdd-export/: export_dir, conflicts, nutrients, view, gitattributes, state, existing, errors."""
     folder = root / EXPORT_DIR
-    result = {"export_dir": "none", "conflicts": [], "nutrients": "none", "view": "none", "gitattributes": "missing",
-              "state": "none", "existing": None, "errors": []}
+    result = {"export_dir": "none", "conflicts": [], "nutrients": "none", "view": "none", "view_secret_lines": [],
+              "gitattributes": "missing", "state": "none", "existing": None, "errors": []}
     if not folder.exists() and not folder.is_symlink():
         return result
     if folder.is_symlink() or not folder.is_dir():
         return {**result, "export_dir": "conflict", "conflicts": [EXPORT_DIR], "nutrients": None, "view": None,
-                "gitattributes": None, "state": None}
+                "view_secret_lines": None, "gitattributes": None, "state": None}
     entries = sorted(folder.iterdir(), key=lambda p: p.name)
     strangers = [f"{EXPORT_DIR}/{entry.name}" for entry in entries
                  if entry.name not in OWN_FILES or entry.is_symlink() or not entry.is_file()]
@@ -1109,18 +1136,18 @@ def export_folder(root: Path) -> dict:
         strangers = [f"{EXPORT_DIR}/{entry.name}" for entry in entries]
     if strangers:
         return {**result, "export_dir": "conflict", "conflicts": strangers, "nutrients": None, "view": None,
-                "gitattributes": None, "state": None}
+                "view_secret_lines": None, "gitattributes": None, "state": None}
     status, data, problems = load_nutrients(nutrients_path)
     if status == "conflict":
         return {**result, "export_dir": "conflict", "conflicts": [f"{EXPORT_DIR}/{NUTRIENTS_NAME}"], "nutrients": None,
-                "view": None, "gitattributes": None, "state": None}
+                "view": None, "view_secret_lines": None, "gitattributes": None, "state": None}
     result.update(export_dir=status, existing=data, errors=problems)
     result.update(edit_state(folder))
     return result
 
 
 def edit_state(folder: Path) -> dict:
-    """nutrients, view, gitattributes and state, from the files and the README marker."""
+    """nutrients, view, view_secret_lines, gitattributes and state, from the files and the README marker."""
     nutrients_path, readme_path = folder / NUTRIENTS_NAME, folder / README_NAME
     nutrients_hash = content_hash(nutrients_path.read_bytes()) if nutrients_path.is_file() else None
     readme = normalize_newlines(readme_path.read_bytes()) if readme_path.is_file() else None
@@ -1143,6 +1170,9 @@ def edit_state(folder: Path) -> dict:
         view = "edited"
     else:
         view = "current" if marker[0] == nutrients_hash else "stale"
+    # The README's lines that look like secrets (numbers only), found as `files` finds secret_hits: a hand edit may
+    # have put one there, and stage 7 must then not read the file. Undecodable bytes are replaced, not reported.
+    secret_lines_of_view = secret_lines(readme.decode("utf-8", errors="replace")) if readme is not None else []
     attributes = folder / GITATTRIBUTES_NAME
     if not attributes.is_file():
         gitattributes = "missing"
@@ -1153,7 +1183,8 @@ def edit_state(folder: Path) -> dict:
     else:
         readme_hash = content_hash(readme) if readme is not None else ""
         state = hashlib.sha256(f"{nutrients_hash or ''}\n{readme_hash}".encode("ascii")).hexdigest()
-    return {"nutrients": nutrients, "view": view, "gitattributes": gitattributes, "state": state}
+    return {"nutrients": nutrients, "view": view, "view_secret_lines": secret_lines_of_view, "gitattributes": gitattributes,
+            "state": state}
 
 
 # ---------------------------------------------------------------- lineage
@@ -1216,8 +1247,10 @@ def load_lineage(path: Path) -> tuple[str, dict | None, list[Problem]]:
     if schema_is_newer(data.get("schema")):
         return "newer", None, []
     problems = lineage_problems(data)
+    # Like the nutrients: a lineage edited by hand to hold a secret is invalid, and only the paths are reported.
+    check_secrets(data, problems)
     if problems:
-        return "invalid", None, problems
+        return "invalid", None, sorted_problems(problems)
     return "present", data, []
 
 
@@ -1549,7 +1582,8 @@ def project_state(root: Path, inventory: bool) -> dict:
         "writable": os.access(writable_target, os.W_OK),
     }
     folder = export_folder(root)
-    state.update({key: folder[key] for key in ("export_dir", "nutrients", "view", "gitattributes", "state")})
+    state.update({key: folder[key] for key in ("export_dir", "nutrients", "view", "view_secret_lines", "gitattributes",
+                                               "state")})
     nulls = {"lineage": None, "generation": None, "existing_generation": None, "constitution": None, "specs": None,
              "lineage_missing_specs": None, "inventory": None, "existing": None, "lineage_content": None}
     if folder["export_dir"] == "conflict":
@@ -1604,8 +1638,8 @@ def command_check(io, project: Path, options: dict) -> int:
 
 
 CHECK_KEYS = (
-    "project", "git", "writable", "export_dir", "nutrients", "view", "gitattributes", "state", "lineage", "generation",
-    "existing_generation", "constitution", "specs", "lineage_missing_specs", "inventory", "existing", "lineage_content",
+    "project", "git", "writable", "export_dir", "nutrients", "view", "view_secret_lines", "gitattributes", "state",
+    "lineage", "generation", "existing_generation", "constitution", "specs", "lineage_missing_specs", "inventory", "existing", "lineage_content",
 )
 
 

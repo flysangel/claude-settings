@@ -56,6 +56,7 @@ uv run <skill>/scripts/sdd_export.py write    [--project <dir>] --expect <state>
   "export_dir": "ours",
   "nutrients": "unchanged",
   "view": "current",
+  "view_secret_lines": [],
   "gitattributes": "ok",
   "state": "<64 hex>",
   "lineage": "present",
@@ -90,6 +91,7 @@ uv run <skill>/scripts/sdd_export.py write    [--project <dir>] --expect <state>
 | `writable` | 依 `os.access` 推測能否在專案根目錄（或既有的 `.sdd-export/`）寫入；只是提示，實際以 `write` 為準 |
 | `export_dir` | `"none"`、`"empty"`、`"ours"`、`"conflict"`、`"unreadable"`、`"newer"`、`"invalid"` |
 | `nutrients`、`view` | 見 data-model「手動編輯的偵測」 |
+| `view_secret_lines` | `.sdd-export/README.md` 中符合機密樣式的行號（從 1 起算、含標記行；只有行號，不含內容），判斷方式同 `files` 的 `secret_hits`（無法以 UTF-8 解碼的位元組以替代字元處理，不中斷）；沒有 `README.md` 時為 `[]`，`.sdd-export/` 衝突時為 `null`。SKILL.md 階段 7 只在它為空時讀取 `README.md` |
 | `gitattributes` | `"ok"`、`"missing"`、`"edited"`；目錄不存在時 `"missing"` |
 | `state` | 見 data-model「`state`」 |
 | `lineage` | `"none"`、`"present"`、`"unreadable"`、`"newer"`、`"invalid"`、`"conflict"` |
@@ -103,6 +105,8 @@ uv run <skill>/scripts/sdd_export.py write    [--project <dir>] --expect <state>
 
 狀態不能匯出時（結束碼 3），仍輸出上述欄位中已能判定的部分，不能判定的為 `null`；另外有 `error`、`reason`，
 `export_dir` 為 `"invalid"` 或 `lineage` 為 `"invalid"` 時另有 `errors`（同 `validate` 的格式）。
+既有養分或世代紀錄含機密樣式時也是 `"invalid"`：`errors` 每個命中一項 `check: "secret"` 與欄位路徑，`detail` 不含值，
+`existing`、`lineage_content` 為 `null`，所以任何輸出（含 `validate`、`write` 的 `diff` 與轉述的錯誤）都不會帶出該值。
 `error` 的例子：`.sdd-export/ holds files sdd-export did not create; nothing was read or written`。
 
 `reason` 為 `conflict` 時另有 `conflicts`：不是本功能產生的路徑（相對於專案根目錄），讓 SKILL.md 能列給維護者看——
@@ -111,8 +115,9 @@ uv run <skill>/scripts/sdd_export.py write    [--project <dir>] --expect <state>
 既有養分無法使用（`nutrients-*`）或世代紀錄無法使用（`lineage-*`）時 `inventory` 為 `null`（不掃描專案）。
 `files`、`validate`、`write` 在結束碼 3 時輸出 `error`、`reason`，以及同樣條件下的 `conflicts` 或 `errors`。
 
-既有養分（`export_dir`）的驗證只看內容本身（欄位、`id`、範圍、程式碼區塊、相依、`confirmed` 要有依據、依據與路徑的格式），
-不檢查依據的檔案是否仍存在、也不做機密掃描：匯出之後專案的檔案本來就會變動，這些在下一次 `validate` 時才對照目前的專案檢查。
+既有養分（`export_dir`）的驗證只看內容本身（欄位、`id`、範圍、程式碼區塊、相依、`confirmed` 要有依據、依據與路徑的格式、
+字串與欄位名稱的機密樣式），不檢查依據的檔案是否仍存在：匯出之後專案的檔案本來就會變動，這在下一次 `validate` 時才對照目前的專案檢查。
+機密樣式則在讀取時就檢查：006 寫入時已攔截，命中只可能來自手動編輯，而印出既有養分會把值帶進對話。世代紀錄（`lineage`）同樣在讀取時掃描。
 
 ## files
 
@@ -172,7 +177,7 @@ uv run <skill>/scripts/sdd_export.py write    [--project <dir>] --expect <state>
 | 欄位 | 值 |
 |---|---|
 | `ok` | `errors` 為空時 `true` |
-| `errors` | `check` 名稱見 data-model；`path` 是欄位路徑；`detail` 是一句英文，**不含**被判為機密的值 |
+| `errors` | `check` 名稱見 data-model；`path` 是欄位路徑；`detail` 是一句英文，**不含**被判為機密的值。欄位名稱本身像機密時，`path` 是含有該欄位的物件路徑（最上層為 `(top level)`），`check` 為 `secret`；`path` 或 `detail` 會重複機密樣式時（例如看起來像金鑰的 `id`），分別以 `(not shown)` 與不含該值的句子取代 |
 | `counts` | 各區段的數量；`pending` 是待確認的項目數；`inherited` 是 `origin` 小於 `generation` 的有效項目數，`new` 是等於的 |
 | `diff` | 見 data-model「差異」；草稿無法解析、有 `field` 錯誤，或有 `secret` 錯誤（差異會重複草稿的文字）時為 `null` |
 

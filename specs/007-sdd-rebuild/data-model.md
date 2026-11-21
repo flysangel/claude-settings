@@ -26,7 +26,7 @@
   | `"empty"` | 空的資料夾 |
   | `"ours"` | 只有上表的檔案（`.gitattributes` 可缺），`lineage.json` 存在且 006 的 `load_lineage` 為 `present` |
   | `"conflict"` | 路徑是檔案；有上表以外的項目；沒有 `lineage.json` 卻有其他檔案；`lineage.json` 的 `tool` 不是 `sdd-rebuild` |
-  | `"invalid"` | `lineage.json` 存在但 `load_lineage` 為 `unreadable`、`invalid` 或 `newer` |
+  | `"invalid"` | `lineage.json` 存在但 `load_lineage` 為 `unreadable`、`invalid` 或 `newer`（`invalid` 包含被手動加入機密樣式的情況；錯誤只有 `check` 與欄位路徑，輸出於 `check` 的 `rebuild_errors`） |
 
 - `.specify/feature.json` 不是本功能的檔案；只有 `focus` 改寫它的 `feature_directory`（原則 I 的例外，同 005）。
 - 舊專案：本功能的腳本只讀 `.sdd-export/nutrients.json`、`.sdd-export/README.md`（006 判斷手動編輯所需）與 `.sdd-rebuild/lineage.json`，
@@ -84,10 +84,17 @@ Claude 送來的值被忽略（以既有值或腳本算出的值取代）。
 
 快照無法建立（舊專案的養分不是 `ours`）時 `save` 失敗，不寫入。
 
-**機密**（原則 V）：舊專案的兩個檔案在 006 寫入後仍可能被手動編輯，006 讀取時不檢查機密。007 以 006 的機密樣式（`SECRET_PATTERNS`）
+**機密**（原則 V）：舊專案的兩個檔案在 006 寫入後仍可能被手動編輯；006 讀取時也會掃描，007 再以 006 的機密樣式（`SECRET_PATTERNS`）
 掃描讀到的養分與舊世代紀錄的每個字串（欄位名稱也算）：養分命中時視為 `invalid`（不是 `ours`，因此不能建立快照）；舊世代紀錄命中時
-`lineage_state` 記為 `"invalid"`、`lineage` 為 `null`（上表因此只允許 `"skipped"`）。既有進度中任何字串命中時（掃描加入前建立、或被手動編輯），
-進度視為無法讀取。命中時只回報欄位路徑，值不出現在任何輸出與檔案中。
+`lineage_state` 記為 `"invalid"`、`lineage` 為 `null`（上表因此只允許 `"skipped"`）。既有進度中，`save` 掃描的欄位（Claude 送來的進度，
+含欄位名稱）或快照（`source`）有字串命中時（掃描加入前建立、或被手動編輯），進度視為無法讀取。讀取與寫入 MUST 對稱：`save`、`claim`、
+`lineage` 寫出的進度，之後經過讀取的指令一定讀得回來。腳本由新專案計算的欄位（`rebuilt_at`、`saved_at`、`fingerprint`、`baseline`、
+`lineage_written`）不做機密掃描（spec 資料夾的名稱可能剛好符合樣式），改為驗證它們是腳本寫出的確切格式，不符合就視為無法讀取：
+`fingerprint` 與 `baseline` 的 `constitution`、`specs` 同 005 data-model 規則 9（`head` 亦同）；`baseline.confirmed_counts` 恰有
+`governance`、`deferred`、`for_plan` 三個非負整數；`saved_at` 為 `YYYY-MM-DDTHH:MM:SSZ`；`rebuilt_at` 為 `YYYY-MM-DD` 或 `null`；
+`lineage_written` 為 64 個小寫十六進位字元或 `null`。`claim` 不記錄路徑符合機密樣式的資料夾（`specs/<名稱>` 或 `specs/<名稱>/spec.md`
+符合時；進度、世代紀錄與下一代的匯出都會掃描這個路徑），回 `secret`、不寫入，維護者把資料夾改成不符合樣式的名稱後再 `claim --dir`。
+命中時只回報欄位路徑，值不出現在任何輸出與檔案中。
 
 ### 目標（`target`、`discards`）
 

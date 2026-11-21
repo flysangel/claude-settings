@@ -54,7 +54,9 @@ These apply at every stage.
 1. **Stay read-only.** Read the project only with read tools (Read, Grep, Glob), and only the files that `files`
    lists plus what `check` prints. Two narrow exceptions: Glob may list folder names when you help the maintainer
    pick a scope in stage 2, and you may read `.sdd-export/README.md` when stage 7 asks you to merge the
-   maintainer's edits to it. Neither makes other files readable. Give Read and Grep one path from `files` at a
+   maintainer's edits to it, which it does only while `view_secret_lines` from `check` is empty. Neither makes other
+   files readable; in particular, never open `.sdd-export/nutrients.json` or `.sdd-rebuild/lineage.json`: what you
+   need of them, `check` prints. Give Read and Grep one path from `files` at a
    time, and never run Grep on the project root or on a folder: a search there also prints matching lines of the
    secret files and of the excluded folders, which would bring their values into the conversation.
 
@@ -206,15 +208,23 @@ by writing or deleting anything yourself:
   and run `/sdd-export` again. Nothing was written. Stop.
 - `reason` is `nutrients-unreadable` or `nutrients-invalid`: the existing `.sdd-export/nutrients.json` cannot be
   read or no longer matches the format, usually after a hand edit. List the field paths in `errors` (for
-  `nutrients-unreadable`, say the file is not valid UTF-8 JSON). Ask the maintainer to fix the file, or delete
-  `.sdd-export/` themselves if they do not need it, and run `/sdd-export` again. Never overwrite it. Nothing was
-  written. Stop.
+  `nutrients-unreadable`, say the file is not valid UTF-8 JSON). An error whose `check` is `secret` means that the
+  text at that path, or a field name in the object at that path, looks like a secret value: tell the maintainer
+  that `.sdd-export/nutrients.json` holds it at that path and ask them to remove it themselves. Do not open the file
+  to look for it: that would bring the value into the conversation, and the path is all the maintainer needs. Ask
+  the maintainer to fix the file, or delete `.sdd-export/` themselves if they do not need it, and run `/sdd-export`
+  again. After a fix, `check` passes and the existing nutrients are the starting point as usual; after a deletion,
+  the next run is a first export built from the project's files, and nothing of the old nutrients is carried over.
+  Never overwrite it. Nothing was written. Stop.
 - `reason` is `nutrients-newer` or `lineage-newer`: the nutrients or the lineage were written by a newer version of
   the tools. Ask the maintainer to update this skill and run it again; never guess at a newer format or overwrite
   it. Nothing was written. Stop.
 - `reason` is `lineage-unreadable`, `lineage-invalid` or `lineage-conflict`: `.sdd-rebuild/lineage.json` cannot be
   used (it is not valid JSON, it breaks the lineage rules, whose field paths are in `errors`, or another tool wrote
-  it). Explain which. Never treat the project as a first generation instead: that would cut the chain of
+  it). Explain which. An error whose `check` is `secret` means that the text at that path, or a field name in the
+  object at that path, looks like a secret value: tell the maintainer the path and ask them to remove it from
+  `.sdd-rebuild/lineage.json` themselves; do not open the file to look for it, which would bring the value into the
+  conversation. Never treat the project as a first generation instead: that would cut the chain of
   generations. Ask the maintainer to fix the lineage and run `/sdd-export` again. Never overwrite or change the
   lineage yourself. Nothing was written. Stop.
 - Exit code 1, or exit code 3 with any other reason: show `error`, say that nothing was written, and stop.
@@ -498,9 +508,19 @@ Present the whole result before asking for the one confirmation that allows writ
   say this is the first export.
 
 If `view` from `check` is `"edited"`, someone changed `.sdd-export/README.md` by hand. Tell the maintainer that
-writing regenerates that file from the nutrients and will overwrite their changes, and ask whether to merge those
-changes into the draft (you may read the file to do so) or let them go. Merging changes the draft: validate it again
-(stage 6) before you continue.
+writing regenerates that file from the nutrients and will overwrite their changes. What comes next depends on
+`view_secret_lines` from the same `check`:
+
+- It is empty: ask whether to merge those changes into the draft (you may read the file to do so) or let them go.
+  Merging changes the draft: validate it again (stage 6) before you continue.
+- It lists line numbers: those lines of the README look like they hold a secret value, so do not open the file at
+  all; reading it would bring the value into the conversation. Tell the maintainer the line numbers and ask with
+  AskUserQuestion: they remove those lines themselves and you check again (recommended), or let the README changes
+  go. Once they say the lines are removed, run `check` again: if it exits with 3, handle it as in stage 1;
+  otherwise keep its `state` for stage 8, run `validate` again with the draft (it compares with the current
+  `existing`; handle errors as in stage 6), and go through this stage again from the start with the new `diff`,
+  `view` and `view_secret_lines` (they may still list lines; then say so and ask again). Letting the changes go
+  needs nothing from the file: `write` regenerates it, and the `state` from `check` is all `--expect` needs.
 
 Then ask one question with AskUserQuestion: confirm and write (recommended), change something, or stop.
 

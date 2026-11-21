@@ -35,7 +35,8 @@
 
 ### 通則（任何階段都適用）
 
-1. **只讀**：讀取只用讀取工具（Read、Grep、Glob），範圍限於 `files` 的清單與 `check` 輸出的內容；Read 與 Grep 一次指定 `files`
+1. **只讀**：讀取只用讀取工具（Read、Grep、Glob），範圍限於 `files` 的清單與 `check` 輸出的內容（例外：階段 7 在 `view_secret_lines` 為空時可讀取 `.sdd-export/README.md`；
+   MUST NOT 開啟 `.sdd-export/nutrients.json` 與 `.sdd-rebuild/lineage.json`，需要的內容由 `check` 輸出）；Read 與 Grep 一次指定 `files`
    中的一個路徑，MUST NOT 對專案根目錄或資料夾執行 Grep（搜尋結果會帶出機密檔案與排除範圍中相符的行）。允許的指令只有本 skill 的腳本
    與下列確切形式的只讀 git 指令（允許清單，不會輸出任何檔案的內容）：`git --no-pager log --oneline -n <n> [-- <path>]`、
    `git --no-pager log --stat -n <n> [<commit>] [-- <path>]`、`git --no-pager ls-files`、`git --no-pager blame -- <path>`
@@ -69,9 +70,9 @@
 |---|---|
 | `uv` 不存在或腳本無法執行 | 回報原因（需要安裝 `uv`），停止 |
 | 結束碼 3，`reason: "conflict"` | 列出 `.sdd-export/` 中不是本功能產生的內容，說明不會覆蓋；請維護者移走或改名後再執行；停止（Edge Cases、原則 III） |
-| 結束碼 3，`nutrients-unreadable` 或 `nutrients-invalid` | 說明既有養分無法讀取，列出 `errors` 的欄位路徑；請維護者修正（或自行刪除 `.sdd-export/`）後再執行；停止。MUST NOT 覆蓋 |
+| 結束碼 3，`nutrients-unreadable` 或 `nutrients-invalid` | 說明既有養分無法讀取，列出 `errors` 的欄位路徑；`check: "secret"` 的錯誤指出 `.sdd-export/nutrients.json` 的哪個欄位像機密，請維護者自行移除，MUST NOT 為了找出它而開啟該檔；請維護者修正（或自行刪除 `.sdd-export/`，下一次就是不帶舊內容的第一次匯出）後再執行；停止。MUST NOT 覆蓋 |
 | 結束碼 3，`nutrients-newer` 或 `lineage-newer` | 說明養分或世代紀錄來自較新版本的 skill，請維護者更新 skill 後再執行；停止 |
-| 結束碼 3，`lineage-unreadable`、`lineage-invalid`、`lineage-conflict` | 說明世代紀錄無法讀取，列出原因；MUST NOT 把專案當成第一代；請維護者修正後再執行；停止 |
+| 結束碼 3，`lineage-unreadable`、`lineage-invalid`、`lineage-conflict` | 說明世代紀錄無法讀取，列出原因（`check: "secret"` 時指出 `.sdd-rebuild/lineage.json` 的欄位路徑，請維護者自行移除，MUST NOT 開啟該檔）；MUST NOT 把專案當成第一代；請維護者修正後再執行；停止 |
 | 結束碼 0，`writable: false` | 告訴維護者專案看起來無法寫入：可以照常整理草稿，但最後可能無法寫入；以一題詢問繼續（建議）或停止 |
 | 結束碼 0，`existing_generation` 不是 `null` 且不等於 `generation` | 列出兩者與可能的原因（世代紀錄被移除、專案是從其他專案複製而來）；以一題詢問：停止並檢查（建議）、或以 `generation` 繼續 |
 | 結束碼 0，`nutrients: "edited"` 或 `"unknown"` | 告訴維護者既有養分在上次匯出後被修改過（或無法判斷）；之後把其中的內容當成維護者的決定（見階段 4），繼續 |
@@ -173,7 +174,10 @@
 
 33. 呈現整體摘要（`counts`、待確認的項目、捨棄的項目）；`diff.base` 為 `nutrients` 時呈現差異：新增、移除、修改（新舊值），
     沒有差異時明說（字樣：`diff`）。
-34. `view` 為 `edited` 時，告訴維護者寫入會重新產生 `.sdd-export/README.md` 而蓋掉其中的手動修改，請他決定把那些修改併入草稿或放棄。
+34. `view` 為 `edited` 時，告訴維護者寫入會重新產生 `.sdd-export/README.md` 而蓋掉其中的手動修改。`view_secret_lines` 為空時，
+    請他決定把那些修改併入草稿（可以讀取該檔）或放棄；不為空時 MUST NOT 開啟該檔，告訴維護者那幾行的行號，以一題詢問：
+    由維護者自行移除後重新 `check`（建議；之後以新的 `state` 再 `validate` 並重新經過本階段），或放棄手動修改（`write` 重新產生，
+    不需要該檔的內容）。
 35. 以一題詢問：確認寫入（建議）、修改、或停止。
 
 | 結果 | 下一步 |
@@ -218,7 +222,7 @@ MUST 以繁體中文撰寫，並包含：
 - 世代：沒有 `.sdd-rebuild/lineage.json` 時是第一代；有時沿用它的世代，繼承的項目保留來源世代。
 - 再次匯出：更新同一份養分、呈現差異；手動編輯過的內容會先詢問。
 - 大型專案：先選範圍、可分批匯出。
-- 機密：不開啟的檔案類型、寫入前的樣式攔截，以及它的限制（無法涵蓋所有機密）。
+- 機密：不開啟的檔案類型、寫入前的樣式攔截與讀取既有養分、世代紀錄時的掃描，以及它的限制（無法涵蓋所有機密）。
 - 不做的事：不修改 `.sdd-export/` 以外的任何檔案、不執行建置或測試、不呼叫 Spec Kit、不提交、不刪除。
 
 ## scripts/sdd_export.py

@@ -36,6 +36,8 @@ MUST NOT 有 `disable-model-invocation`（FR-001：Claude MAY 主動使用）。
    然後停止。MUST NOT 自己執行 `/sdd-init`，MUST NOT 建立或修改 `.specify/` 與 `speckit-*` 的檔案（FR-019；字樣：`/sdd-init`、`.specify/`）。
    `uv` 不存在時同樣回報並停止。
 4. `progress` 為 `"conflict"` 或 `"unreadable"` 時回報原因；`unreadable` 時詢問維護者是否以 `clear` 清除後重新開始。
+   `unreadable` 的原因可能是進度含有像機密的內容：MUST NOT 開啟進度檔；告知維護者 `clear` 會刪除該檔，
+   另一個選擇是停止，由維護者自行移除後重新執行 `/sdd-grill`。
 
 ### 接續（FR-010、US3）
 

@@ -1108,3 +1108,59 @@ def test_stage_8_keeps_every_path_open():
     has_any(list_item(STAGES[8], '`reason` is `"os-error"`'), "may already hold the confirmed")
     has_any(list_item(STAGES[8], "wants to change the draft"), "go back to stage 5")
     assert "wants to change the draft" in eight
+
+
+# ------------------- secrets that hand edits put into the existing nutrients, the lineage or the README
+
+
+@pytest.mark.parametrize("reason, file", [("nutrients-invalid", ".sdd-export/nutrients.json"),
+                                          ("lineage-invalid", ".sdd-rebuild/lineage.json")])
+def test_stage_1_a_secret_in_the_existing_files_is_shown_by_path_only(reason, file):
+    branch = stage_1_branch(reason)
+    secret = part(branch, "`secret`")
+
+    has_all(secret, file, "path", "remove")
+    has_any(secret, "do not open", "never open")
+    has_any(secret, "into the conversation")
+
+
+def test_stage_1_re_export_after_a_secret_never_overwrites():
+    branch = stage_1_branch("nutrients-invalid")
+
+    has_all(branch, "never overwrite")
+    # Both ways out are spelled out: fixed by hand, or deleted and exported afresh without the old content.
+    has_any(branch, "after a fix")
+    has_all(branch, "first export", "nothing of the old nutrients")
+
+
+def sentences(content: str) -> list[str]:
+    return re.split(r"(?<=[.:;])\s", content)
+
+
+def test_skill_md_never_tells_you_to_read_the_nutrients_or_the_lineage():
+    """A sentence that tells you to read or open one of them (the verb before the name) also says not to."""
+    found = 0
+    for sentence in sentences(flat_body()):
+        if re.search(r"\b(read|open)\b.*(nutrients|lineage)\.json", sentence):
+            found += 1
+            assert re.search(r"\b(never|not|don't)\b", sentence) or "/sdd-rebuild" in sentence, sentence
+    assert found, "the rule that forbids opening them is missing"
+
+
+def test_rule_1_reads_the_readme_only_without_secret_lines():
+    rules = section(RULES)
+    exception = part(rules, "`.sdd-export/readme.md`", "never open")
+
+    has_all(exception, "stage 7", "view_secret_lines", "empty")
+
+
+def test_stage_7_does_not_open_a_readme_with_secret_lines():
+    seven = stage(7)
+    lines = part(seven, "it lists line numbers", "then ask one question")
+
+    has_any(lines, "do not open the file", "never open the file")
+    has_all(lines, "askuserquestion", "remove", "(recommended)", "check", "let the readme changes go", "stage 1")
+    # Letting the changes go needs nothing from the file; write regenerates it with the state from check.
+    has_all(lines, "regenerates", "--expect", "state")
+    empty = part(seven, "it is empty", "it lists line numbers")
+    has_all(empty, "merge", "read the file", "stage 6")

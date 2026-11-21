@@ -83,6 +83,14 @@ Claude 送來的值會被忽略。
 7. `spec_dir` 只有在 `phase` 為 `"confirmed"` 時可以不是 `null`；值必須是 `specs/` 之下的一層資料夾的相對路徑（`/` 分隔）。
 8. 已經 `confirmed` 且有任何 `spec_dir` 的進度，不能再改回 `"discussing"`（產生途中不能改決定，要先處理已產生的文件）。
 9. 沒有任何字串值符合機密樣式（R8）；錯誤訊息只指出欄位路徑，不印出值。
+   讀取已存的進度時也檢查 `save` 掃描的同一組欄位（Claude 送來的欄位，含欄位名稱）：命中表示進度被手動加入了像機密的內容，
+   `check` 判為 `unreadable`，不輸出內容。讀取與寫入 MUST 對稱：`save` 寫出的進度，之後經過讀取的指令一定讀得回來。
+   腳本寫入的欄位（`saved_at`、`fingerprint`、`baseline`）由專案的檔名與內容計算而來，`save` 不掃描，讀取時也不做機密掃描
+   （spec 資料夾的名稱可能剛好符合樣式，例如 `004-sk-learn-pipeline-integration`）；改為驗證它們是腳本寫出的確切格式，
+   不符合就判為 `unreadable`：`saved_at` 為 `YYYY-MM-DDTHH:MM:SSZ`；`constitution` 與 `specs` 的值為 64 個小寫十六進位字元
+   （`constitution` 可為 `null`）；`head` 為 40 或 64 個小寫十六進位字元或 `null`；`specs` 的鍵為 `specs/<名稱>/spec.md`，
+   `<名稱>` 是不含 `/`、不是 `.` 或 `..` 的一層資料夾名稱；鍵符合機密樣式時，該資料夾 MUST 目前存在於專案中且含 `spec.md`
+   （此時名稱本來就列在 `check` 的 `specs` 中，不增加新的輸出），否則表示被手動加入。
 
 ## 指紋（`fingerprint`）
 

@@ -30,7 +30,9 @@ uv run --with pytest pytest -v          # 全部（含 005、006 的既有測試
 | 不補入的對照 | `status-list` 可被重用（證明補入必要） |
 | 跨平台 | 以 006 的固定養分重建出的 `lineage.json` 等於 `tests/unit/fixtures/sdd_rebuild/` 的固定資料；CRLF 輸入結果相同 |
 | 舊專案只讀 | 每個指令執行前後，舊專案的檔案樹（名稱、大小、內容雜湊）相同 |
-| 舊專案被手動加入機密（T076） | 以自編的假權杖（例如 `ghp_` 加 24 個英數）寫進養分或舊世代紀錄的字串：`check` 只列 `check: "secret"` 與欄位路徑；養分 → `nutrients-invalid`、`save` 回 `source`；舊世代紀錄 → `old_lineage: "invalid"`、只能 `skipped`；含機密的既有進度 → `progress-unreadable`；每個指令的 stdout、stderr、進度與 `lineage.json` 都不含該值 |
+| 舊專案被手動加入機密（T076） | 以自編的假權杖（例如 `ghp_` 加 24 個英數）寫進養分或舊世代紀錄的字串：`check` 只列 `check: "secret"` 與欄位路徑；養分 → `nutrients-invalid`、`save` 回 `source`；舊世代紀錄 → `old_lineage: "invalid"`、只能 `skipped`；含機密的既有進度 → `progress-unreadable`；每個指令的 stdout、stderr、進度與 `lineage.json` 都不含該值；006 自己讀取同一份養分或世代紀錄時也判為 invalid，路徑與 007 相同 |
+| 新專案的世代紀錄被手動加入機密（F1） | 已重建的新專案：`check` 回 `rebuilt` 時帶 `rebuilt_generation`；世代紀錄含假權杖時改回 `rebuild-conflict`（`rebuild_dir: "invalid"`、`rebuild_conflicts` 為空），`rebuild_errors` 只有 `check: "secret"` 與欄位路徑；`lineage` 同樣回 `rebuild-conflict`；輸出都不含該值 |
+| 像機密的欄位名稱（F2） | `save` 的欄位名稱含假權杖（含句點、例如含帳密的 URL）時，`path` 是所在物件的路徑（`target`、`(top level)`、`target.features[0]`），`path` 與 `error` 都不含該值 |
 
 ## 腳本的手動檢查
 
@@ -63,10 +65,11 @@ uv run <repo>/home/skills/sdd-rebuild/scripts/sdd_rebuild.py check --old <舊專
 6. **新專案已有內容（FR-015）**：新專案已有 constitution 與 1 份 spec → 只提出差異；選擇修訂 constitution、把一個功能對應到既有 spec →
    既有 spec 未被改動，新 spec 編號接在後面，世代紀錄中該功能的 `spec_dir` 指向既有的資料夾。
 7. **錯誤**：新專案未導入 Spec Kit → 請先 `/sdd-init`；路徑不存在 → 回報並停止；舊專案就是新專案 → 回報並停止；
-   新專案已重建過 → 回報並停止；舊專案的世代紀錄被刪除（養分為第 2 代以上）→ 說明影響並詢問停止或略過。
+   新專案已重建過 → 回報是第幾代（取自 `check` 的 `rebuilt_generation`，Claude 沒有開啟 `.sdd-rebuild/lineage.json`）並停止；舊專案的世代紀錄被刪除（養分為第 2 代以上）→ 說明影響並詢問停止或略過。
 8. **舊專案被手動加入機密值（原則 V）**：在舊專案的 `.sdd-export/nutrients.json` 某個字串加入假權杖 → 說明是哪個檔案的哪個欄位路徑、
    請維護者移除後重跑，對話中不出現該值，Claude 沒有開啟該檔案；在舊世代紀錄加入 → 階段 3 說明並建議移除，選擇略過時進度與新專案的
-   `lineage.json` 都不含該值。
+   `lineage.json` 都不含該值。在已重建的新專案的 `.sdd-rebuild/lineage.json` 加入假權杖 → `/sdd-rebuild` 說明是該檔的哪個欄位路徑、
+   請維護者自行移除，沒有開啟該檔，也沒有建議刪除 `.sdd-rebuild/`。
 9. **不相干的 spec 資料夾（原則 III）**：確認後、第一個功能產生前，維護者自己建立 `specs/001-mine/spec.md`，或在另一個視窗以 `/speckit-specify`
    產生不相干的 spec（`.specify/feature.json` 指向它）→ 接續時 Claude 讀取候選的 `spec.md`，判斷不是這個功能的 spec，不認領、不修改它，
    為這個功能產生新的 spec 並在維護者確認後以 `claim --dir` 記錄；`verify` 把不相干的資料夾列為 `unexpected`。已記錄的 spec 被刪除後接續 →

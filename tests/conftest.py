@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -10,6 +11,17 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEPLOY_PY = REPO_ROOT / "tools" / "deploy.py"
+
+# Newer git versions start maintenance in the background after some commands. It creates and removes
+# files such as .git/objects/maintenance.lock while a test is taking a snapshot of the folder, which
+# made snapshot tests fail at random. Every git process the tests start, directly or through the
+# scripts under test, inherits these settings; they do not touch any configuration file.
+_GIT_TEST_CONFIG = {"maintenance.auto": "false", "gc.auto": "0", "gc.autoDetach": "false"}
+if "GIT_CONFIG_COUNT" not in os.environ:
+    os.environ["GIT_CONFIG_COUNT"] = str(len(_GIT_TEST_CONFIG))
+    for _index, (_key, _value) in enumerate(_GIT_TEST_CONFIG.items()):
+        os.environ[f"GIT_CONFIG_KEY_{_index}"] = _key
+        os.environ[f"GIT_CONFIG_VALUE_{_index}"] = _value
 
 
 def _load_deploy():
@@ -23,6 +35,23 @@ def _load_deploy():
 @pytest.fixture(scope="session")
 def deploy():
     return _load_deploy()
+
+
+def on_this_platform(names):
+    """Drop the folder names Windows cannot create (it forbids < > : " / \\ | ? * in a name)."""
+    if os.name != "nt":
+        return list(names)
+    return [name for name in names if not set(name) & set('<>:"/\\|?*')]
+
+
+def folder_sets_for_this_platform(sets):
+    """The same sets with the impossible names removed, without the duplicates that leaves behind."""
+    result = []
+    for names in sets:
+        usable = on_this_platform(names)
+        if usable not in result:
+            result.append(usable)
+    return result
 
 
 def write_tree(root: Path, files: dict[str, str | bytes]) -> None:
