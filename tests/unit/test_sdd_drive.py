@@ -861,3 +861,393 @@ def test_state_is_recomputed_from_the_files_every_time(m, tmp_path):
     assert status(m, root)["specs"][0]["state"] == "tasked"
     add_spec(root, "001-alpha", plan=True, tasks=(2, 1))
     assert status(m, root)["specs"][0]["state"] == "implementing"
+
+
+# ======================================================== T014 status
+
+
+def test_status_prerequisite_order(m, tmp_path, monkeypatch):
+    plain = tmp_path / "nothing"
+    plain.mkdir()
+    result = drive(m, plain, "status")
+    assert (result.code, result.json["reason"], result.json["speckit"]) == (3, "speckit-missing", "missing")
+    assert list(result.json)[:15] == ["speckit", "missing", "claude", "git", "branch", "own_dir", "running",
+                                      "running_attempt", "driver", "last_attempt", "pending_finalize", "dirty",
+                                      "leftovers", "specs", "next"]
+
+    partial = make_project(tmp_path, "partial", skills=("speckit-plan",))
+    result = drive(m, partial, "status")
+    assert (result.code, result.json["reason"]) == (3, "speckit-incomplete")
+    assert result.json["missing"] == ["speckit-tasks", "speckit-implement"]
+
+    empty = make_project(tmp_path, "empty")
+    assert drive(m, empty, "status").json["reason"] == "no-specs"
+
+    root = make_project(tmp_path, "full", specs={"001-alpha": {}})
+    monkeypatch.delenv("SDD_DRIVE_CLAUDE")
+    monkeypatch.setenv("PATH", str(tmp_path / "no-bin"))
+    result = drive(m, root, "status")
+    assert (result.code, result.json["reason"], result.json["claude"]) == (3, "claude-missing", "missing")
+
+
+def test_claude_found_on_path(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    name = "claude.exe" if os.name == "nt" else "claude"
+    (bin_dir / name).write_bytes(b"#!/bin/sh\n")
+    (bin_dir / name).chmod(0o755)
+    monkeypatch.delenv("SDD_DRIVE_CLAUDE")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    assert drive(m, root, "status").json["claude"] == "ok"
+
+
+def test_conflict_is_reported_after_claude_and_before_state(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    write_state(root, blank_state())
+    state_file(root).write_bytes(b"broken")
+    (root / ".specify/sdd-drive/stranger").write_bytes(b"x")
+    assert drive(m, root, "status").json["reason"] == "conflict"
+
+
+def test_next_is_decided_by_the_first_unfinished_spec_only(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True}, "002-beta": {}})
+    data = status(m, root)
+    assert data["next"]["spec"] == "001-alpha" and data["next"]["phase"] == "tasks"
+    assert [row["spec"] for row in data["specs"]] == ["001-alpha", "002-beta"]
+
+
+def test_next_run_fields_and_hints(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True}})
+    write_tree(root, {"specs/001-alpha/contracts/cli.md": "x", "specs/001-alpha/contracts/skill.md": "y"})
+    commit_all(root)
+    write_state(root, blank_state(attempts=[attempt(1, phase="tasks", outcome="failed",
+                                                    report={"status": "failed", "summary": "s",
+                                                            "failure": {"kind": "other", "step": "a", "reason": "b"}})]))
+    nxt = status(m, root)["next"]
+    assert list(nxt) == ["action", "spec", "phase", "branch", "session_id", "model", "failures", "last_outcome",
+                         "limit", "auto_resume", "test_command", "covers", "hints"]
+    assert (nxt["action"], nxt["spec"], nxt["phase"], nxt["branch"]) == ("run", "001-alpha", "tasks", "001-alpha")
+    assert nxt["failures"] == {"tasks": 1}
+    plan_bytes = (root / "specs/001-alpha/plan.md").stat().st_size
+    assert nxt["hints"] == {"requirements": 3, "user_stories": 2, "plan_bytes": plan_bytes, "contracts": 2,
+                            "tasks_total": 0, "tasks_open": 0, "phase_failures": 1, "models_used_this_run": ["opus"]}
+
+
+def test_next_none_when_every_spec_is_done(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (1, 1)}})
+    write_state(root, blank_state(baseline=["001-alpha"],
+                                  tests=[test_record("001-alpha", hash_of(m, root, "001-alpha"))]))
+    data = status(m, root)
+    assert data["specs"][0]["state"] == "done"
+    assert data["next"] == {key: ("none" if key == "action" else None) for key in data["next"]}
+
+
+def test_status_git_false_dirty_and_leftovers(m, tmp_path):
+    plain = make_project(tmp_path, "plain", git=False, specs={"001-alpha": {}})
+    data = status(m, plain)
+    assert (data["git"], data["dirty"], data["leftovers"]) == (False, [], False)
+    root = make_project(tmp_path, "repo", specs={"001-alpha": {}})
+    write_tree(root, {"mine.txt": "x"})
+    data = status(m, root)
+    assert data["dirty"] == ["mine.txt"] and data["leftovers"] is False
+
+
+def test_status_writes_nothing(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (2, 1)}})
+    write_state(root, blank_state(attempts=[attempt(1)]))
+    before = tree_snapshot(root)
+    for _ in range(2):
+        status(m, root)
+    assert tree_snapshot(root) == before
+
+
+def test_last_attempt_and_running_attempt(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    write_state(root, blank_state(attempts=[attempt(1, outcome="interrupted", detail={"code": "no-result", "paths": [], "text": None}),
+                                            attempt(2, outcome=None, started_at=T1)]))
+    with hold_lock(root):
+        data = status(m, root)
+    assert data["last_attempt"] == {"spec": "001-alpha", "phase": "plan", "outcome": "interrupted", "auto": False,
+                                    "limit": None, "auto_resume": None, "ended_at": T1}
+    assert data["running_attempt"] == {"spec": "001-alpha", "phase": "plan", "model": "opus", "started_at": T1,
+                                       "limit": None, "auto_resume": None}
+    assert data["next"]["action"] == "wait" and data["next"]["spec"] == "001-alpha"
+
+
+# ======================================================== T015 brief
+
+BRIEF_COMMON_ITEMS = [
+    "Spec directory: specs/001-alpha", "Phase: {phase}", "Branch: 001-alpha", "Do only the {phase} phase",
+    "Skill tool", "`{skill}`", "MUST NOT write or edit the artifacts", "Do not ask questions",
+    "do not wait for approval", "constitution", "write down the reason", '"requirements"',
+    "MUST NOT modify spec.md or the constitution", ".specify/templates/", ".specify/scripts/", "`speckit-*` skill",
+    "folders of other specs", ".specify/sdd-drive/", "MUST NOT push", "switch or create branches", "amend",
+    "rebase", "reset", "merge", "stash", "clean", "Never write secret values", "structured output", '"status"',
+    '"summary"', '"failure"', "Project root: . (the current directory)",
+]
+BRIEF_PHASE_ITEMS = {
+    "plan": ["**Testing**:", "first backtick span", "same way on Windows and Linux", "Commit to the current branch",
+             "Leave no uncommitted changes"],
+    "tasks": ["Notes", "`- [ ] T001", "need the maintainer or a push", "Commit to the current branch"],
+    "implement": ["only the unchecked tasks", "Check a task off as soon as it is done", "MUST NOT delete, rewrite or merge",
+                  '"blocked-task"', "run the test command and make it pass", "`TESTCMD`",
+                  "must not depend on the order"],
+    "check": ["only write allowed is the Convergence section", "end of specs/001-alpha/tasks.md",
+              "MUST NOT modify code, tests, plan.md, spec.md", "MUST NOT check, rewrite, delete or renumber",
+              "MUST NOT fix the problems", "one commit that holds only that file",
+              "MUST NOT create any commit or change any file", '"convergence"', '"converged"', '"tasks-appended"'],
+}
+SKILL_OF = {"plan": "speckit-plan", "tasks": "speckit-tasks", "implement": "speckit-implement", "check": "speckit-converge"}
+
+
+@pytest.mark.parametrize("phase", ["plan", "tasks", "implement", "check"])
+def test_brief_holds_every_required_item(m, tmp_path, phase):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "command": "TESTCMD"}})
+    before = tree_snapshot(root)
+    result = drive(m, root, "brief", "--spec", "001-alpha", "--phase", phase)
+    assert result.code == 0
+    text = result.text
+    for item in BRIEF_COMMON_ITEMS + BRIEF_PHASE_ITEMS[phase]:
+        assert item.format(phase=phase, skill=SKILL_OF[phase]) in text, item
+    assert str(root) not in text and str(tmp_path) not in text
+    assert "Resuming" not in text
+    assert tree_snapshot(root) == before
+
+
+def test_brief_without_git_says_not_to_commit(m, tmp_path):
+    root = make_project(tmp_path, git=False, specs={"001-alpha": {"plan": True}})
+    text = drive(m, root, "brief", "--spec", "001-alpha", "--phase", "implement").text
+    assert "not a git repository: do not commit" in text and "Commit to the current branch" not in text
+
+
+def test_brief_resume_asks_to_check_the_files_first(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True}})
+    text = m.brief_text(root, "001-alpha", "implement", resume=True)
+    assert "First check the current state of the files again" in text and "do not redo" in text
+
+
+def test_brief_unknown_spec_is_usage(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    result = drive(m, root, "brief", "--spec", "009-missing", "--phase", "plan")
+    assert (result.code, result.json["reason"]) == (1, "usage")
+
+
+# ======================================================== T016 run: preparation
+
+
+def test_run_prerequisite_failures_write_no_attempt(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, skills=("speckit-plan",), specs={"001-alpha": {}})
+    result = run_phase(m, root, "001-alpha", "plan")
+    assert (result.code, result.json["reason"]) == (3, "speckit-incomplete")
+    root = make_project(tmp_path, "b", specs={"001-alpha": {}})
+    monkeypatch.delenv("SDD_DRIVE_CLAUDE")
+    monkeypatch.setenv("PATH", str(tmp_path / "no-bin"))
+    result = run_phase(m, root, "001-alpha", "plan")
+    assert (result.code, result.json["reason"]) == (3, "claude-missing")
+    assert not (root / ".specify/sdd-drive").exists()
+
+
+def test_run_not_next(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}, "002-beta": {}})
+    before = tree_snapshot(root)
+    for spec, phase in (("002-beta", "plan"), ("001-alpha", "tasks"), ("009-none", "plan")):
+        result = run_phase(m, root, spec, phase)
+        assert (result.code, result.json["reason"]) == (1, "not-next"), (spec, phase)
+    result = run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume")
+    assert result.json["reason"] == "not-next"
+    result = run_phase(m, root, "001-alpha", "plan", "opus", "r", "--fresh")
+    assert result.json["reason"] == "not-next"
+    assert not state_file(root).exists()
+    assert {k: v for k, v in tree_snapshot(root).items() if not k.startswith(".specify/sdd-drive")} == before
+
+
+def test_run_refuses_a_dirty_tree_and_keeps_it(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    write_tree(root, {"mine.txt": "my work\n"})
+    result = run_phase(m, root, "001-alpha", "plan")
+    assert (result.code, result.json["reason"], result.json["dirty"]) == (1, "dirty", ["mine.txt"])
+    assert (root / "mine.txt").read_text(encoding="utf-8") == "my work\n"
+    assert not state_file(root).exists()
+
+
+def test_run_branch_diverged(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    start = branch_of(root)
+    git_run(root, "switch", "--quiet", "-c", "001-alpha")
+    write_tree(root, {"other.txt": "x"})
+    commit_all(root)
+    git_run(root, "switch", "--quiet", start)
+    write_tree(root, {"mine.txt": "x"})
+    commit_all(root)
+    result = run_phase(m, root, "001-alpha", "plan")
+    assert (result.code, result.json["reason"]) == (1, "branch-diverged")
+    assert branch_of(root) == start and not state_file(root).exists()
+
+
+def test_run_success_prepares_and_records(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    write_tree(root, {".specify/feature.json": '{"feature_directory": "specs/000-x", "keep": true}',
+                      ".specify/sdd-drive/.gitignore": OWN_GITIGNORE.decode(), ".specify/sdd-drive/cancel": ""})
+    start_head = head_of(root)
+    scenarios(monkeypatch, {"test_command": PASS_CMD})
+    result = run_phase(m, root, "001-alpha", "plan", "opus", "Design work with new mechanisms.")
+    assert result.code == 0
+    assert json.loads((root / ".specify/feature.json").read_text(encoding="utf-8")) == {
+        "feature_directory": "specs/001-alpha", "keep": True}
+    assert not (root / ".specify/sdd-drive/cancel").exists()
+    assert branch_of(root) == "001-alpha"
+    state = read_state(root)
+    record = state["attempts"][0]
+    assert (record["id"], record["model"], record["reason"], record["auto"], record["resume"]) == (
+        1, "opus", "Design work with new mechanisms.", False, False)
+    assert state["launch"] is None and state["driver"] is None
+    # run itself never commits or pushes: the only new commit is the fake child's.
+    log = git_run(root, "log", "--format=%s", f"{start_head}..HEAD").splitlines()
+    assert log == ["fake plan for 001-alpha"]
+
+
+def test_run_writes_a_pending_attempt_and_launch_before_the_driver(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    monkeypatch.setattr(m, "start_driver", lambda root, token: True)
+    monkeypatch.setenv("SDD_DRIVE_TEST_TIMING", json.dumps(dict(TIMING, watch_seconds=0.2)))
+    result = run_phase(m, root, "001-alpha", "plan")
+    assert result.code == 0 and result.json["status"] == "running"
+    state = read_state(root)
+    assert state["attempts"][0]["outcome"] is None and state["launch"]["token"]
+    assert status(m, root)["next"]["action"] == "wait"
+
+
+def test_run_start_failure_is_launch_failed(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    monkeypatch.setattr(m, "start_driver", lambda root, token: False)
+    result = run_phase(m, root, "001-alpha", "plan")
+    assert result.code == 0
+    data = result.json
+    assert data["status"] == "finished" and data["attempts"][0]["outcome"] == "launch-failed"
+    assert data["attempts"][0]["detail"]["code"] == "launch"
+    assert read_state(root)["launch"] is None
+    assert data["failures"] == {}
+
+
+# ======================================================== T017 driver success and watch
+
+
+def test_child_receives_the_documented_arguments_and_the_brief(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, {"test_command": PASS_CMD})
+    expected_brief = drive(m, root, "brief", "--spec", "001-alpha", "--phase", "plan").text
+    result = run_phase(m, root, "001-alpha", "plan", "opus", "Design.")
+    call = calls(tmp_path)[0]
+    session = read_state(root)["attempts"][0]["session_id"]
+    assert call["argv"][:12] == ["-p", "--output-format", "stream-json", "--verbose", "--model", "opus",
+                                 "--session-id", session, "--json-schema", json.dumps(m.REPORT_SCHEMA, separators=(",", ":")),
+                                 "--permission-mode", "acceptEdits"]
+    assert call["argv"][12:] == ["--permission-prompts", "none", "--allowedTools", "Bash", "Skill",
+                                 "--disallowedTools", "AskUserQuestion", "Bash(git push*)"]
+    assert call["stdin"] == expected_brief
+    assert Path(call["cwd"]).resolve() == root.resolve()
+    assert result.json["attempts"][0]["model_used"] == ["claude-opus-test"]
+
+
+def test_three_phases_succeed_and_record_worktree_and_task_ids(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, {"test_command": PASS_CMD, "tasks": 4})
+    for phase, after in (("plan", "planned"), ("tasks", "tasked"), ("implement", "implementing")):
+        result = run_phase(m, root, "001-alpha", phase)
+        data = result.json
+        assert data["status"] == "finished"
+        assert data["attempts"][0]["outcome"] == "succeeded", data
+        assert data["state_after"]["state"] == after
+    state = read_state(root)
+    assert [a["worktree"] is not None for a in state["attempts"]] == [True, True, True]
+    assert state["attempts"][1]["task_ids"] == ["T001", "T002", "T003", "T004"]
+    assert state["attempts"][0]["task_ids"] is None
+    assert status(m, root)["next"]["action"] == "test"
+
+
+@pytest.mark.parametrize("phase,action,code", [("plan", "plan-template", "plan-missing"),
+                                               ("tasks", "tasks-template", "tasks-missing")])
+def test_template_artifacts_are_verify_failed(m, tmp_path, monkeypatch, phase, action, code):
+    specs = {"001-alpha": {"plan": True} if phase == "tasks" else {}}
+    root = make_project(tmp_path, specs=specs)
+    scenarios(monkeypatch, {"do": [action]})
+    data = run_phase(m, root, "001-alpha", phase).json
+    assert data["attempts"][0]["outcome"] == "verify-failed"
+    assert data["attempts"][0]["detail"]["code"] == code
+    assert data["attempts"][0]["counts_as_failure"] is True
+
+
+def test_driver_clears_launch_writes_driver_and_clears_it(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, {"test_command": PASS_CMD, "sleep": 1.5})
+    monkeypatch.setenv("SDD_DRIVE_TEST_TIMING", json.dumps(dict(TIMING, watch_seconds=0.3)))
+    first = run_phase(m, root, "001-alpha", "plan")
+    assert first.json["status"] == "running"
+    seen = wait_for(lambda: read_state(root)["driver"])
+    assert seen["phase"] == "running" and seen["attempt"] == 1 and read_state(root)["launch"] is None
+    data = status(m, root)
+    assert data["running"] is True and data["driver"]["phase"] == "running"
+    monkeypatch.setenv("SDD_DRIVE_TEST_TIMING", json.dumps(TIMING))
+    final = drive(m, root, "watch")
+    assert final.json["status"] == "finished" and final.json["attempts"][0]["outcome"] == "succeeded"
+    assert read_state(root)["driver"] is None
+    # the driver did not start the next phase by itself
+    assert len(calls(tmp_path)) == 1
+
+
+def test_watch_output_fields(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, {"test_command": PASS_CMD,
+                            "result": {"permission_denials": [{"tool_name": "WebFetch", "tool_input": {"url": "x"}},
+                                                              {"tool_name": "WebFetch", "tool_input": {}}]}})
+    run_phase(m, root, "001-alpha", "plan", "opus", "Design.")
+    data = drive(m, root, "watch").json
+    assert list(data) == ["status", "attempts", "waiting_until", "state_after", "failures"]
+    view = data["attempts"][0]
+    assert list(view) == ["spec", "phase", "outcome", "auto", "counts_as_failure", "model", "model_used", "reason",
+                          "session_id", "resume", "resume_failed", "duration_seconds", "summary", "failure", "detail",
+                          "limit", "convergence", "findings", "findings_total", "auto_resume", "permission_denials"]
+    assert view["permission_denials"] == ["WebFetch"]
+    assert isinstance(view["duration_seconds"], int) and view["reason"] == "Design."
+    assert data["state_after"] == {"state": "planned", "next_phase": "tasks", "tasks_total": 0, "tasks_open": 0}
+
+
+def test_watch_without_any_attempt_is_no_driver(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    result = drive(m, root, "watch")
+    assert (result.code, result.json["reason"]) == (1, "no-driver")
+
+
+def test_watch_reports_the_last_finished_attempt(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True}})
+    write_state(root, blank_state(attempts=[attempt(1)]))
+    data = drive(m, root, "watch").json
+    assert data["status"] == "finished" and data["attempts"][0]["outcome"] == "succeeded"
+
+
+def test_watch_minutes_range(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True}})
+    write_state(root, blank_state(attempts=[attempt(1)]))
+    assert drive(m, root, "watch", "--minutes", "1").code == 0
+    assert drive(m, root, "watch", "--minutes", "115").code == 0
+
+
+def test_two_specs_in_order(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}, "002-beta": {}})
+    scenarios(monkeypatch, {"test_command": PASS_CMD})
+    order = []
+    for _ in range(12):
+        nxt = status(m, root)["next"]
+        if nxt["action"] == "none":
+            break
+        order.append((nxt["spec"], nxt["phase"]))
+        if nxt["action"] == "test":
+            assert drive(m, root, "test", "--spec", nxt["spec"]).json["passed"] is True
+        else:
+            data = run_phase(m, root, nxt["spec"], nxt["phase"]).json
+            assert data["attempts"][-1]["outcome"] == "succeeded", data
+    assert order == [("001-alpha", p) for p in ("plan", "tasks", "implement", "test", "check")] + \
+                    [("002-beta", p) for p in ("plan", "tasks", "implement", "test", "check")]
+    assert branch_of(root) == "002-beta"
+    assert git_run(root, "merge-base", "--is-ancestor", "001-alpha", "002-beta") == ""
