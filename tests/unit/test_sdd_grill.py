@@ -1604,3 +1604,68 @@ def test_save_does_not_repeat_a_repeated_id_that_looks_like_a_secret(sdd_grill, 
     )
     assert secret_id not in result.raw.decode("utf-8") and secret_id not in result.err
     assert not (root / PROGRESS).exists()
+
+
+# ------------- a saved progress that a maintainer edited to hold a secret is unreadable, never shown
+
+# A made-up token in the shape of a GitHub token; no real credential.
+TAINT = "ghp_" + "Zq9FakeTaint" * 2
+
+
+def taint(data: dict, where: str) -> None:
+    if where == "requirement":
+        data["requirement"] = f"{data['requirement']} token: {TAINT}"
+    elif where == "decision":
+        data["features"][0]["decisions"][0]["decision"] = f"password={TAINT}"
+    elif where == "rule":
+        data["constitution"]["principles"][0]["rules"].append(f"use {TAINT}")
+    elif where == "fingerprint key":
+        data["fingerprint"]["specs"][f"specs/{TAINT}/spec.md"] = "0" * 64
+    elif where == "baseline key":
+        data["baseline"]["specs"][f"specs/{TAINT}/spec.md"] = "0" * 64
+    elif where == "saved_at":
+        data["saved_at"] = f"https://u:{TAINT}@h.example.invalid/"
+
+
+@pytest.mark.parametrize("where", ["requirement", "decision", "rule", "fingerprint key", "baseline key", "saved_at"])
+def test_check_does_not_show_a_progress_that_holds_a_secret(sdd_grill, grill_project, where):
+    root = grill_project()
+    assert save(sdd_grill, root, confirmed_progress([feature("a")])).code == 0
+    data = read_progress(root)
+    taint(data, where)
+    (root / PROGRESS).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    before = snapshot(root)
+
+    result = run_grill(sdd_grill, root, "check")
+
+    assert (result.code, result.out["progress"], result.out["saved"], result.out["changed"]) == (
+        0, "unreadable", None, [])
+    assert TAINT not in result.raw.decode("utf-8") and TAINT not in result.err
+    for argv in (["verify"], ["focus"]):
+        later = run_grill(sdd_grill, root, *argv)
+        assert later.code == 1, argv
+        assert TAINT not in later.raw.decode("utf-8") and TAINT not in later.err, argv
+    assert snapshot(root) == before
+    # Starting over deletes the file that holds the secret.
+    assert run_grill(sdd_grill, root, "clear").out == {"cleared": True}
+    assert not (root / PROGRESS).exists()
+
+
+def test_save_replaces_a_progress_that_holds_a_secret(sdd_grill, grill_project):
+    root = grill_project()
+    save(sdd_grill, root, minimal_progress())
+    data = read_progress(root)
+    taint(data, "requirement")
+    (root / PROGRESS).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    result = save(sdd_grill, root, minimal_progress())
+
+    assert result.code == 0 and TAINT not in result.raw.decode("utf-8")
+    assert TAINT not in (root / PROGRESS).read_text(encoding="utf-8")
+    assert run_grill(sdd_grill, root, "check").out["progress"] == "present"
+
+
+def test_find_secret_reports_a_secret_field_name_at_its_holder(sdd_grill):
+    assert sdd_grill.find_secret({"a": {TAINT: "x"}}) == "a"
+    assert sdd_grill.find_secret({f"token={TAINT}": 1}) == "(top level)"
+    assert sdd_grill.find_secret({"a": [{"b": {TAINT: 1}}]}) == "a[0].b"

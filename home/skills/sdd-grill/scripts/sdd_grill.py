@@ -177,11 +177,16 @@ def looks_like_secret(text: str) -> bool:
 
 
 def find_secret(value, path: str = "") -> str | None:
-    """The path of the first string value that looks like a secret, or None. The value itself is never returned."""
+    """The path of the first string that looks like a secret, or None. The value itself is never returned.
+
+    A field name that looks like a secret is reported at the path of the object that holds it, never in the path.
+    """
     if isinstance(value, str):
         return path if looks_like_secret(value) else None
     if isinstance(value, dict):
         for key, item in value.items():
+            if looks_like_secret(str(key)):
+                return path or "(top level)"
             found = find_secret(item, f"{path}.{key}" if path else str(key))
             if found is not None:
                 return found
@@ -503,6 +508,9 @@ def load_progress(root: Path, folder: str = OWN_DIR) -> tuple[str, dict | None]:
     except (OSError, ValueError, Invalid):
         return "unreadable", None
     if not _valid_stored(data):
+        return "unreadable", None
+    # Edited by hand to hold something that looks like a secret: never shown (check prints saved), never used.
+    if find_secret(data) is not None:
         return "unreadable", None
     return "present", data
 

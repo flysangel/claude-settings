@@ -215,6 +215,18 @@ def test_start_handles_conflict_and_unreadable_progress():
     has_all(start, '"conflict"', '"unreadable"', "clear")
 
 
+def test_unreadable_progress_may_hold_a_secret_and_is_never_opened():
+    """check reports a progress that looks like it holds a secret as unreadable; its content must stay out."""
+    start = section(START)
+    bullet = start[start.index('`"unreadable"`'):start.index('`"present"`')]
+
+    has_all(bullet, "secret", "clear", "/sdd-grill")
+    has_any(bullet, "do not open", "never open", "must not open")
+    # Starting over deletes the file: the maintainer is told before they choose.
+    has_any(bullet, "deletes the file", "deletes that file", "removes the file")
+    has_any(bullet, "remove", "repair", "fix")
+
+
 def test_rules_for_questioning():
     rules = section(RULES)
 

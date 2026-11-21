@@ -57,7 +57,7 @@ uv run <skill>/scripts/sdd_grill.py clear     清除進度
 | `constitution` | `"missing"`、`"template"`、`"written"` |
 | `numbering` | `"sequential"` 或 `"timestamp"` |
 | `specs` | 既有 spec 的清單（`number` 可能是 `null`） |
-| `progress` | `"none"`、`"present"`、`"unreadable"`（不是有效的 JSON、`schema` 或 `tool` 不符、或不符合驗證規則）、`"conflict"` |
+| `progress` | `"none"`、`"present"`、`"unreadable"`（不是有效的 JSON、`schema` 或 `tool` 不符、不符合驗證規則，或任何字串、欄位名稱符合機密樣式；此時 `saved` 為 `null`，不輸出內容）、`"conflict"` |
 | `changed` | `progress` 為 `"present"` 時，指紋中改變的項目；其他時候是空陣列 |
 | `saved` | `progress` 為 `"present"` 時是進度的完整內容；其他時候是 `null` |
 

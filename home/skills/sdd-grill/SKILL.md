@@ -63,10 +63,13 @@ the progress never shows up in `git status` and is never committed.
 4. Look at `progress`:
    - `"conflict"`: `.specify/sdd-grill/` holds files that sdd-grill did not create. Tell the maintainer, ask them to
      move those files out of that folder, and stop. Do not delete or change them.
-   - `"unreadable"`: there is a progress file, but it is damaged or comes from an incompatible version. Tell the
-     maintainer, and ask one question: clear it and start over (recommended, since it cannot be resumed), or stop
-     and leave it as it is. To clear it, run `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" clear`, then
-     continue as for `"none"`.
+   - `"unreadable"`: there is a progress file, but it is damaged, comes from an incompatible version, or holds text
+     that looks like a secret (usually added by hand). `check` does not show its content, and you must not open the
+     file to find out which: that could bring a secret into the conversation. Tell the maintainer these possible
+     causes, and ask one question: clear it and start over (recommended, since it cannot be resumed; `clear` deletes
+     the file, so what it recorded is lost), or stop so that they can repair the file themselves (for example remove
+     what looks like a secret) and run `/sdd-grill` again. To clear it, run
+     `uv run "${CLAUDE_SKILL_DIR}/scripts/sdd_grill.py" clear`, then continue as for `"none"`.
    - `"present"`: there is a discussion to resume. Go to "Resume" (a requirement is not needed for that; it is
      in the saved progress).
    - `"none"`: a new discussion.
