@@ -15,7 +15,7 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 另有內部指令 `_drive --token <uuid>`：只由 `run` 以脫離的方式啟動，SKILL.md 不提及（D18）。
 
 `<skill>` 是 skill 的資料夾，SKILL.md 以 `${CLAUDE_SKILL_DIR}` 表示。一律在目標專案的根目錄執行（目前目錄）。`<dir>` 是 `specs/` 下的資料夾名稱
-（例如 `008-sdd-drive`），`<phase>` 是 `plan`、`tasks`、`implement`。子指令不認得、缺少或多出參數時，結束碼 1，`reason: "usage"`。
+（例如 `008-sdd-drive`），`<phase>` 是 `plan`、`tasks`、`implement`、`check`（對照檢查，D22）。子指令不認得、缺少或多出參數時，結束碼 1，`reason: "usage"`。
 
 資料格式見 [data-model.md](../data-model.md)；決定與理由見 [research.md](../research.md)。
 
@@ -111,6 +111,7 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 - `next.action` 為 `none` 時其餘 `next` 欄位為 `null`。
 - `next.action` 為 `resume` 時 `session_id`、`model`、`last_outcome`（`usage-limit`、`api-error`、`interrupted`）有值，另附 `limit`、`auto_resume`。
 - `next.action` 為 `test` 時 `test_command` 有值（無法取得時為 `null`，`test` 會回報 `no-test-command`）；另附 `covers`：同一次測試會一併記錄的 spec 清單（D5）。
+- `next.action` 為 `run` 且 `phase: check`：測試已在目前的 `tasks_hash` 與 HEAD 下通過，下一步是對照檢查（D22）；`hints` 另附 `check_failures`（先前找到漏做的次數）。
 - `dirty` 不為空且 `leftovers: false` 時，SKILL.md 依 `dirty` 停止（D9）。
 
 ## brief
@@ -138,13 +139,17 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 ### driver（`_drive`，內部）
 
 1. 以阻塞方式取得鎖（最多 60 秒）並確認 `launch.token` 相符；不符或逾時時直接結束（不寫入）。清除 `launch`、寫入 `driver`（`phase: running`）。
-2. 記下受保護檔案的雜湊與 remote-tracking refs。
+2. 記下受保護檔案的雜湊與 remote-tracking refs；`check` 另記下該 spec 的 `tasks.md` 內容與 HEAD。
 3. 以 stdin 傳入工作說明，啟動 `claude -p --output-format stream-json --verbose --model <model> (--session-id <id> | --resume <id>) --json-schema <schema>
    --permission-mode acceptEdits --permission-prompts none --allowedTools Bash Skill --disallowedTools AskUserQuestion "Bash(git push*)"`。
    stdout 逐行解析，只保留：`status: "rejected"` 的 `rate_limit_event.rate_limit_info`、assistant 訊息的 `api_error` 與 `api_error_params.rate_limit_info`、
    最後一行 `type: "result"` 的物件；stderr 丟棄。
 4. 依 D4 分類；`succeeded` 候選再檢查：該階段的產物、任務編號沒有減少（implement）、受保護檔案未變、remote-tracking refs 未變、git 工作區乾淨；
-   第一個不符合的項目成為 `verify-failed` 的 `detail.code`。`usage-limit` 依 D17 計算 `limit`。
+   第一個不符合的項目成為 `verify-failed` 的 `detail.code`。`check` 的子 session 回報 `completed` 時改依 D22 以檔案判定：
+   - `tasks.md` 不變、HEAD 不變、沒有其他改變 → `succeeded`、`convergence: converged`（子 session 說 `tasks-appended` → `verify-failed`／`check-no-tasks`）；
+   - `tasks.md` 為原內容＋合格的 Convergence 段落，commit 與工作區只動到該檔 → `gaps-found`、`convergence: tasks-appended`、`appended` 為新編號、`task_ids` 併入
+     （子 session 說 `converged` 時另記 `detail.code: report-mismatch`）；
+   - 其他改變依序判為 `protected-changed`、`check-touched-files`（`detail.paths`）、`check-rewrote-tasks`、`pushed`、`uncommitted`。`usage-limit` 依 D17 計算 `limit`。
 5. 寫入結果、`model_used`、`worktree`、（tasks 成功時）`task_ids`、`limit`。
 6. 自動接續（D18–D20）：`outcome` 為 `usage-limit` 時——
    - `limit.waitable: false` → `auto_resume: not-waitable`；這筆嘗試 `auto: true` → `already-auto`；兩者都到步驟 7。
@@ -183,6 +188,8 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
       "failure": null,
       "detail": {"code": "usage-limit", "paths": [], "text": "…"},
       "limit": {"waitable": true, "types": ["five_hour"], "resets_at": "2026-11-21T07:10:00Z", "overage_status": "rejected"},
+      "convergence": null,
+      "findings": null,
       "auto_resume": "started",
       "permission_denials": []
     },
@@ -196,6 +203,8 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 
 - `status`：`finished`（driver 已結束）、`waiting`（driver 正在等待重置；`waiting_until` 有值）、`running`（時間到時子 session 仍在執行）、`launch-failed`。
 - `attempts`：這次 driver 的所有嘗試（被中斷的嘗試與自動接續的嘗試），依時間順序；欄位同 data-model，字串已做機密取代。
+- `findings`：`gaps-found` 時從 `tasks.md` 的附加段落解析的每一項 `{"id": "T078", "text": "…", "source_ref": "FR-008", "gap_type": "missing"}`（解析不出時 `source_ref`、`gap_type` 為 `null`）；
+  每項 `text` 做機密取代、最多 300 字元；最多 50 項，另附 `findings_total`。其他情況為 `null`。內容取自檔案，不取自子 session 的輸出。
 - `failure` 是子 session 回報的 `{kind, step, reason, tasks}`（`failed` 時）；`permission_denials`：被拒絕的工具名稱（去重，不含參數）。
 
 ## cancel
@@ -209,7 +218,7 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 2. 從 `specs/<dir>/plan.md` 的 `**Testing**:` 行取第一個反引號區段（D6）。沒有、空白、或內容是 `N/A`、`none`、`TBD`（不分大小寫）→ `no-test-command`。
    指令符合機密樣式 → 不執行，`no-test-command`，`detail` 說明原因而不含值。
 3. 以 shell 在專案根目錄執行，stdin 為空；不設逾時（由主 session 的 Bash 背景執行上限決定）。
-4. 結束碼 0 → 為 `covers` 中的每一份 spec 寫入一筆 `exit_code: 0` 的測試紀錄；非 0 → 只為 `--spec` 寫入一筆。
+4. 結束碼 0 → 為 `covers` 中的每一份 spec 寫入一筆 `exit_code: 0` 的測試紀錄（含當時的 HEAD）；非 0 → 只為 `--spec` 寫入一筆。
 
 輸出：
 
