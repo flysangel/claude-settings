@@ -124,6 +124,9 @@ def calls(tmp_path: Path) -> list[dict]:
 SPECKIT_SKILLS = ("speckit-plan", "speckit-tasks", "speckit-implement", "speckit-converge")
 
 
+GIT_SETTINGS = "[user]\n\tname = test\n\temail = test@example.invalid\n[core]\n\tautocrlf = false\n"
+
+
 def make_project(tmp_path: Path, name: str = "proj", git: bool = True, skills=SPECKIT_SKILLS, specs: dict | None = None,
                  commit: bool = True) -> Path:
     """A fake project: Spec Kit's templates and scripts copied from this repo, minimal speckit-* skills."""
@@ -139,12 +142,21 @@ def make_project(tmp_path: Path, name: str = "proj", git: bool = True, skills=SP
         add_spec(root, spec_name, **options)
     if git:
         git_run(root, "init", "--quiet")
-        git_run(root, "config", "user.name", "test")
-        git_run(root, "config", "user.email", "test@example.invalid")
-        git_run(root, "config", "core.autocrlf", "false")
+        # The same three settings as `git config user.name test` and so on, without three more processes
+        # (each process start costs much more on Windows; test_project_git_settings checks the result).
+        with open(root / ".git" / "config", "a", encoding="utf-8", newline="\n") as config:
+            config.write(GIT_SETTINGS)
         if commit:
             commit_all(root, "initial")
     return root
+
+
+def test_project_git_settings(tmp_path):
+    root = make_project(tmp_path)
+    assert git_run(root, "config", "--local", "--get", "user.name").strip() == "test"
+    assert git_run(root, "config", "--local", "--get", "user.email").strip() == "test@example.invalid"
+    assert git_run(root, "config", "--local", "--get", "core.autocrlf").strip() == "false"
+    assert git_run(root, "log", "--format=%an <%ae>").strip() == "test <test@example.invalid>"
 
 
 def commit_all(root: Path, message: str = "commit") -> None:
