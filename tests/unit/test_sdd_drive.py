@@ -490,6 +490,11 @@ def test_own_dir_none_ours_conflict(drive_module, tmp_path):
     (root / ".specify" / "sdd-drive" / "lock").write_bytes(b"")
     (root / ".specify" / "sdd-drive" / ".state.json.abc.tmp").write_bytes(b"{}")
     assert status(drive_module, root)["own_dir"] == "ours"
+    for name in ("..gitignore.def.tmp", ".cancel.ghi.tmp"):  # every file atomic_write writes has its temporary file
+        (root / ".specify" / "sdd-drive" / name).write_bytes(b"")
+    assert status(drive_module, root)["own_dir"] == "ours"
+    (root / ".specify" / "sdd-drive" / ".other.jkl.tmp").write_bytes(b"")
+    assert drive(drive_module, root, "status").json["own_dir"] == "conflict"
 
 
 @pytest.mark.parametrize("change", ["stranger", "gitignore", "folder"])
@@ -2403,6 +2408,8 @@ def test_clear_writes_an_empty_record(m, tmp_path):
     folder = root / ".specify/sdd-drive"
     (folder / "cancel").write_bytes(b"")
     (folder / ".state.json.x.tmp").write_bytes(b"")
+    (folder / ".cancel.y.tmp").write_bytes(b"")
+    assert status(m, root)["own_dir"] == "ours"
     result = drive(m, root, "clear")
     assert result.code == 0 and result.json == {"cleared": True, "baseline_reset": True}
     assert read_state(root) == blank_state(baseline=[], baseline_reset=True)
