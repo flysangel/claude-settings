@@ -15,7 +15,7 @@
 - **資料夾狀態**（`own_dir`）：`none`（不存在）、`ours`（只有上表的檔案與寫入用的暫存檔，且 `.gitignore` 內容與上面完全相同）、`conflict`（其他情況）。
   `conflict` 時所有會讀寫紀錄的指令以 `reason: "conflict"` 停止；`clear` 也不刪除。
 - 不讀取、不修改 `.specify/sdd-drive-state.json` 與 `.specify/.gitignore`（D14、T8）。
-- `clear` 刪除上表四個本 skill 的檔案與變空的資料夾（driver 執行中時拒絕）；只在維護者要求或 `state-unreadable` 時由 SKILL.md 提議。
+- `clear` 把 `state.json` 重寫為空的紀錄並設 `baseline: []`、`baseline_reset: true`，刪除 `cancel` 與暫存檔（driver 執行中時拒絕）；只在維護者要求或 `state-unreadable` 時由 SKILL.md 提議（D23：紀錄被清除後偏向需要檢查）。
 
 ## 紀錄（`state.json`）
 
@@ -45,6 +45,8 @@
       "auto_resume": null
     }
   ],
+  "baseline": ["001-deploy-tool", "002-global-claude-md"],
+  "baseline_reset": false,
   "launch": null,
   "driver": null,
   "tests": [
@@ -78,6 +80,8 @@
 | `attempts[].auto_resume` | 腳本（D18–D20），只出現在 `usage-limit` 的嘗試 | `null`、`waiting`、`started`、`cancelled`、`skipped-changed`、`lost`、`not-waitable`、`already-auto` |
 | `launch` | `run`：啟動 driver 前寫入，driver 取得鎖後清除 | `null` 或 `{"token": UUID, "at": 時間}` |
 | `driver` | driver：取得鎖後寫入、結束前清除 | `null` 或 `{"token": UUID, "pid": 正整數, "phase": "running"\|"waiting"\|"resuming", "attempt": 嘗試 id, "waiting_until": 時間或 null, "started_at": 時間}` |
+| `baseline` | 腳本：第一次寫入紀錄時凍結（D23） | spec 資料夾名稱的陣列（格式同 `spec`），不重複 |
+| `baseline_reset` | 腳本：`clear` 寫入時為 `true` | 布林 |
 | `tests[].spec` | 腳本 | 同 `spec` |
 | `tests[].tasks_hash` | 腳本 | 同 `worktree` 的格式 |
 | `tests[].head` | 腳本：執行測試時的 HEAD（非 git 時為 `null`） | `null` 或 40／64 個十六進位字元 |
@@ -103,10 +107,14 @@
 | plan 已產生、tasks 未產生 | `planned` | `tasks` |
 | tasks 已產生、勾選數為 0 | `tasked` | `implement` |
 | 有未勾選的任務 | `implementing` | `implement` |
+| 全部勾選、是**既有的基準**（在 `baseline` 且沒有任何 `implement` 嘗試）、`tests` 中有它在目前 `tasks_hash` 下 `exit_code: 0` 的紀錄 | `done` | `null` |
+| 全部勾選、是既有的基準、沒有上述紀錄 | `implementing` | `test` |
 | 全部勾選、有該 spec 的 `check` 嘗試 `outcome: succeeded`、`convergence: converged`，且其 `tasks_hash` 等於目前的雜湊 | `done` | `null` |
 | 全部勾選、`tests` 中有該 spec 在目前 `tasks_hash` 與目前 HEAD（非 git 時只比 `tasks_hash`）下 `exit_code: 0` 的紀錄 | `implementing` | `check` |
 | 全部勾選、沒有上述紀錄 | `implementing` | `test` |
 
+- 既有的基準（D23）：在 `baseline` 中且紀錄裡沒有它的 `implement` 嘗試。紀錄尚不存在時，`baseline` 以「tasks 已產生且全部勾選」即時計算；第一次寫入時凍結。
+  基準不執行 check（FR-025）；一旦有 `implement` 嘗試（例如維護者加了新任務後由本 skill 補做），就改依其餘各列（測試＋check）。`status` 的每份 spec 附 `baseline: true|false`。
 - 「plan 已產生」「tasks 已產生」的判定與「未填寫的範本」見 D5：與範本內容相同、或第一個 `# ` 標題仍含範本佔位字串（plan 為 `[FEATURE]`，tasks 為 `[FEATURE NAME]`）、
   或（tasks）沒有任何任務行，都視為未產生。
 - 任務行：`^\s*- \[( |x|X)\] (T\d{3,})\b`；勾選為 `x` 或 `X`。

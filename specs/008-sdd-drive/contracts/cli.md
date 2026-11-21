@@ -26,7 +26,7 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 - 失敗時 JSON 有 `"error": "<一句英文>"` 與 `"reason": "<列舉值>"`，同一句 `error` 也寫到 stderr。SKILL.md 依 `reason` 分支。
 - **寫入範圍**：`status`、`brief`、`watch` 不寫入任何檔案。`run` 寫 `.specify/sdd-drive/`、`.specify/feature.json`，並在需要時建立或切換 git 分支（D11）；driver 只寫 `.specify/sdd-drive/`（刪除 `cancel` 也是）；`cancel` 只建立 `.specify/sdd-drive/cancel`；
   其餘的專案檔案只由子 session 修改。`test` 只寫 `.specify/sdd-drive/`（測試指令本身可能寫入專案自己的暫存檔，不在本 skill 的控制內）。
-  `finalize` 只寫 `.specify/sdd-drive/state.json`。`clear` 只刪除本 skill 的四個檔案與變空的資料夾。寫入一律「同資料夾的暫存檔再取代」。
+  `finalize` 只寫 `.specify/sdd-drive/state.json`。`clear` 只重寫 `state.json`（空的紀錄、`baseline: []`、`baseline_reset: true`）並刪除 `cancel` 與暫存檔。寫入一律「同資料夾的暫存檔再取代」。
 - **不做的事**：任何指令都不 commit、不 push、不 stash、不 reset、不 checkout 檔案、不 merge、不刪除分支，不讀取也不修改
   `.specify/sdd-drive-state.json` 與 `.specify/.gitignore`。
 - 執行時以 `importlib` 載入 `<skill>/../sdd-grill/scripts/sdd_grill.py`（Spec Kit 狀態、spec 編號、原子寫入、機密樣式）；不存在或載入失敗時，
@@ -85,8 +85,8 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
   "dirty": [],
   "leftovers": false,
   "specs": [
-    {"spec": "007-sdd-rebuild", "state": "done", "next_phase": null, "tasks_total": 77, "tasks_open": 0, "failures": {}},
-    {"spec": "008-sdd-drive", "state": "planned", "next_phase": "tasks", "tasks_total": 0, "tasks_open": 0, "failures": {"plan": 1}}
+    {"spec": "007-sdd-rebuild", "state": "done", "next_phase": null, "baseline": true, "tasks_total": 77, "tasks_open": 0, "failures": {}},
+    {"spec": "008-sdd-drive", "state": "planned", "next_phase": "tasks", "baseline": false, "tasks_total": 0, "tasks_open": 0, "failures": {"plan": 1}}
   ],
   "next": {
     "action": "run",
@@ -107,6 +107,7 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 - `running_attempt`：鎖被持有時，紀錄中最後一筆 `outcome: null` 的嘗試（driver 等待重置時則是被中斷的那一筆）的 `spec`、`phase`、`model`、`started_at`、`limit`、`auto_resume`；`next.action` 為 `wait`。
 - `driver`：data-model 的 `driver`（`phase`、`waiting_until` 等）；沒有 driver 時 `null`。
 - `last_attempt`：最近一筆有結果的嘗試（data-model）；沒有時 `null`。
+- `specs[].baseline`：是否為既有的基準（D23）；基準只需要測試通過，不會出現 `next_phase: check`。
 - `pending_finalize: true` 時 `next.action` 為 `finalize`，`next` 附上該嘗試的 `spec`、`phase`。
 - `next.action` 為 `none` 時其餘 `next` 欄位為 `null`。
 - `next.action` 為 `resume` 時 `session_id`、`model`、`last_outcome`（`usage-limit`、`api-error`、`interrupted`）有值，另附 `limit`、`auto_resume`。
@@ -236,5 +237,6 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 
 ## clear
 
-鎖未被持有且沒有 `driver`、`launch` 時，刪除本 skill 的四個檔案與變空的資料夾；`own_dir` 為 `conflict` 時不刪除任何檔案（`conflict`）。不存在的檔案視為已刪除。
-輸出 `{"cleared": true}`。
+鎖未被持有且沒有 `driver`、`launch` 時，把 `state.json` 重寫為空的紀錄（`attempts`、`tests` 為空，`baseline: []`、`baseline_reset: true`），刪除 `cancel` 與暫存檔，
+必要時建立 `.gitignore`；`own_dir` 為 `conflict` 時不寫入（`conflict`）。`state.json` 無法讀取時也可執行（不讀舊內容）。清除後沒有任何 spec 是既有的基準（D23）。
+輸出 `{"cleared": true, "baseline_reset": true}`。
