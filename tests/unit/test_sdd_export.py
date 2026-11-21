@@ -271,9 +271,9 @@ def test_check_keys_are_in_the_documented_order(sdd_export, tmp_path):
     root = project(tmp_path)
     keys = list(run_export(sdd_export, root, "check").out)
 
-    assert keys[:17] == [
-        "project", "git", "writable", "export_dir", "nutrients", "view", "gitattributes", "state", "lineage",
-        "generation", "existing_generation", "constitution", "specs", "lineage_missing_specs", "inventory",
+    assert keys[:18] == [
+        "project", "git", "writable", "export_dir", "nutrients", "view", "view_secret_lines", "gitattributes", "state",
+        "lineage", "generation", "existing_generation", "constitution", "specs", "lineage_missing_specs", "inventory",
         "existing", "lineage_content",
     ]
 
@@ -725,7 +725,8 @@ def test_export_dir_conflict(sdd_export, tmp_path, how):
     assert CONFLICT_ERROR in result.err
     assert out["conflicts"]
     assert out["project"] == "my-tool"
-    for key in ("nutrients", "view", "state", "lineage", "generation", "inventory", "existing", "specs"):
+    for key in ("nutrients", "view", "view_secret_lines", "state", "lineage", "generation", "inventory", "existing",
+                "specs"):
         assert out[key] is None, key
     assert tree_snapshot(root) == before
 
@@ -3424,3 +3425,60 @@ def test_a_draft_field_name_that_looks_like_a_secret_is_not_repeated(sdd_export,
     assert (result.code, result.out["reason"]) == (1, "secret")
     assert where in [e["path"] for e in errors_for(result, "secret")]
     assert not leaks(result)
+
+
+# ------------------------------------- a hand-edited README.md that looks like it holds a secret (stage 7)
+
+
+def edited_readme(sdd_export, tmp_path, lines: list[str]) -> Path:
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    path = root / ".sdd-export" / "README.md"
+    path.write_bytes(path.read_bytes() + ("\n".join(lines) + "\n").encode("utf-8"))
+    return root
+
+
+def test_check_reports_the_readme_lines_that_look_like_secrets(sdd_export, tmp_path):
+    root = edited_readme(sdd_export, tmp_path, ["我加的說明", f"token: {FAKE_TOKEN}", "又一行", FAKE_TOKEN])
+    total = (root / ".sdd-export" / "README.md").read_text(encoding="utf-8").count("\n")
+    result = run_export(sdd_export, root, "check")
+
+    assert result.code == 0, result.out
+    assert result.out["view"] == "edited"
+    assert result.out["view_secret_lines"] == [total - 2, total]
+    assert not leaks(result)
+
+
+def test_readme_without_secrets_has_no_lines(sdd_export, tmp_path):
+    root = project(tmp_path)
+    assert run_export(sdd_export, root, "check").out["view_secret_lines"] == []
+    write_ok(sdd_export, root, draft())
+    assert run_export(sdd_export, root, "check").out["view_secret_lines"] == []
+    edited = edited_readme(sdd_export, tmp_path / "other", ["我加的說明"])
+    out = run_export(sdd_export, edited, "check").out
+    assert (out["view"], out["view_secret_lines"]) == ("edited", [])
+
+
+def test_an_undecodable_readme_is_scanned_without_failing(sdd_export, tmp_path):
+    root = project(tmp_path)
+    write_ok(sdd_export, root, draft())
+    path = root / ".sdd-export" / "README.md"
+    path.write_bytes(path.read_bytes() + b"\xff\xfe broken\n" + f"password={FAKE_TOKEN}\n".encode("utf-8"))
+    result = run_export(sdd_export, root, "check")
+    lines = path.read_bytes().count(b"\n")
+
+    assert result.code == 0 and result.out["view_secret_lines"] == [lines]
+    assert not leaks(result)
+
+
+def test_write_regenerates_a_readme_that_held_a_secret(sdd_export, tmp_path):
+    """Letting the README edits go: write needs only the state from check, never the README's content."""
+    root = edited_readme(sdd_export, tmp_path, [f"token: {FAKE_TOKEN}"])
+    state = run_export(sdd_export, root, "check").out["state"]
+    result = run_export(sdd_export, root, "write", "--expect", state, stdin=dump(draft()))
+
+    assert result.code == 0, result.out
+    assert not leaks(result)
+    assert FAKE_TOKEN not in (root / ".sdd-export" / "README.md").read_text(encoding="utf-8")
+    out = run_export(sdd_export, root, "check").out
+    assert (out["view"], out["view_secret_lines"]) == ("current", [])

@@ -1118,13 +1118,13 @@ def load_nutrients(path: Path) -> tuple[str, dict | None, list[Problem]]:
 def export_folder(root: Path) -> dict:
     """The state of .sdd-export/: export_dir, conflicts, nutrients, view, gitattributes, state, existing, errors."""
     folder = root / EXPORT_DIR
-    result = {"export_dir": "none", "conflicts": [], "nutrients": "none", "view": "none", "gitattributes": "missing",
-              "state": "none", "existing": None, "errors": []}
+    result = {"export_dir": "none", "conflicts": [], "nutrients": "none", "view": "none", "view_secret_lines": [],
+              "gitattributes": "missing", "state": "none", "existing": None, "errors": []}
     if not folder.exists() and not folder.is_symlink():
         return result
     if folder.is_symlink() or not folder.is_dir():
         return {**result, "export_dir": "conflict", "conflicts": [EXPORT_DIR], "nutrients": None, "view": None,
-                "gitattributes": None, "state": None}
+                "view_secret_lines": None, "gitattributes": None, "state": None}
     entries = sorted(folder.iterdir(), key=lambda p: p.name)
     strangers = [f"{EXPORT_DIR}/{entry.name}" for entry in entries
                  if entry.name not in OWN_FILES or entry.is_symlink() or not entry.is_file()]
@@ -1135,18 +1135,18 @@ def export_folder(root: Path) -> dict:
         strangers = [f"{EXPORT_DIR}/{entry.name}" for entry in entries]
     if strangers:
         return {**result, "export_dir": "conflict", "conflicts": strangers, "nutrients": None, "view": None,
-                "gitattributes": None, "state": None}
+                "view_secret_lines": None, "gitattributes": None, "state": None}
     status, data, problems = load_nutrients(nutrients_path)
     if status == "conflict":
         return {**result, "export_dir": "conflict", "conflicts": [f"{EXPORT_DIR}/{NUTRIENTS_NAME}"], "nutrients": None,
-                "view": None, "gitattributes": None, "state": None}
+                "view": None, "view_secret_lines": None, "gitattributes": None, "state": None}
     result.update(export_dir=status, existing=data, errors=problems)
     result.update(edit_state(folder))
     return result
 
 
 def edit_state(folder: Path) -> dict:
-    """nutrients, view, gitattributes and state, from the files and the README marker."""
+    """nutrients, view, view_secret_lines, gitattributes and state, from the files and the README marker."""
     nutrients_path, readme_path = folder / NUTRIENTS_NAME, folder / README_NAME
     nutrients_hash = content_hash(nutrients_path.read_bytes()) if nutrients_path.is_file() else None
     readme = normalize_newlines(readme_path.read_bytes()) if readme_path.is_file() else None
@@ -1169,6 +1169,9 @@ def edit_state(folder: Path) -> dict:
         view = "edited"
     else:
         view = "current" if marker[0] == nutrients_hash else "stale"
+    # The README's lines that look like secrets (numbers only), found as `files` finds secret_hits: a hand edit may
+    # have put one there, and stage 7 must then not read the file. Undecodable bytes are replaced, not reported.
+    secret_lines_of_view = secret_lines(readme.decode("utf-8", errors="replace")) if readme is not None else []
     attributes = folder / GITATTRIBUTES_NAME
     if not attributes.is_file():
         gitattributes = "missing"
@@ -1179,7 +1182,8 @@ def edit_state(folder: Path) -> dict:
     else:
         readme_hash = content_hash(readme) if readme is not None else ""
         state = hashlib.sha256(f"{nutrients_hash or ''}\n{readme_hash}".encode("ascii")).hexdigest()
-    return {"nutrients": nutrients, "view": view, "gitattributes": gitattributes, "state": state}
+    return {"nutrients": nutrients, "view": view, "view_secret_lines": secret_lines_of_view, "gitattributes": gitattributes,
+            "state": state}
 
 
 # ---------------------------------------------------------------- lineage
@@ -1577,7 +1581,8 @@ def project_state(root: Path, inventory: bool) -> dict:
         "writable": os.access(writable_target, os.W_OK),
     }
     folder = export_folder(root)
-    state.update({key: folder[key] for key in ("export_dir", "nutrients", "view", "gitattributes", "state")})
+    state.update({key: folder[key] for key in ("export_dir", "nutrients", "view", "view_secret_lines", "gitattributes",
+                                               "state")})
     nulls = {"lineage": None, "generation": None, "existing_generation": None, "constitution": None, "specs": None,
              "lineage_missing_specs": None, "inventory": None, "existing": None, "lineage_content": None}
     if folder["export_dir"] == "conflict":
@@ -1632,8 +1637,8 @@ def command_check(io, project: Path, options: dict) -> int:
 
 
 CHECK_KEYS = (
-    "project", "git", "writable", "export_dir", "nutrients", "view", "gitattributes", "state", "lineage", "generation",
-    "existing_generation", "constitution", "specs", "lineage_missing_specs", "inventory", "existing", "lineage_content",
+    "project", "git", "writable", "export_dir", "nutrients", "view", "view_secret_lines", "gitattributes", "state",
+    "lineage", "generation", "existing_generation", "constitution", "specs", "lineage_missing_specs", "inventory", "existing", "lineage_content",
 )
 
 
