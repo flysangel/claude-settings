@@ -5,8 +5,8 @@
 
 > **目前狀態**：部署工具（spec 001）已合併進 `main`，Linux 與 Windows 的 CI 都通過，下方的指令已可使用。
 > `home/` 目前有全域 `CLAUDE.md`（spec 002）、`sdd-init` skill（spec 003）、`sdd-update` skill（spec 004）、`sdd-grill` skill（spec 005）、
-> `sdd-export` skill（spec 006）與 `sdd-rebuild` skill（spec 007）。`CLAUDE.md` 引用的其餘 1 個 skill（`sdd-drive`）
-> 由 spec 008 提供，完成前尚未安裝；此時 Claude 會回報 skill 不存在。
+> `sdd-export` skill（spec 006）、`sdd-rebuild` skill（spec 007）與 `sdd-drive` skill（spec 008）；`CLAUDE.md` 引用的
+> 6 個 SDD skill 都已提供。
 
 ## 安裝與更新
 
@@ -109,6 +109,19 @@ curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tool
 進度存在不入庫的 `.specify/sdd-rebuild/`，中斷後再執行會接續。世代紀錄 `.sdd-rebuild/lineage.json` MUST 提交，下一次 `/sdd-export` 需要它。
 完成後下一步是 `/sdd-drive`。前置需求：新專案已導入 Spec Kit（`/sdd-init`）、同時部署 `sdd-export` 與 `sdd-grill`、`uv`。
 細節見 [home/skills/sdd-rebuild/README.md](home/skills/sdd-rebuild/README.md)。
+
+## 由子 session 依序把每份 spec 做到完成
+
+| 指令 | 作用 |
+|---|---|
+| `/sdd-drive` | spec 確認後，由子 session 依編號一份一份做完 plan、tasks、implement，腳本親自執行測試，再以 Spec Kit 的對照檢查確認沒有漏做，才開始下一份 |
+
+只能由維護者在主 session 輸入；主 session 只執行腳本、等待與回報，不親自做。過程不等核可，只在失敗、對照檢查找到漏做、
+中斷或用量上限（沒有重置時間或再次中斷）時停止並回報；再輸入一次 `/sdd-drive` 會依檔案狀態從未完成處接續。
+有重置時間的用量上限會在重置後自動接續一次（維護者不在場時也會）。導入前已全部勾選的 spec 是既有的基準，只測試、不做對照檢查。
+每份 spec 一個分支、後一份疊在前一份之上；子 session 會 commit，但一律不 push。紀錄存在不入庫的 `.specify/sdd-drive/`，
+要重設請用 `clear`，不要手動刪除。前置需求：已導入 Spec Kit（`/sdd-init`）、同時部署 `sdd-grill`、Claude Code（`claude -p`）與 `uv`。
+細節見 [home/skills/sdd-drive/README.md](home/skills/sdd-drive/README.md)。
 
 ## 部署工具的結束碼
 

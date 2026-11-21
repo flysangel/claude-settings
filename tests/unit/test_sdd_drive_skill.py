@@ -393,3 +393,36 @@ def test_stage_1_state_unreadable_offers_clear():
     for word in ("detail", "never a value", "baseline", "`clear`", "no spec is a baseline", "tested and checked",
                  "Never suggest deleting `.specify/sdd-drive/` by hand"):
         assert word in line, word
+
+
+# ============================================== T052 folder, README and the script's text
+
+
+def test_folder_holds_exactly_three_files():
+    files = sorted(p.relative_to(SKILL_DIR).as_posix() for p in SKILL_DIR.rglob("*")
+                   if p.is_file() and "__pycache__" not in p.parts)
+    assert files == ["README.md", "SKILL.md", "scripts/sdd_drive.py"]
+    tracked = subprocess.run(["git", "ls-files", "home/skills/sdd-drive"], cwd=REPO_ROOT, capture_output=True,
+                             text=True).stdout.split()
+    assert set(tracked) <= {"home/skills/sdd-drive/README.md", "home/skills/sdd-drive/SKILL.md",
+                            "home/skills/sdd-drive/scripts/sdd_drive.py"}
+
+
+def test_readme_is_traditional_chinese_and_covers_the_topics():
+    readme = README_MD.read_text(encoding="utf-8")
+    assert CJK.search(readme)
+    for word in ("/sdd-drive", "disable-model-invocation", "plan", "tasks", "implement", "測試", "對照檢查", "停止",
+                 "失敗", "漏做", "中斷", "用量上限", "沒有重置時間", "接續", "不 push", "分支", "疊在前一份之上",
+                 ".specify/sdd-drive/", "不入庫", "claude -p", "uv", "模型", "opus", "sonnet", "既有的基準",
+                 "不做對照檢查", "自動接續", "代價", "clear", "不要手動刪除", "Orca"):
+        assert word in readme, word
+    assert not ABSOLUTE_PATH.search(readme) and not EMAIL.search(readme)
+
+
+def test_script_and_work_description_have_no_absolute_paths_or_emails():
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert not ABSOLUTE_PATH.search(script)
+    assert not EMAIL.search(script)
+    templates = "".join(re.findall(r'(?s)BRIEF_[A-Z_]+ = (?:\{.*?\n\}|""".*?""")', script))
+    assert "Project root: ." in templates
+    assert not ABSOLUTE_PATH.search(templates) and not EMAIL.search(templates) and not CJK.search(templates)
