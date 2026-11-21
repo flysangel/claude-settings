@@ -255,7 +255,10 @@ sys.stdin.readline()
 
 @contextlib.contextmanager
 def hold_lock(root: Path):
-    """Another process holds .specify/sdd-drive/lock until the block ends."""
+    """Another process holds .specify/sdd-drive/lock until the block ends.
+
+    Inside the block every platform behaves like Windows: reading the lock file fails (windows_lock_reads).
+    """
     folder = root / ".specify" / "sdd-drive"
     folder.mkdir(parents=True, exist_ok=True)
     if not (folder / ".gitignore").exists():
@@ -264,16 +267,66 @@ def hold_lock(root: Path):
                               stdout=subprocess.PIPE)
     try:
         assert holder.stdout.readline().strip() == b"locked"
-        yield holder
+        with pytest.MonkeyPatch.context() as patch, windows_lock_reads(patch, root):
+            yield holder
     finally:
         if holder.poll() is None:
             holder.stdin.close()
             holder.wait(timeout=30)
 
 
+LOCK_REL = ".specify/sdd-drive/lock"
+
+
 def snapshot_without_lock(root: Path) -> dict:
-    """tree_snapshot minus the lock file: while it is locked, Windows refuses to read its bytes."""
-    return {k: v for k, v in tree_snapshot(root).items() if k != ".specify/sdd-drive/lock"}
+    """tree_snapshot that never opens the lock file: while it is locked, Windows refuses to read its bytes."""
+    return tree_snapshot(root, exclude=(LOCK_REL,))
+
+
+class LockedRead:
+    """A file object for the lock file that behaves like Windows while the byte range is locked: open succeeds,
+    reading fails with PermissionError, everything else (seek, fileno, close) works."""
+
+    def __init__(self, handle):
+        self._handle = handle
+
+    def _refuse(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    read = readall = readinto = readline = readlines = _refuse
+
+    def __iter__(self):
+        self._refuse()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._handle.close()
+        return False
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
+
+
+@contextlib.contextmanager
+def windows_lock_reads(monkeypatch, root: Path):
+    """While active, any open() of the lock file returns LockedRead (builtins.open, io.open and Path.open)."""
+    import builtins
+
+    target = os.path.normcase(os.path.abspath(root / LOCK_REL))
+    real_open = io.open
+
+    def locked_open(file, *args, **kwargs):
+        handle = real_open(file, *args, **kwargs)
+        if isinstance(file, (str, os.PathLike)) and os.path.normcase(os.path.abspath(file)) == target:
+            return LockedRead(handle)
+        return handle
+
+    with monkeypatch.context() as patch:
+        patch.setattr(builtins, "open", locked_open)
+        patch.setattr(io, "open", locked_open)
+        yield
 
 
 def wait_for(predicate, seconds: float = 30.0):
@@ -552,10 +605,10 @@ def test_state_write_replaces_through_a_temporary_file(drive_module, tmp_path, m
     before = state_file(root).read_bytes()
     drive_module.load_grill()
 
-    def broken(path, data):
+    def broken(src, dst):
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(drive_module.G(), "atomic_write", broken)
+    monkeypatch.setattr(drive_module.os, "replace", broken)
     result = drive(drive_module, root, "clear")
     assert (result.code, result.json["reason"]) == (1, "os-error")
     assert state_file(root).read_bytes() == before
@@ -703,41 +756,54 @@ def test_other_tools_state_file_and_specify_gitignore_are_untouched(drive_module
 # ======================================================== T008 lock
 
 
-def test_held_lock_reports_running_and_refuses_writers(drive_module, tmp_path):
+def test_held_lock_reports_running_and_refuses_writers(drive_module, tmp_path, monkeypatch):
     root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (1, 1)}})
     write_state(root, blank_state(attempts=[attempt(1, phase="implement")]))
     with hold_lock(root):
         data = status(drive_module, root)
         assert data["running"] is True and data["next"]["action"] == "wait"
         before = snapshot_without_lock(root)
+        assert LOCK_REL not in before and ".specify/sdd-drive/state.json" in before
         for argv in (["run", "--spec", "001-alpha", "--phase", "check", "--model", "opus", "--reason", "r"],
                      ["test", "--spec", "001-alpha"], ["finalize"], ["clear"]):
             result = drive(drive_module, root, *argv)
             assert (result.code, result.json["reason"]) == (1, "running"), argv
         assert snapshot_without_lock(root) == before
-        assert (root / ".specify/sdd-drive/lock").is_file()
+        assert (root / LOCK_REL).is_file()
     assert status(drive_module, root)["running"] is False
+
+
+def test_windows_lock_reads_refuses_like_windows(tmp_path, monkeypatch):
+    """The simulation itself: open succeeds, read fails, other files are untouched, tree_snapshot fails without
+    exclude and succeeds with it."""
+    root = tmp_path / "proj"
+    write_tree(root, {LOCK_REL: "", "other.txt": "x"})
+    with windows_lock_reads(monkeypatch, root):
+        with open(root / LOCK_REL, "rb") as handle:
+            handle.seek(0)
+            assert isinstance(handle.fileno(), int)
+            with pytest.raises(PermissionError):
+                handle.read()
+        with pytest.raises(PermissionError):
+            (root / LOCK_REL).read_bytes()
+        assert (root / "other.txt").read_bytes() == b"x"
+        with pytest.raises(PermissionError):
+            tree_snapshot(root)
+        assert set(tree_snapshot(root, exclude=(LOCK_REL,))) == {".specify", ".specify/sdd-drive", "other.txt"}
 
 
 def test_script_never_reads_the_lock_file_while_it_is_held(drive_module, tmp_path, monkeypatch):
     """On Windows a locked byte range cannot be read; the fingerprint, the tree hashes and status must skip it."""
     root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (1, 1)}})
     write_state(root, blank_state(attempts=[attempt(1, phase="implement")]))
-    lock_path = root / ".specify" / "sdd-drive" / "lock"
-    real_read_bytes = Path.read_bytes
-
-    def refuse_read_bytes(self):
-        if self.name == "lock" and self.parent.name == "sdd-drive":
-            raise PermissionError(13, "Permission denied", str(self))
-        return real_read_bytes(self)
-
+    drive_module.load_grill()
     with hold_lock(root):
-        assert lock_path.is_file()
-        monkeypatch.setattr(Path, "read_bytes", refuse_read_bytes)
+        assert (root / LOCK_REL).is_file()
         (root / "specs" / "001-alpha" / "dirty.txt").write_bytes(b"x")
         assert drive_module.worktree_fingerprint(root).startswith("sha256:")
         hashes = drive_module.tree_hashes(root, True)
         assert not any(k.startswith(".specify/sdd-drive") for k in hashes)
+        assert drive_module.own_dir_state(root) == "ours"
         assert status(drive_module, root)["running"] is True
 
 
