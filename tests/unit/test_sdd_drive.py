@@ -72,9 +72,24 @@ class Result:
         self.out = out
         self.err = err
 
+    def describe(self) -> str:
+        """The whole outcome, for assertion messages: when CI fails, the log shows why."""
+        return (f"exit code {self.code}\nstdout:\n{self.out.decode('utf-8', 'replace')}\n"
+                f"stderr:\n{self.err.decode('utf-8', 'replace')}")
+
     @property
     def json(self) -> dict:
-        return json.loads(self.out.decode("utf-8"))
+        try:
+            return json.loads(self.out.decode("utf-8"))
+        except ValueError:
+            raise AssertionError("output is not JSON\n" + self.describe()) from None
+
+    @property
+    def watched(self) -> dict:
+        """The output of run or watch; fails with the whole output when it has no attempts (an error, for example)."""
+        data = self.json
+        assert self.code == 0 and "attempts" in data and "status" in data, self.describe()
+        return data
 
     @property
     def text(self) -> str:
@@ -184,7 +199,17 @@ def state_file(root: Path) -> Path:
 
 
 def read_state(root: Path) -> dict:
-    return json.loads(state_file(root).read_bytes().decode("utf-8"))
+    """state.json; on Windows a read may meet the driver replacing the file, so PermissionError is retried."""
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            data = state_file(root).read_bytes()
+            break
+        except PermissionError:
+            if os.name != "nt" or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+    return json.loads(data.decode("utf-8"))
 
 
 def write_state(root: Path, state: dict) -> None:
@@ -385,7 +410,7 @@ def test_run_reason_length_and_lines_are_usage(drive_module, tmp_path, reason):
 def test_output_is_one_utf8_json_object_with_lf_and_indent_two(drive_module, tmp_path):
     root = make_project(tmp_path, specs={"001-alpha": {}})
     result = drive(drive_module, root, "status")
-    assert result.code == 0
+    assert result.code == 0, result.describe()
     text = result.out.decode("utf-8")
     assert text.endswith("}\n") and "\r" not in text
     assert text == json.dumps(json.loads(text), ensure_ascii=False, indent=2) + "\n"
@@ -700,7 +725,7 @@ def test_secrets_from_outside_are_replaced_before_writing(drive_module, tmp_path
                                                  "failure": {"kind": "tooling", "step": "token=" + SECRET_VALUE,
                                                              "reason": SECRET_VALUE}}})
     result = run_phase(drive_module, root, "001-alpha", "plan")
-    assert result.code == 0
+    assert result.code == 0, result.describe()
     raw = state_file(root).read_text(encoding="utf-8")
     assert SECRET_VALUE not in raw and SECRET_VALUE not in result.text
     report = read_state(root)["attempts"][0]["report"]
@@ -713,7 +738,7 @@ def test_error_text_secret_is_replaced(drive_module, tmp_path, monkeypatch):
     scenarios(monkeypatch, {"do": [], "result": {"is_error": True, "api_error_status": 401,
                                                  "result": "bad key " + SECRET_VALUE}})
     result = run_phase(drive_module, root, "001-alpha", "plan")
-    assert result.json["attempts"][0]["detail"]["text"] == SECRET_TEXT
+    assert result.watched["attempts"][0]["detail"]["text"] == SECRET_TEXT
     assert SECRET_VALUE not in state_file(root).read_text(encoding="utf-8")
 
 
@@ -844,7 +869,7 @@ def test_old_launch_without_lock_is_a_failed_start(drive_module, tmp_path):
     assert data["running"] is False and data["pending_finalize"] is True
     assert data["next"]["action"] == "finalize"
     watched = drive(drive_module, root, "watch")
-    assert watched.code == 0 and watched.json["status"] == "launch-failed"
+    assert watched.code == 0 and watched.watched["status"] == "launch-failed"
 
 
 # ======================================================== T010 git and protected files
@@ -1199,7 +1224,7 @@ def test_brief_holds_every_required_item(m, tmp_path, phase):
     root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "command": "TESTCMD"}})
     before = tree_snapshot(root)
     result = drive(m, root, "brief", "--spec", "001-alpha", "--phase", phase)
-    assert result.code == 0
+    assert result.code == 0, result.describe()
     text = result.text
     for item in BRIEF_COMMON_ITEMS + BRIEF_PHASE_ITEMS[phase]:
         assert item.format(phase=phase, skill=SKILL_OF[phase]) in text, item
@@ -1285,7 +1310,7 @@ def test_run_success_prepares_and_records(m, tmp_path, monkeypatch):
     start_head = head_of(root)
     scenarios(monkeypatch, {"test_command": PASS_CMD})
     result = run_phase(m, root, "001-alpha", "plan", "opus", "Design work with new mechanisms.")
-    assert result.code == 0
+    assert result.code == 0, result.describe()
     assert json.loads((root / ".specify/feature.json").read_text(encoding="utf-8")) == {
         "feature_directory": "specs/001-alpha", "keep": True}
     assert not (root / ".specify/sdd-drive/cancel").exists()
@@ -1305,7 +1330,7 @@ def test_run_writes_a_pending_attempt_and_launch_before_the_driver(m, tmp_path, 
     monkeypatch.setattr(m, "start_driver", lambda root, token: True)
     monkeypatch.setenv("SDD_DRIVE_TEST_TIMING", json.dumps(dict(TIMING, watch_seconds=0.2)))
     result = run_phase(m, root, "001-alpha", "plan")
-    assert result.code == 0 and result.json["status"] == "running"
+    assert result.code == 0 and result.watched["status"] == "running"
     state = read_state(root)
     assert state["attempts"][0]["outcome"] is None and state["launch"]["token"]
     assert status(m, root)["next"]["action"] == "wait"
@@ -1315,8 +1340,8 @@ def test_run_start_failure_is_launch_failed(m, tmp_path, monkeypatch):
     root = make_project(tmp_path, specs={"001-alpha": {}})
     monkeypatch.setattr(m, "start_driver", lambda root, token: False)
     result = run_phase(m, root, "001-alpha", "plan")
-    assert result.code == 0
-    data = result.json
+    assert result.code == 0, result.describe()
+    data = result.watched
     assert data["status"] == "finished" and data["attempts"][0]["outcome"] == "launch-failed"
     assert data["attempts"][0]["detail"]["code"] == "launch"
     assert read_state(root)["launch"] is None
@@ -1331,6 +1356,7 @@ def test_child_receives_the_documented_arguments_and_the_brief(m, tmp_path, monk
     scenarios(monkeypatch, {"test_command": PASS_CMD})
     expected_brief = drive(m, root, "brief", "--spec", "001-alpha", "--phase", "plan").text
     result = run_phase(m, root, "001-alpha", "plan", "opus", "Design.")
+    assert result.watched["status"] == "finished", result.describe()
     call = calls(tmp_path)[0]
     session = read_state(root)["attempts"][0]["session_id"]
     assert call["argv"][:12] == ["-p", "--output-format", "stream-json", "--verbose", "--model", "opus",
@@ -1340,7 +1366,7 @@ def test_child_receives_the_documented_arguments_and_the_brief(m, tmp_path, monk
                                  "--disallowedTools", "AskUserQuestion", "Bash(git push*)"]
     assert call["stdin"] == expected_brief
     assert Path(call["cwd"]).resolve() == root.resolve()
-    assert result.json["attempts"][0]["model_used"] == ["claude-opus-test"]
+    assert result.watched["attempts"][0]["model_used"] == ["claude-opus-test"]
 
 
 def test_three_phases_succeed_and_record_worktree_and_task_ids(m, tmp_path, monkeypatch):
@@ -1348,7 +1374,7 @@ def test_three_phases_succeed_and_record_worktree_and_task_ids(m, tmp_path, monk
     scenarios(monkeypatch, {"test_command": PASS_CMD, "tasks": 4})
     for phase, after in (("plan", "planned"), ("tasks", "tasked"), ("implement", "implementing")):
         result = run_phase(m, root, "001-alpha", phase)
-        data = result.json
+        data = result.watched
         assert data["status"] == "finished"
         assert data["attempts"][0]["outcome"] == "succeeded", data
         assert data["state_after"]["state"] == after
@@ -1365,7 +1391,7 @@ def test_template_artifacts_are_verify_failed(m, tmp_path, monkeypatch, phase, a
     specs = {"001-alpha": {"plan": True} if phase == "tasks" else {}}
     root = make_project(tmp_path, specs=specs)
     scenarios(monkeypatch, {"do": [action]})
-    data = run_phase(m, root, "001-alpha", phase).json
+    data = run_phase(m, root, "001-alpha", phase).watched
     assert data["attempts"][0]["outcome"] == "verify-failed"
     assert data["attempts"][0]["detail"]["code"] == code
     assert data["attempts"][0]["counts_as_failure"] is True
@@ -1376,14 +1402,14 @@ def test_driver_clears_launch_writes_driver_and_clears_it(m, tmp_path, monkeypat
     scenarios(monkeypatch, {"test_command": PASS_CMD, "sleep": 1.5})
     monkeypatch.setenv("SDD_DRIVE_TEST_TIMING", json.dumps(dict(TIMING, watch_seconds=0.3)))
     first = run_phase(m, root, "001-alpha", "plan")
-    assert first.json["status"] == "running"
+    assert first.watched["status"] == "running"
     seen = wait_for(lambda: read_state(root)["driver"])
     assert seen["phase"] == "running" and seen["attempt"] == 1 and read_state(root)["launch"] is None
     data = status(m, root)
     assert data["running"] is True and data["driver"]["phase"] == "running"
     monkeypatch.setenv("SDD_DRIVE_TEST_TIMING", json.dumps(TIMING))
     final = drive(m, root, "watch")
-    assert final.json["status"] == "finished" and final.json["attempts"][0]["outcome"] == "succeeded"
+    assert final.watched["status"] == "finished" and final.watched["attempts"][0]["outcome"] == "succeeded"
     assert read_state(root)["driver"] is None
     # the driver did not start the next phase by itself
     assert len(calls(tmp_path)) == 1
@@ -1395,7 +1421,7 @@ def test_watch_output_fields(m, tmp_path, monkeypatch):
                             "result": {"permission_denials": [{"tool_name": "WebFetch", "tool_input": {"url": "x"}},
                                                               {"tool_name": "WebFetch", "tool_input": {}}]}})
     run_phase(m, root, "001-alpha", "plan", "opus", "Design.")
-    data = drive(m, root, "watch").json
+    data = drive(m, root, "watch").watched
     assert list(data) == ["status", "attempts", "waiting_until", "state_after", "failures"]
     view = data["attempts"][0]
     assert list(view) == ["spec", "phase", "outcome", "auto", "counts_as_failure", "model", "model_used", "reason",
@@ -1415,7 +1441,7 @@ def test_watch_without_any_attempt_is_no_driver(m, tmp_path):
 def test_watch_reports_the_last_finished_attempt(m, tmp_path):
     root = make_project(tmp_path, specs={"001-alpha": {"plan": True}})
     write_state(root, blank_state(attempts=[attempt(1)]))
-    data = drive(m, root, "watch").json
+    data = drive(m, root, "watch").watched
     assert data["status"] == "finished" and data["attempts"][0]["outcome"] == "succeeded"
 
 
@@ -1438,7 +1464,7 @@ def test_two_specs_in_order(m, tmp_path, monkeypatch):
         if nxt["action"] == "test":
             assert drive(m, root, "test", "--spec", nxt["spec"]).json["passed"] is True
         else:
-            data = run_phase(m, root, nxt["spec"], nxt["phase"]).json
+            data = run_phase(m, root, nxt["spec"], nxt["phase"]).watched
             assert data["attempts"][-1]["outcome"] == "succeeded", data
     assert order == [("001-alpha", p) for p in ("plan", "tasks", "implement", "test", "check")] + \
                     [("002-beta", p) for p in ("plan", "tasks", "implement", "test", "check")]
@@ -1692,8 +1718,7 @@ def ready_for_check(m, tmp_path, monkeypatch, *, remote=False):
 def run_check(m, root, monkeypatch, scenario):
     scenarios(monkeypatch, scenario)
     result = run_phase(m, root, "001-alpha", "check", "opus", "Careful comparison.")
-    assert result.code == 0, result.out
-    return result.json
+    return result.watched
 
 
 def test_check_converged_is_done_at_once(m, tmp_path, monkeypatch):
@@ -1782,7 +1807,7 @@ def test_check_rewrite_with_checked_task_is_detected(m, tmp_path, monkeypatch):
     path = root / "specs/001-alpha/tasks.md"
     scenarios(monkeypatch, {"do": [], "files": {"specs/001-alpha/tasks.md": path.read_text().replace("- [x] T001", "- [ ] T001")},
                             "report": {"status": "completed", "summary": "x"}})
-    view = run_phase(m, root, "001-alpha", "check", "opus", "r").json["attempts"][0]
+    view = run_phase(m, root, "001-alpha", "check", "opus", "r").watched["attempts"][0]
     assert view["detail"]["code"] == "check-rewrote-tasks"
 
 
@@ -1797,7 +1822,7 @@ def test_gaps_found_then_implement_test_check_again_without_looping(m, tmp_path,
     root = ready_for_check(m, tmp_path, monkeypatch)
     run_check(m, root, monkeypatch, {"do": ["append"], "commit_only": ["specs/001-alpha/tasks.md"]})
     scenarios(monkeypatch, {})
-    assert run_phase(m, root, "001-alpha", "implement").json["attempts"][0]["outcome"] == "succeeded"
+    assert run_phase(m, root, "001-alpha", "implement").watched["attempts"][0]["outcome"] == "succeeded"
     assert len(calls(tmp_path)) == 2  # nothing ran on its own after gaps-found
     nxt = status(m, root)["next"]
     assert (nxt["action"], nxt["spec"]) == ("test", "001-alpha")
@@ -1848,8 +1873,8 @@ def test_failed_report_is_recorded_and_counted(m, tmp_path, monkeypatch, kind):
               "failure": {"kind": kind, "step": "T002", "reason": "needs a push"}}
     scenarios(monkeypatch, {"do": [], "report": report})
     result = run_phase(m, root, "001-alpha", "implement")
-    assert result.code == 0
-    view = result.json["attempts"][0]
+    assert result.code == 0, result.describe()
+    view = result.watched["attempts"][0]
     assert (view["outcome"], view["counts_as_failure"]) == ("failed", True)
     assert view["failure"] == {"kind": kind, "step": "T002", "reason": "needs a push",
                                "tasks": ["T003"] if kind == "blocked-task" else []}
@@ -1880,7 +1905,7 @@ def implementing(tmp_path, remote=False, tasks=(3, 0)):
 def test_verify_failed_codes(m, tmp_path, monkeypatch, scenario, code, paths):
     root = implementing(tmp_path)
     scenarios(monkeypatch, scenario)
-    view = run_phase(m, root, "001-alpha", "implement").json["attempts"][0]
+    view = run_phase(m, root, "001-alpha", "implement").watched["attempts"][0]
     assert (view["outcome"], view["detail"]["code"], view["detail"]["paths"]) == ("verify-failed", code, paths)
     if code == "uncommitted":
         assert (root / "left-behind.txt").read_text() == "not committed\n"
@@ -1897,7 +1922,7 @@ def test_verify_failed_codes(m, tmp_path, monkeypatch, scenario, code, paths):
 def test_push_is_verify_failed(m, tmp_path, monkeypatch):
     root = implementing(tmp_path, remote=True)
     scenarios(monkeypatch, {"do": ["implement", "push"]})
-    view = run_phase(m, root, "001-alpha", "implement").json["attempts"][0]
+    view = run_phase(m, root, "001-alpha", "implement").watched["attempts"][0]
     assert view["detail"]["code"] == "pushed"
 
 
@@ -1907,7 +1932,7 @@ def test_second_spec_failing_never_starts_the_third(m, tmp_path, monkeypatch):
     assert drive(m, root, "test", "--spec", "001-alpha").json["passed"] is True
     scenarios(monkeypatch, {"do": [], "report": {"status": "failed", "summary": "x",
                                                  "failure": {"kind": "requirements", "step": "plan", "reason": "conflict"}}})
-    assert run_phase(m, root, "002-beta", "plan").json["attempts"][0]["outcome"] == "failed"
+    assert run_phase(m, root, "002-beta", "plan").watched["attempts"][0]["outcome"] == "failed"
     for _ in range(2):
         nxt = status(m, root)["next"]
         assert (nxt["spec"], nxt["phase"]) == ("002-beta", "plan")
@@ -1921,7 +1946,7 @@ def test_retry_after_a_failure_starts_from_the_failed_phase(m, tmp_path, monkeyp
                                                  "failure": {"kind": "other", "step": "s", "reason": "r"}}},
               {"test_command": PASS_CMD})
     run_phase(m, root, "001-alpha", "plan")
-    data = run_phase(m, root, "001-alpha", "plan").json
+    data = run_phase(m, root, "001-alpha", "plan").watched
     assert data["attempts"][0]["outcome"] == "succeeded"
     assert data["failures"] == {"plan": 1}
     assert status(m, root)["specs"][0]["state"] == "planned"
@@ -1932,7 +1957,7 @@ def test_permission_denials_are_tool_names_only(m, tmp_path, monkeypatch):
     scenarios(monkeypatch, {"test_command": PASS_CMD, "result": {"permission_denials": [
         {"tool_name": "Bash", "tool_input": {"command": "rm -rf x"}}, {"tool_name": "Bash", "tool_input": {}},
         {"tool_name": "WebFetch", "tool_input": {"url": "u"}}]}})
-    data = run_phase(m, root, "001-alpha", "plan").json
+    data = run_phase(m, root, "001-alpha", "plan").watched
     assert data["attempts"][0]["permission_denials"] == ["Bash", "WebFetch"]
     assert "rm -rf" not in state_file(root).read_text(encoding="utf-8")
 
@@ -1951,7 +1976,7 @@ def test_permission_denials_are_tool_names_only(m, tmp_path, monkeypatch):
 def test_non_failure_endings_are_not_counted(m, tmp_path, monkeypatch, scenario, outcome, code):
     root = make_project(tmp_path, specs={"001-alpha": {}})
     scenarios(monkeypatch, scenario)
-    data = run_phase(m, root, "001-alpha", "plan").json
+    data = run_phase(m, root, "001-alpha", "plan").watched
     view = data["attempts"][0]
     assert (view["outcome"], view["detail"]["code"], view["counts_as_failure"]) == (outcome, code, False)
     if code == "api-error":
@@ -1964,7 +1989,7 @@ def test_non_failure_endings_are_not_counted(m, tmp_path, monkeypatch, scenario,
 def test_missing_claude_executable_is_launch_failed(m, tmp_path, monkeypatch):
     root = make_project(tmp_path, specs={"001-alpha": {}})
     monkeypatch.setenv("SDD_DRIVE_CLAUDE", json.dumps([str(tmp_path / "no-such-claude")]))
-    data = run_phase(m, root, "001-alpha", "plan").json
+    data = run_phase(m, root, "001-alpha", "plan").watched
     view = data["attempts"][0]
     assert (view["outcome"], view["detail"]["code"], view["counts_as_failure"]) == ("launch-failed", "launch", False)
     assert status(m, root)["next"]["action"] == "run"
@@ -1995,7 +2020,7 @@ def test_finalize_records_interrupted_with_the_fingerprint(m, tmp_path):
     pending(root, launch={"token": UUID2, "at": T0})
     write_tree(root, {"half-done.txt": "x"})
     result = drive(m, root, "finalize")
-    assert result.code == 0
+    assert result.code == 0, result.describe()
     data = result.json
     assert list(data) == ["spec", "phase", "model", "started_at", "outcome", "auto_resume", "state_after"]
     assert (data["spec"], data["phase"], data["model"], data["started_at"], data["outcome"]) == (
@@ -2036,7 +2061,7 @@ def test_run_exit_code_is_zero_when_the_child_fails(m, tmp_path, monkeypatch):
 def interrupted_plan(m, tmp_path, monkeypatch, scenario=None):
     root = make_project(tmp_path, specs={"001-alpha": {}, "002-beta": {}})
     scenarios(monkeypatch, scenario or {"do": [], "no_result": True})
-    first = run_phase(m, root, "001-alpha", "plan", "opus", "Design.").json["attempts"][0]
+    first = run_phase(m, root, "001-alpha", "plan", "opus", "Design.").watched["attempts"][0]
     assert first["outcome"] in ("interrupted", "usage-limit", "api-error")
     return root, first
 
@@ -2053,7 +2078,7 @@ def test_resume_is_next_after_an_interruption(m, tmp_path, monkeypatch):
 def test_run_resume_continues_the_same_session(m, tmp_path, monkeypatch):
     root, first = interrupted_plan(m, tmp_path, monkeypatch)
     scenarios(monkeypatch, {"test_command": PASS_CMD})
-    data = run_phase(m, root, "001-alpha", "plan", "opus", "Resuming the interrupted session.", "--resume").json
+    data = run_phase(m, root, "001-alpha", "plan", "opus", "Resuming the interrupted session.", "--resume").watched
     view = data["attempts"][0]
     assert (view["outcome"], view["resume"], view["session_id"], view["auto"]) == (
         "succeeded", True, first["session_id"], False)
@@ -2066,7 +2091,7 @@ def test_run_resume_continues_the_same_session(m, tmp_path, monkeypatch):
 def test_resume_fresh_starts_a_new_session(m, tmp_path, monkeypatch):
     root, first = interrupted_plan(m, tmp_path, monkeypatch)
     scenarios(monkeypatch, {"test_command": PASS_CMD})
-    data = run_phase(m, root, "001-alpha", "plan", "opus", "Fresh session.", "--resume", "--fresh").json
+    data = run_phase(m, root, "001-alpha", "plan", "opus", "Fresh session.", "--resume", "--fresh").watched
     view = data["attempts"][0]
     assert view["session_id"] != first["session_id"] and view["resume"] is False
     call = calls(tmp_path)[-1]
@@ -2077,7 +2102,7 @@ def test_resume_fresh_starts_a_new_session(m, tmp_path, monkeypatch):
 def test_failed_resume_is_resume_failed_and_not_counted(m, tmp_path, monkeypatch):
     root, first = interrupted_plan(m, tmp_path, monkeypatch)
     scenarios(monkeypatch, {"fail_resume": True})
-    data = run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume").json
+    data = run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume").watched
     view = data["attempts"][0]
     assert (view["resume_failed"], view["counts_as_failure"], view["outcome"]) == (True, False, "api-error")
     assert data["failures"] == {}
@@ -2095,7 +2120,7 @@ def test_leftovers_allow_resume_and_changed_ones_do_not(m, tmp_path, monkeypatch
     assert run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume").json["reason"] == "dirty"
     (root / "mine.txt").unlink()
     scenarios(monkeypatch, {"do": ["plan"], "test_command": PASS_CMD})
-    data = run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume").json
+    data = run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume").watched
     assert data["attempts"][0]["outcome"] == "succeeded"
     assert git_run(root, "status", "--porcelain") == ""
 
@@ -2114,7 +2139,7 @@ def test_resume_does_not_redo_checked_tasks(m, tmp_path, monkeypatch):
     run_phase(m, root, "001-alpha", "implement")
     assert status(m, root)["specs"][0]["tasks_open"] == 2
     scenarios(monkeypatch, {"do": ["implement"]})
-    data = run_phase(m, root, "001-alpha", "implement", "sonnet", "r", "--resume").json
+    data = run_phase(m, root, "001-alpha", "implement", "sonnet", "r", "--resume").watched
     assert data["attempts"][0]["outcome"] == "succeeded"
     assert status(m, root)["specs"][0]["tasks_open"] == 0
 
@@ -2173,7 +2198,7 @@ def test_compute_limit_cases(m):
 def test_usage_limit_is_detected_from_429_or_text(m, tmp_path, monkeypatch, result):
     root = make_project(tmp_path, specs={"001-alpha": {}})
     scenarios(monkeypatch, {"do": [], "result": result})
-    view = run_phase(m, root, "001-alpha", "plan").json["attempts"][0]
+    view = run_phase(m, root, "001-alpha", "plan").watched["attempts"][0]
     assert (view["outcome"], view["counts_as_failure"]) == ("usage-limit", False)
     assert view["limit"]["waitable"] is False and view["auto_resume"] == "not-waitable"
 
@@ -2183,7 +2208,7 @@ def test_only_overage_is_not_waitable_and_progress_is_kept(m, tmp_path, monkeypa
     overage = {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "rateLimitType": "overage",
                                                                "overageStatus": "rejected", "resetsAt": 1}}
     scenarios(monkeypatch, {"do": ["implement-partial"], "commit": False, "events": [overage], "result": LIMIT_RESULT})
-    data = run_phase(m, root, "001-alpha", "implement").json
+    data = run_phase(m, root, "001-alpha", "implement").watched
     view = data["attempts"][0]
     assert view["limit"] == {"waitable": False, "types": ["overage"], "resets_at": None, "overage_status": "rejected"}
     assert view["auto_resume"] == "not-waitable" and data["status"] == "finished"
@@ -2203,12 +2228,12 @@ def test_api_error_params_rate_limit_info_is_read(m, tmp_path, monkeypatch):
                  "api_error_params": {"rate_limit_info": {"rateLimitType": "seven_day", "resetsAt": reset}},
                  "message": {"content": []}}
     scenarios(monkeypatch, {"do": [], "events": [assistant], "result": LIMIT_RESULT})
-    first = run_phase(m, root, "001-alpha", "plan").json
+    first = run_phase(m, root, "001-alpha", "plan").watched
     assert first["status"] == "waiting"
     limit = first["attempts"][0]["limit"]
     assert (limit["waitable"], limit["types"]) == (True, ["seven_day"])
     drive(m, root, "cancel")
-    assert drive(m, root, "watch").json["attempts"][-1]["auto_resume"] == "cancelled"
+    assert drive(m, root, "watch").watched["attempts"][-1]["auto_resume"] == "cancelled"
 
 
 # ======================================================== T043 automatic resume, cancel, driver survival
@@ -2221,7 +2246,7 @@ def limit_scenario(reset_in: float = 1.0, **extra) -> dict:
 def test_waitable_limit_waits_and_resumes_once(m, tmp_path, monkeypatch):
     root = make_project(tmp_path, specs={"001-alpha": {}})
     scenarios(monkeypatch, limit_scenario(2), {"test_command": PASS_CMD})
-    first = run_phase(m, root, "001-alpha", "plan", "opus", "Design.").json
+    first = run_phase(m, root, "001-alpha", "plan", "opus", "Design.").watched
     assert first["status"] == "waiting" and first["waiting_until"]
     view = first["attempts"][0]
     assert (view["outcome"], view["auto_resume"], view["limit"]["waitable"]) == ("usage-limit", "waiting", True)
@@ -2232,7 +2257,7 @@ def test_waitable_limit_waits_and_resumes_once(m, tmp_path, monkeypatch):
     assert data["next"]["action"] == "wait"
     assert run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume").json["reason"] == "running"
     assert drive(m, root, "test", "--spec", "001-alpha").json["reason"] == "running"
-    final = drive(m, root, "watch").json
+    final = drive(m, root, "watch").watched
     assert final["status"] == "finished"
     assert [a["outcome"] for a in final["attempts"]] == ["usage-limit", "succeeded"]
     resumed = final["attempts"][1]
@@ -2251,18 +2276,18 @@ def test_waitable_limit_waits_and_resumes_once(m, tmp_path, monkeypatch):
 def test_watch_started_while_waiting_does_not_report_at_once(m, tmp_path, monkeypatch):
     root = make_project(tmp_path, specs={"001-alpha": {}})
     scenarios(monkeypatch, limit_scenario(60))
-    first = run_phase(m, root, "001-alpha", "plan").json
+    first = run_phase(m, root, "001-alpha", "plan").watched
     assert first["status"] == "waiting"
     monkeypatch.setenv("SDD_DRIVE_TEST_TIMING", json.dumps(dict(TIMING, watch_seconds=0.6)))
     started = time.monotonic()
-    second = drive(m, root, "watch").json
+    second = drive(m, root, "watch").watched
     assert time.monotonic() - started >= 0.5
     assert second["status"] == "waiting" and second["waiting_until"] == first["waiting_until"]
     cancel = drive(m, root, "cancel")
     assert cancel.code == 0 and cancel.json == {"cancel_requested": True, "waiting_until": first["waiting_until"]}
     assert drive(m, root, "cancel").code == 0  # an existing cancel file counts as success
     monkeypatch.setenv("SDD_DRIVE_TEST_TIMING", json.dumps(TIMING))
-    final = drive(m, root, "watch").json
+    final = drive(m, root, "watch").watched
     assert final["status"] == "finished" and final["attempts"][-1]["auto_resume"] == "cancelled"
     assert not (root / ".specify/sdd-drive/cancel").exists()
     assert len(calls(tmp_path)) == 1
@@ -2273,7 +2298,7 @@ def test_two_watches_in_a_row_do_not_report_the_same_wait(m, tmp_path, monkeypat
     root = make_project(tmp_path, specs={"001-alpha": {}})
     scenarios(monkeypatch, limit_scenario(1.5), {"test_command": PASS_CMD})
     assert run_phase(m, root, "001-alpha", "plan").json["status"] == "waiting"
-    second = drive(m, root, "watch").json
+    second = drive(m, root, "watch").watched
     assert second["status"] == "finished"
     assert [a["outcome"] for a in second["attempts"]] == ["usage-limit", "succeeded"]
 
@@ -2289,17 +2314,17 @@ def test_second_limit_after_the_automatic_resume_stops(m, tmp_path, monkeypatch)
     root = make_project(tmp_path, specs={"001-alpha": {}})
     scenarios(monkeypatch, limit_scenario(1), limit_scenario(60))
     assert run_phase(m, root, "001-alpha", "plan").json["status"] == "waiting"
-    final = drive(m, root, "watch").json
+    final = drive(m, root, "watch").watched
     assert [a["auto_resume"] for a in final["attempts"]] == ["started", "already-auto"]
     assert final["status"] == "finished" and len(calls(tmp_path)) == 2
     nxt = status(m, root)["next"]
     assert (nxt["action"], nxt["auto_resume"]) == ("resume", "already-auto")
     # A run started by the maintainer may wait once more.
     scenarios(monkeypatch, limit_scenario(60))
-    again = run_phase(m, root, "001-alpha", "plan", "opus", "Resuming.", "--resume").json
+    again = run_phase(m, root, "001-alpha", "plan", "opus", "Resuming.", "--resume").watched
     assert again["status"] == "waiting" and again["attempts"][0]["auto"] is False
     drive(m, root, "cancel")
-    assert drive(m, root, "watch").json["attempts"][-1]["auto_resume"] == "cancelled"
+    assert drive(m, root, "watch").watched["attempts"][-1]["auto_resume"] == "cancelled"
 
 
 def test_changed_worktree_while_waiting_skips_the_resume(m, tmp_path, monkeypatch):
@@ -2307,7 +2332,7 @@ def test_changed_worktree_while_waiting_skips_the_resume(m, tmp_path, monkeypatc
     scenarios(monkeypatch, limit_scenario(1.5))
     assert run_phase(m, root, "001-alpha", "plan").json["status"] == "waiting"
     write_tree(root, {"mine.txt": "x"})
-    final = drive(m, root, "watch").json
+    final = drive(m, root, "watch").watched
     assert final["attempts"][-1]["auto_resume"] == "skipped-changed" and len(calls(tmp_path)) == 1
     assert status(m, root)["dirty"] == ["mine.txt"]
 
@@ -2315,11 +2340,11 @@ def test_changed_worktree_while_waiting_skips_the_resume(m, tmp_path, monkeypatc
 def test_reset_already_past_waits_only_the_margin(m, tmp_path, monkeypatch):
     root = make_project(tmp_path, specs={"001-alpha": {}})
     scenarios(monkeypatch, limit_scenario(1, sleep=2.5), {"test_command": PASS_CMD})
-    first = run_phase(m, root, "001-alpha", "plan").json
+    first = run_phase(m, root, "001-alpha", "plan").watched
     assert first["status"] == "waiting"
     ended = m.parse_ts(read_state(root)["attempts"][0]["ended_at"])
     assert m.parse_ts(first["waiting_until"]) - ended <= TIMING["margin_seconds"] + 2
-    assert drive(m, root, "watch").json["attempts"][-1]["outcome"] == "succeeded"
+    assert drive(m, root, "watch").watched["attempts"][-1]["outcome"] == "succeeded"
 
 
 def test_vanished_driver_is_finalized_as_lost(m, tmp_path):
