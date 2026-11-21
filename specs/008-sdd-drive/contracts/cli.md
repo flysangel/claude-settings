@@ -33,7 +33,8 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
   所有指令以結束碼 3、`reason: "dependency"` 結束。
 - 外部指令：`git`（`rev-parse`、`status`、`for-each-ref`、`merge-base --is-ancestor`、`switch`、`switch -c`）、`claude`（只在 `run`）、
   測試指令（只在 `test`）。`claude` 的位置以 `shutil.which("claude")` 解析；環境變數 `SDD_DRIVE_CLAUDE` 若存在，必須是 JSON 字串陣列，
-  以它取代 `claude`（供測試使用，SKILL.md 不提及）。
+  以它取代 `claude`（供測試使用，SKILL.md 不提及）。另一個測試用的環境變數 `SDD_DRIVE_TEST_TIMING` 若存在，必須是 JSON 物件 `{"poll_seconds": n, "margin_seconds": n, "watch_seconds": n}`，
+  用來縮短 driver 的檢查間隔、重置後的緩衝與 `watch` 的時限（測試以假的 `resetsAt` 模擬重置時間，不改變判斷規則）。
 - **機密**（原則 V）：見 data-model「紀錄」。任何輸出（含 `error`、`detail`、`summary`、測試輸出的末段、`dirty` 的路徑）都不含符合機密樣式的值：
   字串以 `(not shown: looks like a secret)` 取代，路徑以 `(not shown)` 取代。
 - Windows 與 Linux 的輸出逐位元組相同（時間、雜湊、session ID、測試輸出這類取決於當下的值除外）。
