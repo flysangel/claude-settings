@@ -39,7 +39,7 @@
 | `"conflict"` | 路徑是檔案；或目錄內有上表以外的項目；或沒有 `nutrients.json` 卻有其他檔案；或 `nutrients.json` 是有效 JSON 但 `tool` 不是 `"sdd-export"` | 不可以；結束碼 3 |
 | `"unreadable"` | `nutrients.json` 不是有效的 UTF-8 JSON 物件 | 不可以；結束碼 3 |
 | `"newer"` | `schema` 大於支援的版本 | 不可以；結束碼 3 |
-| `"invalid"` | 結構不符合本文件（通常是手動編輯造成） | 不可以；結束碼 3，輸出違反的欄位路徑 |
+| `"invalid"` | 結構不符合本文件，或字串、欄位名稱符合機密樣式（通常是手動編輯造成；006 寫入時已攔截機密樣式） | 不可以；結束碼 3，輸出違反的欄位路徑（機密樣式只輸出 `check: secret` 與路徑，不輸出內容） |
 
 `.gitattributes` 的內容與上表不同時（維護者改過），`write` 不改寫它，`check` 以 `gitattributes: "edited"` 回報；
 不存在時 `write` 建立它（`"missing"`）。它不影響目錄是否屬於本功能。
@@ -66,6 +66,9 @@
 | | `"stale"` | 本文沒被改，但 `source-sha256` 與目前的 `nutrients.json` 不同 |
 | | `"edited"` | 本文雜湊不等於 `view-sha256`，或第一行不是標記 |
 | | `"missing"` | 有 `nutrients.json`，沒有 `README.md` |
+
+`check` 另外輸出 `view_secret_lines`：`README.md` 中符合機密樣式（見「機密樣式」）的行號，只有行號。`README.md` 由養分產生，
+只有手動修改才可能出現命中；SKILL.md 階段 7 在它不為空時不讀取 `README.md`（請維護者自行移除那幾行，或放棄手動修改由 `write` 重新產生）。
 
 ### `state`
 
@@ -356,7 +359,7 @@
 | 值 | 判定 | 能否繼續 |
 |---|---|---|
 | `"none"` | `.sdd-rebuild/lineage.json` 不存在 | 可以；這一代是 1 |
-| `"present"` | 有效、`tool` 為 `"sdd-rebuild"`、`schema` 受支援、通過結構驗證與上表可檢查的部分（`generation` = `source.generation` + 1、`origin` 與 `revised` 的範圍、`id` 唯一、`depends_on` 在前） | 可以；這一代是紀錄的 `generation` |
+| `"present"` | 有效、`tool` 為 `"sdd-rebuild"`、`schema` 受支援、通過結構驗證與上表可檢查的部分（`generation` = `source.generation` + 1、`origin` 與 `revised` 的範圍、`id` 唯一、`depends_on` 在前），且沒有符合機密樣式的字串或欄位名稱 | 可以；這一代是紀錄的 `generation` |
 | `"unreadable"`、`"newer"`、`"invalid"`、`"conflict"`（`tool` 不符） | 同專用目錄的定義 | 不可以；結束碼 3 |
 
 ## 世代規則（`validate` 對照世代紀錄 L 與既有養分 N）
@@ -450,12 +453,17 @@
 
 ### 機密樣式（掃描字串與可讀檔案）
 
-與 005 的 `SECRET_PATTERNS` 相同：
+掃描的對象：草稿（`validate`、`write`）、讀取時的既有養分與世代紀錄（字串值與欄位名稱；命中即為 `invalid`）、
+`files` 的可讀檔案（`secret_hits`）與 `.sdd-export/README.md`（`view_secret_lines`）。
+
+與 005 的 `SECRET_PATTERNS` 逐字相同（006 不載入 005，各自保存一份；`tests/unit/test_sdd_secret_patterns.py` 比對兩份的樣式文字，
+並以同一組樣本確認兩邊的判斷逐一相同，任何一邊改了而沒有同步就會失敗）：
 
 - `-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`
 - `ghp_` 後接 20 個以上英數；`github_pat_` 後接 20 個以上英數或底線
 - `sk-` 後接 20 個以上英數、底線或連字號；`xox[abpr]-` 後接 10 個以上英數或連字號；`AKIA` 後接 16 個大寫英數
-- URL 中的 `user:password@`
+- URL 中的 `user:password@`：`://` 前面那一段 scheme 字元（英數、`+`、`.`、`-`）中至少有一個英文字母即可，
+  與 URL 前面接什麼字元無關（`步驟 1.https://…`、`[0].https://…` 也算）。樣式只從那一段字元的開頭比對，數 MB 的單行也維持線性時間
 - `password`、`secret`、`token`、`api_key`（不分大小寫，`api-key`、`apikey` 亦同）後接 `=` 或 `:` 與一段非空白值
 
 ## 狀態轉移
@@ -464,7 +472,7 @@
 
 ```text
 none / empty ──(確認後 write)──▶ ours（nutrients: unchanged, view: current）
-ours ──(維護者手動編輯 nutrients.json)──▶ ours（nutrients: edited, view: stale）或 invalid / unreadable
+ours ──(維護者手動編輯 nutrients.json)──▶ ours（nutrients: edited, view: stale）或 invalid（含加入機密樣式）/ unreadable
 ours ──(維護者手動編輯 README.md)──▶ ours（view: edited）
 ours ──(再次匯出，確認後 write)──▶ ours（unchanged, current）
 invalid / unreadable / newer / conflict ──(維護者修正或移走)──▶ ours / none

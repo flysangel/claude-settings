@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from conftest import (
+    folder_sets_for_this_platform,
     REPO_ROOT,
     SDD_REBUILD_PY,
     WRITTEN_CONSTITUTION,
@@ -833,7 +834,7 @@ def test_problem_format(sdd_rebuild):
 
 CHECK_KEYS = [
     "dependencies", "export_skill", "speckit", "missing", "constitution", "numbering", "specs", "rebuild_dir",
-    "rebuild_conflicts", "progress", "changed", "saved", "old", "export_dir", "nutrients_edited", "nutrients_errors",
+    "rebuild_conflicts", "rebuild_errors", "rebuilt_generation", "progress", "changed", "saved", "old", "export_dir", "nutrients_edited", "nutrients_errors",
     "conflicts", "nutrients", "pending", "old_lineage", "old_lineage_errors", "needs_old_lineage", "source_state",
     "source_changed", "source_diff", "next",
 ]
@@ -856,6 +857,7 @@ def test_check_first_generation(sdd_rebuild, tmp_path, sdd_export):
         "ok", [], "missing", "sequential", [])
     assert (out["rebuild_dir"], out["rebuild_conflicts"], out["progress"], out["changed"], out["saved"]) == (
         "none", [], "none", [], None)
+    assert (out["rebuild_errors"], out["rebuilt_generation"]) == ([], None)
     assert out["old"] == {"path": os.path.realpath(old), "state": "ok"}
     assert (out["export_dir"], out["nutrients_edited"], out["nutrients_errors"], out["conflicts"]) == ("ours", False, [], [])
     assert out["nutrients"] == nutrients_of(old)
@@ -1036,6 +1038,7 @@ def test_check_rebuild_dir_conflict(sdd_rebuild, tmp_path, sdd_export, case):
 
     assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuild-conflict", "conflict")
     assert result.out["rebuild_conflicts"]
+    assert (result.out["rebuild_errors"], result.out["rebuilt_generation"]) == ([], None)
 
 
 def export_fixture_bytes(name: str) -> bytes:
@@ -1049,6 +1052,9 @@ def test_check_rebuild_dir_invalid(sdd_rebuild, tmp_path, sdd_export, content):
     result = check(sdd_rebuild, new, gen1(tmp_path, sdd_export))
 
     assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuild-conflict", "invalid")
+    assert result.out["rebuild_conflicts"] == [] and result.out["rebuilt_generation"] is None
+    # Why the lineage cannot be used, as sdd-export reports it (a newer schema has no field errors).
+    assert result.out["rebuild_errors"] or content.endswith(b"9}")
 
 
 def test_check_empty_rebuild_dir_is_fine(sdd_rebuild, tmp_path, sdd_export):
@@ -1064,6 +1070,8 @@ def test_check_a_project_rebuilt_already(sdd_rebuild, tmp_path, sdd_export):
     result = check(sdd_rebuild, new, gen1(tmp_path, sdd_export))
 
     assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuilt", "ours")
+    # The generation comes from check, so that SKILL.md never has to open the lineage to say it.
+    assert (result.out["rebuilt_generation"], result.out["rebuild_errors"]) == (2, [])
 
 
 @pytest.mark.parametrize(
@@ -2834,3 +2842,315 @@ def test_a_claimed_spec_that_was_deleted_is_left_to_verify(sdd_rebuild, tmp_path
     result = run_rebuild(sdd_rebuild, new, "verify")
     assert (result.code, result.out["reason"]) == (1, "mismatch-documents")
     assert "spec-missing" in [f["check"] for f in result.out["failures"]]
+
+
+# ------------- (F1) the new project's lineage, edited by hand to hold a secret, never reaches the output
+
+
+def new_lineage_with_secret(new: Path, sdd_export, where: str = "lessons[0].text") -> None:
+    data = json.loads(export_fixture_bytes("lineage-gen2.json").decode("utf-8"))
+    if where == "lessons[0].text":
+        data["lessons"][0]["text"] += f" password={FAKE_TOKEN}"
+    else:
+        data["lessons"][0][f"https://u:{FAKE_TOKEN}@h.example.com"] = "x"
+    write_tree(new, {".sdd-rebuild/lineage.json": sdd_export.serialize(data, "lineage")})
+
+
+@pytest.mark.parametrize("where, path", [("lessons[0].text", "lessons[0].text"), ("name", "lessons[0]")])
+def test_check_reports_where_the_new_lineage_holds_a_secret(sdd_rebuild, tmp_path, sdd_export, where, path):
+    new = make_rebuild_new(tmp_path)
+    new_lineage_with_secret(new, sdd_export, where)
+    before = tree_snapshot(new)
+    result = check(sdd_rebuild, new, gen1(tmp_path, sdd_export))
+
+    assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuild-conflict", "invalid")
+    assert (result.out["rebuild_conflicts"], result.out["rebuilt_generation"]) == ([], None)
+    assert ("secret", path) in [(e["check"], e["path"]) for e in result.out["rebuild_errors"]]
+    assert not shows(result) and tree_snapshot(new) == before
+
+
+def test_lineage_reports_where_the_new_lineage_holds_a_secret(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    new_lineage_with_secret(new, sdd_export)
+    before = tree_snapshot(new)
+    result = run_rebuild(sdd_rebuild, new, "lineage")
+
+    assert (result.code, result.out["reason"], result.out["rebuild_conflicts"]) == (3, "rebuild-conflict", [])
+    assert ("secret", "lessons[0].text") in [(e["check"], e["path"]) for e in result.out["rebuild_errors"]]
+    assert not shows(result) and tree_snapshot(new) == before
+
+
+# ------------- (F2) a field name that looks like a secret is reported at the object that holds it
+
+
+@pytest.mark.parametrize("name", [f"{FAKE_TOKEN}.x", f"x.{FAKE_TOKEN}.y", f"https://u:{FAKE_TOKEN}@h.example.com",
+                                  FAKE_TOKEN, f"1.https://u:{FAKE_TOKEN}@h.example.com"])
+@pytest.mark.parametrize("where", ["target", "(top level)", "target.features[0]", "target.principles[0]",
+                                   "target.features[0].requirements[0]", "constitution"])
+def test_save_reports_a_secret_field_name_at_its_object(sdd_rebuild, tmp_path, sdd_export, name, where):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    before = tree_snapshot(new)
+    holder = {"target": progress["target"], "(top level)": progress,
+              "target.features[0]": progress["target"]["features"][0],
+              "target.principles[0]": progress["target"]["principles"][0],
+              "target.features[0].requirements[0]": progress["target"]["features"][0]["requirements"][0],
+              "constitution": progress["constitution"]}[where]
+    holder[name] = "x"
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", where)
+    assert not shows(result) and tree_snapshot(new) == before
+
+
+# A made-up id in the shape of an OpenAI key: a valid id (lowercase letters and hyphens) that looks like a secret.
+SECRET_ID = "sk-" + "fakerebuildid" * 2
+
+
+def test_save_does_not_repeat_a_repeated_id_that_looks_like_a_secret(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    before = tree_snapshot(new)
+    progress["target"]["principles"][0]["id"] = SECRET_ID
+    progress["target"]["lessons"][0]["id"] = SECRET_ID
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", "target.lessons[0].id")
+    assert not shows(result, SECRET_ID) and tree_snapshot(new) == before
+
+
+def test_save_does_not_repeat_a_repeated_decided_id_that_looks_like_a_secret(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress["pending_decided"] = [SECRET_ID, SECRET_ID]
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", "pending_decided[1]")
+    assert not shows(result, SECRET_ID)
+
+
+URL_PASSWORD = "FAKEurlPw31"
+
+
+@pytest.mark.parametrize("name", [f"https://u:{URL_PASSWORD}@h.example.invalid/", f"1.https://u:{URL_PASSWORD}@h/"])
+@pytest.mark.parametrize("where", ["(top level)", "target", "target.principles[0]", "target.features[0]",
+                                   "target.features[0].requirements[0]", "discards[0]"])
+def test_save_reports_a_url_field_name_with_a_password_at_its_object(sdd_rebuild, tmp_path, sdd_export, name, where):
+    """The review's case: a URL with a password as a field name in an object whose path ends in ']'."""
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress["discards"] = [{"id": "x", "text": None, "reason": None}]
+    before = tree_snapshot(new)
+    holder = {"(top level)": progress, "target": progress["target"],
+              "target.principles[0]": progress["target"]["principles"][0],
+              "target.features[0]": progress["target"]["features"][0],
+              "target.features[0].requirements[0]": progress["target"]["features"][0]["requirements"][0],
+              "discards[0]": progress["discards"][0]}[where]
+    holder[name] = "x"
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", where)
+    assert not shows(result, URL_PASSWORD) and tree_snapshot(new) == before
+
+
+@pytest.mark.parametrize("where", ["(top level)", "target.principles[0]", "discards[0]"])
+def test_a_secret_field_name_is_judged_by_the_name_itself(sdd_rebuild, tmp_path, sdd_export, where):
+    """validate_progress marks the error as a secret at the holder; save does not have to read the message."""
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress["discards"] = [{"id": "x", "text": None, "reason": None}]
+    holder = {"(top level)": progress, "target.principles[0]": progress["target"]["principles"][0],
+              "discards[0]": progress["discards"][0]}[where]
+    holder[f"https://u:{URL_PASSWORD}@h/"] = "x"
+    with pytest.raises(sdd_rebuild.Invalid) as raised:
+        sdd_rebuild.validate_progress(progress)
+    assert (raised.value.secret, raised.value.path) == (True, where)
+    assert URL_PASSWORD not in str(raised.value)
+
+
+# ------------- what save, claim and lineage write, every later command reads back (writing and reading are symmetric)
+
+# Spec folder names a new project may already hold. Some look like secrets by the patterns (sk- followed by 20
+# characters, a made-up ghp_ token, "token=", "api-key:"); they are names of folders, not secrets anyone typed.
+SECRET_LOOKING_SK = "004-sk-learn-pipeline-integration"
+FOLDER_SETS = folder_sets_for_this_platform([
+    [],
+    ["001-plain"],
+    [SECRET_LOOKING_SK],
+    ["004-token=refresh", "005-api-key:rotation"],
+    ["001-資料匯出", "002-ghp_" + "Fk3Fold" * 3, "003-a b", "006-password:"],
+])
+
+
+def present(module, new: Path) -> dict:
+    result = check(module, new)
+    assert (result.code, result.out["progress"]) == (0, "present"), result.out
+    return result.out["saved"]
+
+
+@pytest.mark.parametrize("names", FOLDER_SETS, ids=lambda names: "+".join(names) or "none")
+def test_every_saved_progress_reads_back_and_keeps_its_protections(sdd_rebuild, tmp_path, sdd_export, names):
+    new = make_rebuild_new(tmp_path, specs={name: f"spec of {name}\n" for name in names})
+    keys = {f"specs/{name}/spec.md" for name in names}
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export, new=new)
+    assert set(present(sdd_rebuild, new)["fingerprint"]["specs"]) == keys
+    assert ok(save(sdd_rebuild, new, progress))["snapshot"] == "kept"
+    present(sdd_rebuild, new)
+
+    # confirmed: the baseline is recorded once and the snapshot is kept, because the previous progress is read
+    progress = copy.deepcopy(progress)
+    progress.update(phase="confirmed", stage="summary")
+    first = ok(save(sdd_rebuild, new, progress))
+    assert (first["baseline"], first["snapshot"]) == (True, "kept")
+    assert set(present(sdd_rebuild, new)["baseline"]["specs"]) == keys
+    again = ok(save(sdd_rebuild, new, progress))
+    assert (again["baseline"], again["snapshot"]) == (False, "kept")
+
+    # frozen: the confirmed content cannot change; spec_dir is recorded by claim only
+    changed = copy.deepcopy(progress)
+    changed["language"] = "en"
+    assert save(sdd_rebuild, new, changed).out["reason"] == "frozen"
+    by_hand = copy.deepcopy(progress)
+    by_hand["target"]["features"][0]["spec_dir"] = "specs/001-plain" if "001-plain" in names else "specs/009-x"
+    assert save(sdd_rebuild, new, by_hand).out["reason"] == "invalid"
+
+    # generate: every claim and save reads the progress the one before wrote
+    progress = generate_all(sdd_rebuild, new, progress)
+    data = present(sdd_rebuild, new)
+    assert set(data["baseline"]["specs"]) == keys
+    assert [f["spec_dir"] for f in data["target"]["features"]] == [f["spec_dir"] for f in progress["target"]["features"]]
+    verify = ok(run_rebuild(sdd_rebuild, new, "verify"))
+    assert (verify["ok"], verify["unexpected"]) == (True, [])
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+    present(sdd_rebuild, new)
+    assert save(sdd_rebuild, new, progress).out["reason"] == "finished"
+    assert ok(run_rebuild(sdd_rebuild, new, "focus"))["feature_directory"] == progress["target"]["features"][0]["spec_dir"]
+
+    # starting over works the same way
+    assert ok(run_rebuild(sdd_rebuild, new, "clear")) == {"cleared": True}
+    shutil.rmtree(new / ".sdd-rebuild")
+    started(sdd_rebuild, tmp_path, sdd_export, old=old, new=new)
+    present(sdd_rebuild, new)
+
+
+@pytest.mark.parametrize("where", [
+    "fingerprint key", "baseline key", "fingerprint value", "baseline value", "fingerprint constitution",
+    "baseline constitution", "head", "saved_at", "rebuilt_at", "lineage_written", "confirmed_counts",
+    "confirmed_counts key", "spec_dir", "existing_spec",
+])
+def test_a_secret_in_a_script_field_is_unreadable_even_beside_a_secret_looking_folder(
+        sdd_rebuild, tmp_path, sdd_export, where):
+    new = make_rebuild_new(tmp_path, specs={SECRET_LOOKING_SK: "x\n"})
+    old, new, progress = confirmed(sdd_rebuild, tmp_path, sdd_export, new=new)
+    data = saved(new)
+    key = f"specs/{SECRET_LOOKING_SK}/spec.md"
+    if where == "fingerprint key":
+        data["fingerprint"]["specs"][f"specs/{FAKE_TOKEN}/spec.md"] = "0" * 64
+    elif where == "baseline key":
+        data["baseline"]["specs"][f"specs/password={FAKE_TOKEN}/spec.md"] = "0" * 64
+    elif where == "fingerprint value":
+        data["fingerprint"]["specs"][key] = FAKE_TOKEN
+    elif where == "baseline value":
+        data["baseline"]["specs"][key] = f"token: {FAKE_TOKEN}"
+    elif where in ("fingerprint constitution", "baseline constitution"):
+        data[where.split()[0]]["constitution"] = FAKE_TOKEN
+    elif where == "head":
+        data["fingerprint"]["head"] = FAKE_TOKEN
+    elif where in ("saved_at", "rebuilt_at", "lineage_written"):
+        data[where] = f"https://u:{FAKE_TOKEN}@h.example.invalid/"
+    elif where == "confirmed_counts":
+        data["baseline"]["confirmed_counts"]["governance"] = FAKE_TOKEN
+    elif where == "confirmed_counts key":
+        data["baseline"]["confirmed_counts"][f"token={FAKE_TOKEN}"] = 0
+    elif where == "spec_dir":
+        data["target"]["features"][0]["spec_dir"] = f"specs/{FAKE_TOKEN}"
+    elif where == "existing_spec":
+        data["target"]["features"][0]["existing_spec"] = f"specs/{FAKE_TOKEN}"
+        data["target"]["features"][0]["spec_dir"] = f"specs/{FAKE_TOKEN}"
+        data["target"]["features"][0]["reviewed"] = True
+    write_tree(new, {".specify/sdd-rebuild/progress.json": json.dumps(data, ensure_ascii=False)})
+    result = check(sdd_rebuild, new, old)
+
+    assert (result.code, result.out["reason"], result.out["progress"], result.out["saved"]) == (
+        3, "progress-unreadable", "unreadable", None)
+    assert not shows(result)
+    for argv in (["preview"], ["verify"], ["focus"]):
+        assert not shows(run_rebuild(sdd_rebuild, new, *argv)), argv
+
+
+def test_a_secret_looking_folder_name_counts_only_while_the_folder_is_there(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    data = saved(new)
+    data["fingerprint"]["specs"][f"specs/{SECRET_LOOKING_SK}/spec.md"] = "0" * 64
+    write_tree(new, {".specify/sdd-rebuild/progress.json": json.dumps(data, ensure_ascii=False)})
+    result = check(sdd_rebuild, new)
+    assert result.out["progress"] == "unreadable" and not shows(result, SECRET_LOOKING_SK)
+
+    write_tree(new, {f"specs/{SECRET_LOOKING_SK}/spec.md": "x\n"})
+    present(sdd_rebuild, new)
+
+
+# ------------- claim never records a folder whose name has the form of a secret pattern; renaming is the way out
+
+CLAIM_PATTERN_NAME = (
+    "the name of the new spec folder has the form of a secret pattern (for example sk- followed by 20 or more "
+    "letters, digits or hyphens), so it cannot be recorded in the progress or the lineage; nothing was written. "
+    "Rename the folder to a name without that form (for example sklearn instead of sk-learn), then run "
+    "claim <feature-id> --dir <the renamed folder>"
+)
+
+
+@pytest.mark.parametrize("with_dir", [False, True])
+def test_claim_refuses_a_folder_named_like_a_secret_pattern_and_renaming_gets_through(
+        sdd_rebuild, tmp_path, sdd_export, with_dir):
+    old, new, progress = constitution_done(sdd_rebuild, tmp_path, sdd_export)
+    first = progress["target"]["features"][0]["id"]
+    folder = simulate_specify(new, "sk-learn-pipeline-integration")
+    before = tree_snapshot(new)
+
+    result = run_rebuild(sdd_rebuild, new, "claim", first, *(["--dir", folder] if with_dir else []))
+
+    assert (result.code, result.out["reason"], result.out["error"]) == (1, "secret", CLAIM_PATTERN_NAME)
+    assert (result.out["spec_dir"], result.out["candidates"], result.out["feature_directory"]) == (
+        None, [folder], folder)
+    assert tree_snapshot(new) == before
+    present(sdd_rebuild, new)
+
+    # The way out: rename the folder; .specify/feature.json still names the old one until focus rewrites it.
+    renamed = folder.replace("sk-learn", "sklearn")
+    (new / folder).rename(new / renamed)
+    assert run_rebuild(sdd_rebuild, new, "claim", first).out["reason"] == "mismatch"
+    out = ok(run_rebuild(sdd_rebuild, new, "claim", first, "--dir", renamed))
+    assert out["spec_dir"] == renamed
+    assert [f["spec_dir"] for f in present(sdd_rebuild, new)["target"]["features"]][0] == renamed
+    progress["target"]["features"][0].update(spec_dir=renamed, reviewed=True)
+    ok(save(sdd_rebuild, new, progress))
+
+    for feature in progress["target"]["features"][1:]:
+        feature["spec_dir"] = ok(run_rebuild(sdd_rebuild, new, "claim", feature["id"],
+                                             "--dir", simulate_specify(new, feature["id"])))["spec_dir"]
+        feature["reviewed"] = True
+        ok(save(sdd_rebuild, new, progress))
+    assert ok(run_rebuild(sdd_rebuild, new, "verify"))["ok"] is True
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+    focus = ok(run_rebuild(sdd_rebuild, new, "focus"))
+    assert (focus["feature_directory"], focus["changed"]) == (renamed, True)
+    assert json.loads((new / ".specify/feature.json").read_text(encoding="utf-8")) == {"feature_directory": renamed}
+
+
+def test_an_existing_spec_named_like_a_secret_pattern_is_refused_and_renaming_gets_through(
+        sdd_rebuild, tmp_path, sdd_export):
+    folder = "001-sk-learn-pipeline-integration"
+    new = make_rebuild_new(tmp_path, specs={folder: "# Feature Specification: deploy\n"})
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export, new=new)
+    progress = copy.deepcopy(progress)
+    progress["target"]["features"][0]["existing_spec"] = f"specs/{folder}"
+    before = tree_snapshot(new)
+    result = save(sdd_rebuild, new, progress)
+    assert (result.code, result.out["reason"], result.out["path"]) == (
+        1, "secret", "target.features[0].existing_spec")
+    assert tree_snapshot(new) == before
+
+    renamed = folder.replace("sk-learn", "sklearn")
+    (new / "specs" / folder).rename(new / "specs" / renamed)
+    progress["target"]["features"][0]["existing_spec"] = f"specs/{renamed}"
+    ok(save(sdd_rebuild, new, progress))
+    progress = generate_all(sdd_rebuild, new, confirm(sdd_rebuild, new, progress))
+    assert ok(run_rebuild(sdd_rebuild, new, "verify"))["ok"] is True
+    ok(run_rebuild(sdd_rebuild, new, "lineage"))
+    present(sdd_rebuild, new)

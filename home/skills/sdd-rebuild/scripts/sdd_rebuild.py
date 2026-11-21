@@ -603,9 +603,17 @@ SOURCE_FIELDS = ("nutrients", "nutrients_sha256", "lineage_state", "lineage", "l
 
 
 class Invalid(Exception):
-    def __init__(self, path: str, message: str):
+    """secret: what broke the rule looks like a secret (a field name, a repeated id); path never holds it."""
+
+    def __init__(self, path: str, message: str, secret: bool = False):
         super().__init__(f"the progress is invalid at {path}: {message}")
         self.path = path
+        self.secret = secret
+
+
+def secret_text(value) -> bool:
+    """A field name or a value from the input that must not be repeated in a message or a path."""
+    return isinstance(value, str) and E().looks_like_secret(value)
 
 
 def _join(path: str, key) -> str:
@@ -622,6 +630,9 @@ def _object(value, path: str, fields: tuple, optional: tuple = ()) -> dict:
             raise Invalid(_join(path, key), "is missing")
     for key in value:
         if key not in fields and key not in optional:
+            if secret_text(key):
+                # Named by the object that holds it: the name itself is never put in the path or the message.
+                raise Invalid(path or "(top level)", "a field name here looks like a secret", secret=True)
             raise Invalid(_join(path, key), "is not a field of the progress; remove it")
     return {key: value[key] for key in fields}
 
@@ -740,6 +751,8 @@ def validate_progress(data) -> dict:
             for kind, item_path, item in [(section, path, entry)] + [
                     ("requirements", f"{path}.requirements[{n}]", r) for n, r in enumerate(entry.get("requirements") or [])]:
                 if item["id"] in ids:
+                    if secret_text(item["id"]):
+                        raise Invalid(item_path + ".id", "repeats an id that looks like a secret", secret=True)
                     raise Invalid(item_path + ".id", f"repeats the id {item['id']} of {ids[item['id']]}")
                 ids[item["id"]] = item_path
             if section == "features":
@@ -761,6 +774,8 @@ def validate_progress(data) -> dict:
     for index, value in enumerate(decided):
         _id(value, f"pending_decided[{index}]")
         if value in decided[:index]:
+            if secret_text(value):
+                raise Invalid(f"pending_decided[{index}]", "repeats an id that looks like a secret", secret=True)
             raise Invalid(f"pending_decided[{index}]", f"repeats {value}")
     adjustments = []
     for index, value in enumerate(_array(progress["adjustments"], "adjustments")):
@@ -828,25 +843,43 @@ def snapshot_problem(progress: dict, snapshot: dict) -> Invalid | None:
     return None
 
 
-def stored_shape_ok(data: dict) -> bool:
+COUNTED = ("governance", "deferred", "for_plan")
+
+
+def stored_shape_ok(data: dict, root: Path) -> bool:
+    """The script fields of a stored progress have the exact form the script writes.
+
+    Save does not scan what the script computed from the project for secrets (a spec folder may be named like one,
+    e.g. 004-sk-learn-...), so reading does not either; the exact form keeps anything typed by hand out of them.
+    The snapshot (source) is scanned like the progress instead: sdd-export's patterns already kept it clean.
+    """
     source = data.get("source")
-    fingerprint = data.get("fingerprint")
     baseline = data.get("baseline")
+    folders = set(G().spec_folders(root))
     return (
         all(key in data for key in SCRIPT_FIELDS)
         and isinstance(source, dict) and all(key in source for key in SOURCE_FIELDS)
         and isinstance(source["nutrients"], dict) and isinstance(source["nutrients"].get("generation"), int)
         and isinstance(source["lineage_state"], str)
         and (source["lineage"] is None or isinstance(source["lineage"], dict))
-        and (data["rebuilt_at"] is None or isinstance(data["rebuilt_at"], str))
-        and isinstance(data["saved_at"], str)
-        and isinstance(fingerprint, dict) and set(fingerprint) == {"constitution", "specs", "head"}
+        and (data["rebuilt_at"] is None or (isinstance(data["rebuilt_at"], str) and bool(E().DATE.fullmatch(data["rebuilt_at"]))))
+        and G().is_saved_at(data["saved_at"])
+        and G().valid_fingerprint(data["fingerprint"], folders)
         and (baseline is None or (isinstance(baseline, dict)
                                   and set(baseline) == {"constitution", "specs", "confirmed_counts"}
-                                  and isinstance(baseline["specs"], dict)
-                                  and isinstance(baseline["confirmed_counts"], dict)))
-        and (data["lineage_written"] is None or isinstance(data["lineage_written"], str))
+                                  and G().valid_fingerprint({k: baseline[k] for k in ("constitution", "specs")},
+                                                            folders, ("constitution", "specs"))
+                                  and isinstance(baseline["confirmed_counts"], dict)
+                                  and set(baseline["confirmed_counts"]) == set(COUNTED)
+                                  and all(type(baseline["confirmed_counts"][k]) is int and baseline["confirmed_counts"][k] >= 0
+                                          for k in COUNTED)))
+        and (data["lineage_written"] is None or G().is_hash(data["lineage_written"]))
     )
+
+
+def scanned_part(data: dict) -> dict:
+    """What save scans (the progress Claude sent) and what sdd-export's patterns scanned (the snapshot)."""
+    return {**{key: data[key] for key in PROGRESS_FIELDS}, "source": data["source"]}
 
 
 def load_progress(root: Path) -> tuple[str, dict | None]:
@@ -862,10 +895,11 @@ def load_progress(root: Path) -> tuple[str, dict | None]:
         validate_progress(data)
     except (OSError, ValueError, Invalid):
         return "unreadable", None
-    if not stored_shape_ok(data) or snapshot_problem(data, data["source"]) is not None:
+    if not stored_shape_ok(data, root) or snapshot_problem(data, data["source"]) is not None:
         return "unreadable", None
-    # Written before the old project's content was scanned, or edited by hand: never shown, never used.
-    if secret_paths(data):
+    # Written before the old project's content was scanned, or edited by hand: never shown, never used. Only what
+    # save scans (and the snapshot) is scanned here, so that whatever save, claim and lineage wrote reads back.
+    if secret_paths(scanned_part(data)):
         return "unreadable", None
     return "present", data
 
@@ -961,28 +995,33 @@ def take_snapshot(root: Path, old_project: str) -> dict | None:
 # ------------------------------------------------------------ .sdd-rebuild/
 
 
-def rebuild_dir_state(root: Path) -> tuple[str, list[str]]:
-    """data-model "RebuildDir": none, empty, ours, conflict (with the paths) or invalid."""
+def rebuild_dir_state(root: Path) -> tuple[str, list[str], list[dict], int | None]:
+    """data-model "RebuildDir": none, empty, ours, conflict (with the paths) or invalid (with sdd-export's errors),
+    and the lineage's generation when it is ours.
+
+    The generation is all that is passed on of the lineage itself: SKILL.md never needs to open the file. The errors
+    hold only checks and field paths; a text that looks like a secret makes the lineage invalid (sdd-export's reading).
+    """
     folder = root / REBUILD_DIR
     if not folder.exists() and not folder.is_symlink():
-        return "none", []
+        return "none", [], [], None
     if folder.is_symlink() or not folder.is_dir():
-        return "conflict", [REBUILD_DIR]
+        return "conflict", [REBUILD_DIR], [], None
     entries = sorted(folder.iterdir(), key=lambda p: p.name)
     if not entries:
-        return "empty", []
+        return "empty", [], [], None
     strangers = [f"{REBUILD_DIR}/{e.name}" for e in entries
                  if e.name not in REBUILD_FILES or e.is_symlink() or not e.is_file()]
     if not strangers and not (folder / LINEAGE_NAME).is_file():
         strangers = [f"{REBUILD_DIR}/{e.name}" for e in entries]
     if strangers:
-        return "conflict", strangers
-    state, _, _ = E().load_lineage(folder / LINEAGE_NAME)
+        return "conflict", strangers, [], None
+    state, lineage, problems = E().load_lineage(folder / LINEAGE_NAME)
     if state == "conflict":
-        return "conflict", [f"{REBUILD_DIR}/{LINEAGE_NAME}"]
+        return "conflict", [f"{REBUILD_DIR}/{LINEAGE_NAME}"], [], None
     if state != "present":
-        return "invalid", []
-    return "ours", []
+        return "invalid", [], shown_problems([p.as_dict() for p in problems]), None
+    return "ours", [], [], lineage["generation"]
 
 
 # -------------------------------------------------------------- next step
@@ -1076,7 +1115,7 @@ def changed_since(root: Path, saved: dict) -> list[str]:
 def command_check(io: Io, options: dict) -> int:
     root = io.root
     speckit, missing = G().speckit_state(root)
-    rebuild_dir, rebuild_conflicts = rebuild_dir_state(root)
+    rebuild_dir, rebuild_conflicts, rebuild_errors, rebuilt_generation = rebuild_dir_state(root)
     progress_state, saved = load_progress(root)
     out = {key: None for key in CHECK_KEYS}
     out.update({
@@ -1089,6 +1128,8 @@ def command_check(io: Io, options: dict) -> int:
         "specs": G().existing_specs(root),
         "rebuild_dir": rebuild_dir,
         "rebuild_conflicts": rebuild_conflicts,
+        "rebuild_errors": rebuild_errors,
+        "rebuilt_generation": rebuilt_generation,
         "progress": progress_state,
         "changed": changed_since(root, saved) if saved else [],
         "saved": saved,
@@ -1227,9 +1268,11 @@ def command_save(io: Io, options: dict) -> int:
     try:
         progress = validate_progress(read_stdin_json(io))
     except Invalid as error:
+        if error.secret:
+            return io.fail(SECRET.format(error.path), "secret", path=error.path)
         if E().looks_like_secret(str(error)):
-            # A field name that looks like a secret: name where it is, not the name itself.
-            where = error.path.rpartition(".")[0] or "(top level)"
+            # A last net for a message that would repeat something looking like a secret all the same.
+            where = "(not shown)" if E().looks_like_secret(error.path) else error.path
             return io.fail(SECRET.format(where), "secret", path=where)
         return io.fail(str(error), "invalid", path=error.path)
     secret = G().find_secret(progress)
@@ -1390,6 +1433,19 @@ CLAIM_ERRORS = {
     "ambiguous": "more than one new spec folder was found; choose one with --dir after the maintainer confirms",
     "mismatch": "the new spec folder is not the one .specify/feature.json points at; confirm it and use --dir",
 }
+# Not a secret the maintainer typed: a folder name that only has the form the patterns look for. The progress, the
+# lineage and the next export scan these paths, so a claim of it could never be read back or written.
+PATTERN_NAME = (
+    "the name of the new spec folder has the form of a secret pattern (for example sk- followed by 20 or more "
+    "letters, digits or hyphens), so it cannot be recorded in the progress or the lineage; nothing was written. "
+    "Rename the folder to a name without that form (for example sklearn instead of sk-learn), then run "
+    "claim <feature-id> --dir <the renamed folder>"
+)
+
+
+def pattern_name(folder: str) -> bool:
+    """A spec folder whose path (as spec_dir, or as the spec.md of the next export) matches a secret pattern."""
+    return E().looks_like_secret(folder) or E().looks_like_secret(f"{folder}/spec.md")
 
 
 def command_claim(io: Io, options: dict) -> int:
@@ -1420,6 +1476,8 @@ def command_claim(io: Io, options: dict) -> int:
         return io.fail(CLAIM_ERRORS["mismatch"], "mismatch", **out)
     else:
         chosen = candidates[0]
+    if pattern_name(chosen):
+        return io.fail(PATTERN_NAME, "secret", **out)
     for feature in progress["target"]["features"]:
         if feature["id"] == feature_id:
             feature["spec_dir"] = chosen
@@ -1493,9 +1551,10 @@ def command_lineage(io: Io, options: dict) -> int:
     progress, failure = confirmed_progress(io)
     if progress is None:
         return failure
-    state, conflicts = rebuild_dir_state(root)
+    state, conflicts, errors, _ = rebuild_dir_state(root)
     if state in ("conflict", "invalid"):
-        return io.fail(REBUILD_CONFLICT, "rebuild-conflict", EXIT_STATE, rebuild_conflicts=conflicts)
+        return io.fail(REBUILD_CONFLICT, "rebuild-conflict", EXIT_STATE, rebuild_conflicts=conflicts,
+                       rebuild_errors=errors)
     result = verify_documents(root, progress)
     if not result["ok"]:
         return io.fail(MISMATCH, "mismatch-documents", **result)
@@ -1614,7 +1673,7 @@ def export_skill_present() -> bool:
 
 CHECK_KEYS = (
     "dependencies", "export_skill", "speckit", "missing", "constitution", "numbering", "specs", "rebuild_dir",
-    "rebuild_conflicts", "progress", "changed", "saved", "old", "export_dir", "nutrients_edited", "nutrients_errors",
+    "rebuild_conflicts", "rebuild_errors", "rebuilt_generation", "progress", "changed", "saved", "old", "export_dir", "nutrients_edited", "nutrients_errors",
     "conflicts", "nutrients", "pending", "old_lineage", "old_lineage_errors", "needs_old_lineage", "source_state",
     "source_changed", "source_diff", "next",
 )

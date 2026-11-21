@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from conftest import (
+    folder_sets_for_this_platform,
     CONSTITUTION_TEMPLATE,
     SDD_GRILL_PY,
     WRITTEN_CONSTITUTION,
@@ -1540,3 +1541,292 @@ def test_real_run_writes_utf8_lf_json(grill_project, tmp_path):
     assert json.loads(checked.stdout.decode("utf-8"))["saved"]["requirement"] == "記帳工具，要簡單"
     assert "記帳工具".encode("utf-8") in checked.stdout
     assert usage.returncode == 1 and b"usage" in usage.stderr
+
+
+# ------------- a field name that looks like a secret is reported at the object that holds it
+
+# A made-up token in the shape of a GitHub token; no real credential.
+FAKE_TOKEN = "ghp_" + "Zq6FakeGrill" * 2
+
+
+@pytest.mark.parametrize("name", [FAKE_TOKEN, f"{FAKE_TOKEN}.x", f"x.{FAKE_TOKEN}.y",
+                                  f"https://u:{FAKE_TOKEN}@h.example.com"])
+@pytest.mark.parametrize("where", ["(top level)", "features[0]", "features[0].decisions[0]"])
+def test_save_does_not_repeat_a_secret_field_name(sdd_grill, grill_project, name, where):
+    root = grill_project()
+    progress = minimal_progress(features=[feature("a", status="discussing")], stage="feature", current_feature="a")
+    holder = {"(top level)": progress, "features[0]": progress["features"][0],
+              "features[0].decisions[0]": progress["features"][0]["decisions"][0]}[where]
+    holder[name] = "x"
+    result = save(sdd_grill, root, progress)
+
+    assert result.code == 1
+    assert result.out["error"] == (
+        f"progress at {where} looks like a secret; describe what is needed instead of recording the value"
+    )
+    assert FAKE_TOKEN not in result.err and FAKE_TOKEN not in result.raw.decode("utf-8")
+    assert not (root / PROGRESS).exists()
+
+
+URL_PASSWORD = "FAKEgrillPw42"
+
+
+@pytest.mark.parametrize("name", [f"https://u:{URL_PASSWORD}@h.example.invalid/", f"1.https://u:{URL_PASSWORD}@h/",
+                                  f"password={URL_PASSWORD}"])
+@pytest.mark.parametrize("where", ["(top level)", "constitution", "features[0]", "features[0].decisions[0]"])
+def test_a_secret_field_name_is_judged_by_the_name_itself(sdd_grill, grill_project, name, where):
+    """The decision is made on the field name, not on the message: the path that reaches the caller is the holder."""
+    progress = minimal_progress(features=[feature("a", status="discussing")], stage="feature", current_feature="a")
+    holder = {"(top level)": progress, "constitution": progress["constitution"], "features[0]": progress["features"][0],
+              "features[0].decisions[0]": progress["features"][0]["decisions"][0]}[where]
+    holder[name] = "x"
+    with pytest.raises(sdd_grill.Invalid) as raised:
+        sdd_grill.validate_progress(progress, grill_project())
+    assert (raised.value.secret, raised.value.path) == (True, where)
+    assert URL_PASSWORD not in str(raised.value)
+
+    result = save(sdd_grill, grill_project(), progress)
+    assert result.out["error"] == (
+        f"progress at {where} looks like a secret; describe what is needed instead of recording the value"
+    )
+    assert URL_PASSWORD not in result.raw.decode("utf-8") and URL_PASSWORD not in result.err
+
+
+def test_save_does_not_repeat_a_repeated_id_that_looks_like_a_secret(sdd_grill, grill_project):
+    secret_id = "sk-" + "fakegrillid" * 3
+    root = grill_project()
+    progress = minimal_progress(features=[feature(secret_id, status="discussing"), feature(secret_id)],
+                                stage="feature", current_feature=secret_id)
+    result = save(sdd_grill, root, progress)
+
+    assert result.code == 1
+    assert result.out["error"] == (
+        "progress at features[1].id looks like a secret; describe what is needed instead of recording the value"
+    )
+    assert secret_id not in result.raw.decode("utf-8") and secret_id not in result.err
+    assert not (root / PROGRESS).exists()
+
+
+# ------------- a saved progress that a maintainer edited to hold a secret is unreadable, never shown
+
+# A made-up token in the shape of a GitHub token; no real credential.
+TAINT = "ghp_" + "Zq9FakeTaint" * 2
+
+
+def taint(data: dict, where: str) -> None:
+    if where == "requirement":
+        data["requirement"] = f"{data['requirement']} token: {TAINT}"
+    elif where == "decision":
+        data["features"][0]["decisions"][0]["decision"] = f"password={TAINT}"
+    elif where == "rule":
+        data["constitution"]["principles"][0]["rules"].append(f"use {TAINT}")
+    elif where == "fingerprint key":
+        data["fingerprint"]["specs"][f"specs/{TAINT}/spec.md"] = "0" * 64
+    elif where == "baseline key":
+        data["baseline"]["specs"][f"specs/{TAINT}/spec.md"] = "0" * 64
+    elif where == "saved_at":
+        data["saved_at"] = f"https://u:{TAINT}@h.example.invalid/"
+
+
+@pytest.mark.parametrize("where", ["requirement", "decision", "rule", "fingerprint key", "baseline key", "saved_at"])
+def test_check_does_not_show_a_progress_that_holds_a_secret(sdd_grill, grill_project, where):
+    root = grill_project()
+    assert save(sdd_grill, root, confirmed_progress([feature("a")])).code == 0
+    data = read_progress(root)
+    taint(data, where)
+    (root / PROGRESS).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    before = snapshot(root)
+
+    result = run_grill(sdd_grill, root, "check")
+
+    assert (result.code, result.out["progress"], result.out["saved"], result.out["changed"]) == (
+        0, "unreadable", None, [])
+    assert TAINT not in result.raw.decode("utf-8") and TAINT not in result.err
+    for argv in (["verify"], ["focus"]):
+        later = run_grill(sdd_grill, root, *argv)
+        assert later.code == 1, argv
+        assert TAINT not in later.raw.decode("utf-8") and TAINT not in later.err, argv
+    assert snapshot(root) == before
+    # Starting over deletes the file that holds the secret.
+    assert run_grill(sdd_grill, root, "clear").out == {"cleared": True}
+    assert not (root / PROGRESS).exists()
+
+
+def test_save_replaces_a_progress_that_holds_a_secret(sdd_grill, grill_project):
+    root = grill_project()
+    save(sdd_grill, root, minimal_progress())
+    data = read_progress(root)
+    taint(data, "requirement")
+    (root / PROGRESS).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    result = save(sdd_grill, root, minimal_progress())
+
+    assert result.code == 0 and TAINT not in result.raw.decode("utf-8")
+    assert TAINT not in (root / PROGRESS).read_text(encoding="utf-8")
+    assert run_grill(sdd_grill, root, "check").out["progress"] == "present"
+
+
+def test_find_secret_reports_a_secret_field_name_at_its_holder(sdd_grill):
+    assert sdd_grill.find_secret({"a": {TAINT: "x"}}) == "a"
+    assert sdd_grill.find_secret({f"token={TAINT}": 1}) == "(top level)"
+    assert sdd_grill.find_secret({"a": [{"b": {TAINT: 1}}]}) == "a[0].b"
+
+
+# ------------- what save writes, every later command reads back (writing and reading are symmetric)
+
+# Spec folder names a project may hold. Some look like secrets by the patterns (sk- followed by 20 characters, a
+# made-up ghp_ token, "token=", "api-key:"); they are names of folders, not secrets the maintainer typed.
+SECRET_LOOKING_SK = "004-sk-learn-pipeline-integration"
+FOLDER_SETS = folder_sets_for_this_platform([
+    [],
+    ["001-plain"],
+    [SECRET_LOOKING_SK],
+    ["004-token=refresh", "005-api-key:rotation"],
+    ["001-資料匯出", "002-ghp_" + "Fk3Fold" * 3, "003-a b"],
+    # The name alone does not look like a secret; "specs/006-password:/spec.md" does.
+    ["006-password:"],
+])
+
+
+def project_with_folders(grill_project, names: list[str]) -> Path:
+    root = grill_project(constitution=CONSTITUTION_TEMPLATE)
+    write_tree(root, {f"specs/{name}/spec.md": f"spec of {name}\n" for name in names})
+    return root
+
+
+def check_present(sdd_grill, root: Path) -> dict:
+    result = run_grill(sdd_grill, root, "check")
+    assert (result.code, result.out["progress"]) == (0, "present"), result.out
+    return result.out["saved"]
+
+
+@pytest.mark.parametrize("names", FOLDER_SETS, ids=lambda names: "+".join(names) or "none")
+def test_every_saved_progress_reads_back_and_keeps_its_protections(sdd_grill, grill_project, names):
+    root = project_with_folders(grill_project, names)
+    keys = {f"specs/{name}/spec.md" for name in names}
+
+    # discussing: save, check, save again
+    assert save(sdd_grill, root, minimal_progress()).code == 0
+    assert set(check_present(sdd_grill, root)["fingerprint"]["specs"]) == keys
+    assert save(sdd_grill, root, minimal_progress(stage="features")).code == 0
+    check_present(sdd_grill, root)
+
+    # confirmed: the baseline is recorded once, then kept because the previous progress is read
+    first = save(sdd_grill, root, confirmed_progress([feature("a")]))
+    assert (first.code, first.out["baseline"]) == (0, True)
+    assert set(check_present(sdd_grill, root)["baseline"]["specs"]) == keys
+    again = save(sdd_grill, root, confirmed_progress([feature("a")]))
+    assert (again.code, again.out["baseline"]) == (0, False)
+
+    # generate, record spec_dir, verify and focus read the confirmed progress
+    write_tree(root, {".specify/memory/constitution.md": WRITTEN_CONSTITUTION, "specs/009-a/spec.md": "spec of a\n"})
+    done = save(sdd_grill, root, confirmed_progress([feature("a", spec_dir="specs/009-a")]))
+    assert (done.code, done.out["baseline"]) == (0, False)
+    assert set(check_present(sdd_grill, root)["baseline"]["specs"]) == keys
+    verify = run_grill(sdd_grill, root, "verify")
+    assert (verify.code, verify.out["ok"], verify.out["unexpected"]) == (0, True, [])
+    focus = run_grill(sdd_grill, root, "focus")
+    assert (focus.code, focus.out["feature_directory"]) == (0, "specs/009-a")
+
+    # no going back to discussing once a spec was generated
+    before = (root / PROGRESS).read_bytes()
+    back = save(sdd_grill, root, minimal_progress(stage="summary", features=[feature("a")]))
+    assert back.code == 1 and back.out["error"] == (
+        "specs were already generated from the confirmed summary; it can no longer go back to discussing")
+    assert (root / PROGRESS).read_bytes() == before
+
+    # starting over works the same way
+    assert run_grill(sdd_grill, root, "clear").out == {"cleared": True}
+    assert save(sdd_grill, root, minimal_progress()).code == 0
+    check_present(sdd_grill, root)
+
+
+SCRIPT_FIELD_TAINTS = ["fingerprint key", "baseline key", "saved_at", "fingerprint value", "baseline value",
+                       "fingerprint constitution", "baseline constitution", "head", "fingerprint extra key"]
+
+
+def taint_script_field(data: dict, where: str) -> None:
+    if where in ("fingerprint key", "baseline key", "saved_at"):
+        taint(data, where)
+    elif where == "fingerprint value":
+        key = next(iter(data["fingerprint"]["specs"]))
+        data["fingerprint"]["specs"][key] = TAINT
+    elif where == "baseline value":
+        key = next(iter(data["baseline"]["specs"]))
+        data["baseline"]["specs"][key] = f"token: {TAINT}"
+    elif where == "fingerprint constitution":
+        data["fingerprint"]["constitution"] = TAINT
+    elif where == "baseline constitution":
+        data["baseline"]["constitution"] = TAINT
+    elif where == "head":
+        data["fingerprint"]["head"] = TAINT
+    elif where == "fingerprint extra key":
+        data["fingerprint"]["specs"][f"specs/x/spec.md password={TAINT}"] = "0" * 64
+
+
+@pytest.mark.parametrize("where", SCRIPT_FIELD_TAINTS)
+def test_a_secret_in_a_script_field_is_unreadable_even_beside_a_secret_looking_folder(sdd_grill, grill_project, where):
+    root = project_with_folders(grill_project, [SECRET_LOOKING_SK])
+    assert save(sdd_grill, root, confirmed_progress([feature("a")])).code == 0
+    data = read_progress(root)
+    taint_script_field(data, where)
+    (root / PROGRESS).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    result = run_grill(sdd_grill, root, "check")
+
+    assert (result.code, result.out["progress"], result.out["saved"]) == (0, "unreadable", None)
+    assert TAINT not in result.raw.decode("utf-8") and TAINT not in result.err
+
+
+def test_a_secret_looking_folder_name_counts_only_while_the_folder_is_there(sdd_grill, grill_project):
+    """A key of the fingerprint names a folder of the project; one that looks like a secret and is not there is not
+    a name the script wrote from this project, so the progress is unreadable and the name is never shown."""
+    root = project_with_folders(grill_project, ["001-plain"])
+    assert save(sdd_grill, root, minimal_progress()).code == 0
+    data = read_progress(root)
+    data["fingerprint"]["specs"][f"specs/{SECRET_LOOKING_SK}/spec.md"] = "0" * 64
+    data["fingerprint"]["specs"]["specs/002-gone/spec.md"] = "1" * 64
+    (root / PROGRESS).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    result = run_grill(sdd_grill, root, "check")
+    assert result.out["progress"] == "unreadable" and SECRET_LOOKING_SK not in result.raw.decode("utf-8")
+
+    # The same folder in the project: the name is already listed by check, and the progress reads back.
+    write_tree(root, {f"specs/{SECRET_LOOKING_SK}/spec.md": "x\n"})
+    assert run_grill(sdd_grill, root, "check").out["progress"] == "present"
+    # A folder that is gone and does not look like a secret is a change, not a reason to stop reading.
+    del data["fingerprint"]["specs"][f"specs/{SECRET_LOOKING_SK}/spec.md"]
+    (root / PROGRESS).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    assert run_grill(sdd_grill, root, "check").out["progress"] == "present"
+
+
+@pytest.mark.parametrize("key", ["specs/../spec.md", "specs/./spec.md", "specs//spec.md", "specs/a/b/spec.md",
+                                 "specs/a/spec.txt", "other/a/spec.md"])
+def test_fingerprint_keys_have_the_form_the_script_writes(sdd_grill, grill_project, key):
+    root = project_with_folders(grill_project, [])
+    assert save(sdd_grill, root, minimal_progress()).code == 0
+    data = read_progress(root)
+    data["fingerprint"]["specs"][key] = "0" * 64
+    (root / PROGRESS).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    assert run_grill(sdd_grill, root, "check").out["progress"] == "unreadable"
+
+
+def test_a_generated_folder_named_like_a_secret_pattern_is_refused_and_renaming_gets_through(sdd_grill, grill_project):
+    """Known limitation: spec_dir is sent by Claude and scanned like the rest of the progress, so save refuses a
+    folder whose name has the form of a secret pattern (writing and reading agree). Renaming the folder gets through."""
+    root = project_with_folders(grill_project, [])
+    assert save(sdd_grill, root, confirmed_progress([feature("a"), feature("b", ["a"])])).code == 0
+    write_tree(root, {".specify/memory/constitution.md": WRITTEN_CONSTITUTION,
+                      "specs/001-sk-learn-pipeline-integration/spec.md": "spec of a\n"})
+    before = (root / PROGRESS).read_bytes()
+    refused = save(sdd_grill, root, confirmed_progress(
+        [feature("a", spec_dir="specs/001-sk-learn-pipeline-integration"), feature("b", ["a"])]))
+    assert refused.code == 1 and refused.out["error"].startswith("progress at features[0].spec_dir looks like a secret")
+    assert (root / PROGRESS).read_bytes() == before
+
+    (root / "specs/001-sk-learn-pipeline-integration").rename(root / "specs/001-sklearn-pipeline-integration")
+    write_tree(root, {"specs/002-b/spec.md": "spec of b\n"})
+    done = [feature("a", spec_dir="specs/001-sklearn-pipeline-integration"), feature("b", ["a"], spec_dir="specs/002-b")]
+    assert save(sdd_grill, root, confirmed_progress(done)).code == 0
+    check_present(sdd_grill, root)
+    assert run_grill(sdd_grill, root, "verify").out["ok"] is True
+    assert run_grill(sdd_grill, root, "focus").out["feature_directory"] == "specs/001-sklearn-pipeline-integration"

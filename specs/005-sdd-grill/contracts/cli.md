@@ -57,7 +57,7 @@ uv run <skill>/scripts/sdd_grill.py clear     清除進度
 | `constitution` | `"missing"`、`"template"`、`"written"` |
 | `numbering` | `"sequential"` 或 `"timestamp"` |
 | `specs` | 既有 spec 的清單（`number` 可能是 `null`） |
-| `progress` | `"none"`、`"present"`、`"unreadable"`（不是有效的 JSON、`schema` 或 `tool` 不符、或不符合驗證規則）、`"conflict"` |
+| `progress` | `"none"`、`"present"`、`"unreadable"`（不是有效的 JSON、`schema` 或 `tool` 不符、不符合驗證規則（含腳本寫入的欄位不是腳本寫出的格式，見 data-model 規則 9），或 Claude 送來的欄位中有字串、欄位名稱符合機密樣式；此時 `saved` 為 `null`，不輸出內容）、`"conflict"` |
 | `changed` | `progress` 為 `"present"` 時，指紋中改變的項目；其他時候是空陣列 |
 | `saved` | `progress` 為 `"present"` 時是進度的完整內容；其他時候是 `null` |
 
@@ -82,7 +82,7 @@ uv run <skill>/scripts/sdd_grill.py clear     清除進度
 |---|---|
 | stdin 不是 JSON | `progress is not valid JSON: <原因>` |
 | 不符合驗證規則 | `progress is invalid at <欄位路徑>: <原因>` |
-| 含機密樣式 | `progress at <欄位路徑> looks like a secret; describe what is needed instead of recording the value` |
+| 含機密樣式 | `progress at <欄位路徑> looks like a secret; describe what is needed instead of recording the value`（欄位名稱本身像機密時，`<欄位路徑>` 是含有該欄位的物件路徑，最上層為 `(top level)`，不重複欄位名稱；判斷依欄位名稱本身，與它所在的路徑無關） |
 | 產生途中改回 `discussing` | `specs were already generated from the confirmed summary; it can no longer go back to discussing` |
 | 資料夾衝突 | `.specify/sdd-grill/ holds files sdd-grill did not create; nothing was written` |
 
