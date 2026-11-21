@@ -41,7 +41,10 @@ uv run --with pytest pytest                      全部
 5. **並行保護與手動編輯**：再以 `--expect none` 執行 `write`，預期 `reason: "changed"`、不寫入。手動修改 `nutrients.json` 某條需求的文字，
    `check` 預期 `nutrients: "edited"`、`view: "stale"`；以新的 `state` 與原本的草稿 `validate`，`diff.changed` 列出那一條。
    把 `nutrients.json` 改成無效 JSON，`check` 預期結束碼 3、`reason: "nutrients-unreadable"`。復原後手動修改 `README.md` 本文，
-   預期 `view: "edited"`。
+   預期 `view: "edited"`、`view_secret_lines: []`；再在 `README.md` 加一行 `token: <自編的假權杖>`，預期 `view_secret_lines` 列出該行號，
+   輸出中沒有該權杖。在 `nutrients.json` 某條需求的文字加上同一個假權杖，`check`、`files`、`validate`、`write` 都預期結束碼 3、
+   `reason: "nutrients-invalid"`、`errors` 只有 `check: "secret"` 與該欄位路徑，`existing` 為 `null`，輸出中沒有該權杖；
+   在 `.sdd-rebuild/lineage.json` 加入時同樣預期 `lineage-invalid`。
 6. **衝突**：在另一個專案建立 `.sdd-export/notes.txt`，執行 `check` 與 `write`。預期結束碼 3、`reason: "conflict"`，`notes.txt` 不變。
 7. **世代**：在另一個專案放一份依 data-model「世代紀錄」寫成的 `.sdd-rebuild/lineage.json`（`generation: 2`，一個功能指向存在的
    `specs/001-x/spec.md`、一條教訓、一筆捨棄紀錄）。`check` 預期 `generation` 為 2、該 spec 的 `in_lineage` 為 `true`。
