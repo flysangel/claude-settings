@@ -8,13 +8,14 @@
 |---|---|---|
 | `.specify/sdd-drive/.gitignore` | 第一次需要寫入時（`run`、`test`、`finalize`） | 固定兩行：`# Created by sdd-drive. Local run records; never committed.` 與 `*` |
 | `.specify/sdd-drive/state.json` | `run`、`test`、`finalize` | 嘗試與測試紀錄，見下 |
-| `.specify/sdd-drive/lock` | `run`、`test`（持有作業系統檔案鎖） | 空檔案；內容沒有意義 |
+| `.specify/sdd-drive/lock` | `run`（準備期間）、driver（整個生命期間，含等待重置）、`test`（持有作業系統檔案鎖） | 空檔案；內容沒有意義 |
+| `.specify/sdd-drive/cancel` | `cancel` 建立；driver 看到後刪除 | 空檔案；存在代表「取消等待中的自動接續」（D20） |
 | `.specify/feature.json` | `run`（只改 `feature_directory`，保留其他鍵） | Spec Kit 的本機狀態檔（原則 I 允許） |
 
-- **資料夾狀態**（`own_dir`）：`none`（不存在）、`ours`（只有上表的檔案，且 `.gitignore` 內容與上面完全相同）、`conflict`（其他情況）。
+- **資料夾狀態**（`own_dir`）：`none`（不存在）、`ours`（只有上表的檔案與寫入用的暫存檔，且 `.gitignore` 內容與上面完全相同）、`conflict`（其他情況）。
   `conflict` 時所有會讀寫紀錄的指令以 `reason: "conflict"` 停止；`clear` 也不刪除。
 - 不讀取、不修改 `.specify/sdd-drive-state.json` 與 `.specify/.gitignore`（D14、T8）。
-- `clear` 刪除上表三個本 skill 的檔案與變空的資料夾；只在維護者要求或 `state-unreadable` 時由 SKILL.md 提議。
+- `clear` 刪除上表四個本 skill 的檔案與變空的資料夾（driver 執行中時拒絕）；只在維護者要求或 `state-unreadable` 時由 SKILL.md 提議。
 
 ## 紀錄（`state.json`）
 
@@ -38,9 +39,14 @@
       "detail": null,
       "report": {"status": "completed", "summary": "…", "failure": null},
       "worktree": "sha256:…",
-      "task_ids": null
+      "task_ids": null,
+      "auto": false,
+      "limit": null,
+      "auto_resume": null
     }
   ],
+  "launch": null,
+  "driver": null,
   "tests": [
     {"spec": "007-sdd-rebuild", "tasks_hash": "sha256:…", "command": "uv run --with pytest pytest", "exit_code": 0, "at": "2026-11-21T09:58:00Z"}
   ]
@@ -64,6 +70,11 @@
 | `report` | 子 session 的 `structured_output` | `null` 或符合「子 session 的回報」；字串欄位**機密掃描** |
 | `worktree` | 腳本：嘗試結束時工作區的指紋（D8） | `null` 或 `sha256:` 加 64 個十六進位字元 |
 | `task_ids` | 腳本：tasks 階段 `succeeded` 時的任務編號（如 `T001`） | `null` 或符合 `^T\d{3,}$` 的字串陣列 |
+| `attempts[].auto` | 腳本：這筆嘗試是否為 driver 的自動接續（D19） | 布林 |
+| `attempts[].limit` | 腳本：`outcome` 為 `usage-limit` 時依 D17 從 `rate_limit_info` 計算 | `null` 或物件：`waitable`（布林）、`types`（字串陣列，元素屬於 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet`、`seven_day_overage_included`、`overage`、`unknown`）、`resets_at`（`waitable` 時為 `YYYY-MM-DDTHH:MM:SSZ`，否則 `null`）、`overage_status`（`null` 或 `allowed`、`allowed_warning`、`rejected`） |
+| `attempts[].auto_resume` | 腳本（D18–D20），只出現在 `usage-limit` 的嘗試 | `null`、`waiting`、`started`、`cancelled`、`skipped-changed`、`lost`、`not-waitable`、`already-auto` |
+| `launch` | `run`：啟動 driver 前寫入，driver 取得鎖後清除 | `null` 或 `{"token": UUID, "at": 時間}` |
+| `driver` | driver：取得鎖後寫入、結束前清除 | `null` 或 `{"token": UUID, "pid": 正整數, "phase": "running"\|"waiting"\|"resuming", "attempt": 嘗試 id, "waiting_until": 時間或 null, "started_at": 時間}` |
 | `tests[].spec` | 腳本 | 同 `spec` |
 | `tests[].tasks_hash` | 腳本 | 同 `worktree` 的格式 |
 | `tests[].command` | 腳本，取自 plan.md | **機密掃描**（來自專案檔案的內容，寫入時已掃描；命中時不執行、不寫入，見 cli.md `test`） |
@@ -72,6 +83,8 @@
 - 寫入時掃描的欄位與讀回時掃描的欄位相同（標為**機密掃描**者）；其餘欄位只做格式驗證（寫入與讀取對稱，D14）。
   `reason` 命中時 `run` 拒絕（不寫入）；`detail.text`、`detail.paths`、`report` 的字串命中時，在寫入前把該字串換成 `(not shown: looks like a secret)`。
 - 任何欄位不符合時：`reason: "state-unreadable"`，指出欄位路徑而不含值。
+- `limit`、`auto_resume`、`launch`、`driver` 都是腳本計算的欄位，只做格式驗證（不掃描機密）；`rate_limit_info` 的其他欄位與子 session 的其他輸出不保存。
+- `launch` 存在且 `at` 在 60 秒內：其他指令視同 `running`（driver 正在取得鎖）；超過 60 秒且鎖未被持有：視為啟動失敗，`run` 的 `watch` 回報 `launch-failed`，`finalize` 清除它。
 - `detail.code` 列舉：`launch`、`usage-limit`、`api-error`、`no-result`、`no-report`、`child-failed`、`plan-missing`、`tasks-missing`、`tasks-unfinished`、
   `tasks-removed`、`protected-changed`、`pushed`、`uncommitted`、`resume-failed`。
 
@@ -102,11 +115,11 @@
 
 | 情況 | `next.action` |
 |---|---|
-| 鎖被持有 | `wait`（`running: true`） |
-| 最後一筆嘗試 `outcome: null` 且鎖未被持有 | `finalize` |
+| 鎖被持有，或 `launch` 在 60 秒內 | `wait`（`running: true`；附 `driver` 的 `phase`、`waiting_until` 與等待中嘗試的 `limit`） |
+| 鎖未被持有，且（最後一筆嘗試 `outcome: null`、`driver` 不為 `null`，或 `launch` 已超過 60 秒） | `finalize` |
 | 沒有任何未完成的 spec | `none` |
 | `next_phase` 為 `test` | `test` |
-| 該 spec 在 `next_phase` 上的最後一筆嘗試是 `usage-limit`、`api-error` 或 `interrupted`，且有 `session_id` | `resume`（附 `session_id` 與該嘗試的 `model`） |
+| 該 spec 在 `next_phase` 上的最後一筆嘗試是 `usage-limit`、`api-error` 或 `interrupted`，且有 `session_id` | `resume`（附 `session_id`、該嘗試的 `model`、`last_outcome`、`limit`、`auto_resume`）；這是維護者啟動的手動接續（`auto: false`） |
 | 其他 | `run`（附 `phase`） |
 
 `next` 另附 `spec`、`phase`、`branch`（等於 spec 資料夾名稱，非 git 時為 `null`）、`failures`、`hints`（D3）：
@@ -117,6 +130,21 @@
 ```
 
 `models_used_this_run`：從最後一次 `none` 之後（或紀錄開頭）的嘗試中，依出現順序去重的 `model`。
+
+`status` 另輸出 `last_attempt`：最近一筆有結果的嘗試的 `spec`、`phase`、`outcome`、`auto`、`limit`、`auto_resume`、`ended_at`，供主 session 回報「你不在時發生了什麼」（D20）。
+
+## 自動接續的狀態轉移（D18–D20）
+
+```text
+run（auto:false）── usage-limit ──┬─ limit.waitable=false ─────────────→ auto_resume=not-waitable，driver 結束 → 停止
+                                 ├─ 被中斷的嘗試 auto=true ───────────→ auto_resume=already-auto，driver 結束 → 停止
+                                 └─ 可等待且 auto=false → auto_resume=waiting（driver.phase=waiting）
+                                        ├─ 看到 cancel 檔案 ───────────→ cancelled，driver 結束 → 停止
+                                        ├─ 重置後工作區指紋不同 ───────→ skipped-changed，driver 結束 → 停止
+                                        ├─ driver 消失（finalize）────→ lost → 停止
+                                        └─ 到達 resets_at+120s → started；新嘗試（auto:true，--resume）
+                                               └─ 其 outcome 依 D4；若再次 usage-limit → already-auto → 停止
+```
 
 ## 工作區（git）
 
