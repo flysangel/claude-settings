@@ -1199,7 +1199,12 @@ def test_commit_evidence(sdd_export, tmp_path):
     for good in (head, head[:7], head[:12]):
         data = draft(lessons=[lesson("atomic-write", evidence=[f"commit:{good}"])])
         assert validate(sdd_export, root, data).code == 0, good
-    for bad in ("0" * 40, head.upper()[:10], head[:6], head + "0"):
+    bad_ones = ["0" * 40, head[:6], head + "0"]
+    if head.upper() != head:
+        # Upper case is only a different string when the hash holds a letter; a slice of digits alone
+        # would still be a valid reference, which made this test fail for about one hash in a hundred.
+        bad_ones.append(head.upper())
+    for bad in bad_ones:
         data = draft(lessons=[lesson("atomic-write", evidence=[f"commit:{bad}"])])
         assert checks(validate(sdd_export, root, data)) == ["evidence"], bad
 
