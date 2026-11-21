@@ -3482,3 +3482,52 @@ def test_write_regenerates_a_readme_that_held_a_secret(sdd_export, tmp_path):
     assert FAKE_TOKEN not in (root / ".sdd-export" / "README.md").read_text(encoding="utf-8")
     out = run_export(sdd_export, root, "check").out
     assert (out["view"], out["view_secret_lines"]) == ("current", [])
+
+
+# ------------- a digit or "]" and a dot right before a URL with a password (same patterns as sdd-grill)
+
+# Made-up passwords in the shape the review found 006 missed; no real credential.
+DOT_URL_PASSWORD = "FAKEdotPw77"
+DOT_URLS = [f"步驟 1.https://bob:{DOT_URL_PASSWORD}@h.example.invalid/",
+            f"見 [0].https://u:{DOT_URL_PASSWORD}@h.example.invalid"]
+
+
+def dot_url_leaks(result) -> bool:
+    return DOT_URL_PASSWORD in result.raw.decode("utf-8") or DOT_URL_PASSWORD in result.err
+
+
+@pytest.mark.parametrize("text", DOT_URLS)
+def test_write_refuses_a_url_password_after_a_digit_and_dot(sdd_export, tmp_path, text):
+    root = project(tmp_path)
+    data = draft()
+    data["features"][0]["requirements"][0]["text"] = text
+    state = run_export(sdd_export, root, "check").out["state"]
+    result = run_export(sdd_export, root, "write", "--expect", state, stdin=dump(data))
+
+    assert (result.code, result.out["reason"]) == (1, "secret")
+    assert [e["path"] for e in errors_for(result, "secret")] == ["features[0].requirements[0].text"]
+    assert not dot_url_leaks(result) and not (root / ".sdd-export" / "nutrients.json").exists()
+
+
+@pytest.mark.parametrize("text", DOT_URLS)
+def test_check_refuses_existing_nutrients_with_a_url_password_after_a_digit_and_dot(sdd_export, tmp_path, text):
+    root = edited_nutrients(sdd_export, tmp_path, set_lesson_text, text)
+    result = run_export(sdd_export, root, "check")
+
+    assert (result.code, result.out["reason"], result.out["existing"]) == (3, "nutrients-invalid", None)
+    assert ("secret", "lessons[0].text") in [(e["check"], e["path"]) for e in result.out["errors"]]
+    assert not dot_url_leaks(result)
+
+
+@pytest.mark.parametrize("text", DOT_URLS)
+def test_secret_hits_and_readme_lines_find_a_url_password_after_a_digit_and_dot(sdd_export, tmp_path, text):
+    root = edited_readme(sdd_export, tmp_path, ["我加的說明", text])
+    (root / "src").mkdir(exist_ok=True)
+    (root / "src" / "notes.txt").write_text(f"ok\n{text}\n", encoding="utf-8")
+    total = (root / ".sdd-export" / "README.md").read_text(encoding="utf-8").count("\n")
+    check = run_export(sdd_export, root, "check")
+    files = run_export(sdd_export, root, "files")
+
+    assert check.out["view_secret_lines"] == [total]
+    assert {"path": "src/notes.txt", "line": 2} in files.out["secret_hits"]
+    assert not dot_url_leaks(check) and not dot_url_leaks(files)

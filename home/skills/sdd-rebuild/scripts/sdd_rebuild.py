@@ -603,12 +603,17 @@ SOURCE_FIELDS = ("nutrients", "nutrients_sha256", "lineage_state", "lineage", "l
 
 
 class Invalid(Exception):
-    """holder: the path of the object, set when path ends in a field name taken from the input itself."""
+    """secret: what broke the rule looks like a secret (a field name, a repeated id); path never holds it."""
 
-    def __init__(self, path: str, message: str, holder: str | None = None):
+    def __init__(self, path: str, message: str, secret: bool = False):
         super().__init__(f"the progress is invalid at {path}: {message}")
         self.path = path
-        self.holder = holder
+        self.secret = secret
+
+
+def secret_text(value) -> bool:
+    """A field name or a value from the input that must not be repeated in a message or a path."""
+    return isinstance(value, str) and E().looks_like_secret(value)
 
 
 def _join(path: str, key) -> str:
@@ -625,7 +630,10 @@ def _object(value, path: str, fields: tuple, optional: tuple = ()) -> dict:
             raise Invalid(_join(path, key), "is missing")
     for key in value:
         if key not in fields and key not in optional:
-            raise Invalid(_join(path, key), "is not a field of the progress; remove it", holder=path or "(top level)")
+            if secret_text(key):
+                # Named by the object that holds it: the name itself is never put in the path or the message.
+                raise Invalid(path or "(top level)", "a field name here looks like a secret", secret=True)
+            raise Invalid(_join(path, key), "is not a field of the progress; remove it")
     return {key: value[key] for key in fields}
 
 
@@ -743,6 +751,8 @@ def validate_progress(data) -> dict:
             for kind, item_path, item in [(section, path, entry)] + [
                     ("requirements", f"{path}.requirements[{n}]", r) for n, r in enumerate(entry.get("requirements") or [])]:
                 if item["id"] in ids:
+                    if secret_text(item["id"]):
+                        raise Invalid(item_path + ".id", "repeats an id that looks like a secret", secret=True)
                     raise Invalid(item_path + ".id", f"repeats the id {item['id']} of {ids[item['id']]}")
                 ids[item["id"]] = item_path
             if section == "features":
@@ -764,6 +774,8 @@ def validate_progress(data) -> dict:
     for index, value in enumerate(decided):
         _id(value, f"pending_decided[{index}]")
         if value in decided[:index]:
+            if secret_text(value):
+                raise Invalid(f"pending_decided[{index}]", "repeats an id that looks like a secret", secret=True)
             raise Invalid(f"pending_decided[{index}]", f"repeats {value}")
     adjustments = []
     for index, value in enumerate(_array(progress["adjustments"], "adjustments")):
@@ -1237,12 +1249,11 @@ def command_save(io: Io, options: dict) -> int:
     try:
         progress = validate_progress(read_stdin_json(io))
     except Invalid as error:
+        if error.secret:
+            return io.fail(SECRET.format(error.path), "secret", path=error.path)
         if E().looks_like_secret(str(error)):
-            # A field name that looks like a secret: name the object that holds it, never the name itself (a name
-            # may hold dots, so it is not cut off the path).
-            where = error.holder if error.holder is not None else error.path
-            if E().looks_like_secret(where):
-                where = "(not shown)"
+            # A last net for a message that would repeat something looking like a secret all the same.
+            where = "(not shown)" if E().looks_like_secret(error.path) else error.path
             return io.fail(SECRET.format(where), "secret", path=where)
         return io.fail(str(error), "invalid", path=error.path)
     secret = G().find_secret(progress)

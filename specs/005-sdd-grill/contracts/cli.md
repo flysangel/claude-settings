@@ -82,7 +82,7 @@ uv run <skill>/scripts/sdd_grill.py clear     清除進度
 |---|---|
 | stdin 不是 JSON | `progress is not valid JSON: <原因>` |
 | 不符合驗證規則 | `progress is invalid at <欄位路徑>: <原因>` |
-| 含機密樣式 | `progress at <欄位路徑> looks like a secret; describe what is needed instead of recording the value`（欄位名稱本身像機密時，`<欄位路徑>` 是含有該欄位的物件路徑，最上層為 `(top level)`，不重複欄位名稱） |
+| 含機密樣式 | `progress at <欄位路徑> looks like a secret; describe what is needed instead of recording the value`（欄位名稱本身像機密時，`<欄位路徑>` 是含有該欄位的物件路徑，最上層為 `(top level)`，不重複欄位名稱；判斷依欄位名稱本身，與它所在的路徑無關） |
 | 產生途中改回 `discussing` | `specs were already generated from the confirmed summary; it can no longer go back to discussing` |
 | 資料夾衝突 | `.specify/sdd-grill/ holds files sdd-grill did not create; nothing was written` |
 

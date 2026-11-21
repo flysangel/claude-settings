@@ -204,8 +204,9 @@ def schema_is_newer(value) -> bool:
 
 # ------------------------------------------------------------------ secrets
 
-# The same patterns as sdd-grill, copied rather than loaded across skills. Deliberately conservative:
-# a safety net, not a replacement for the skill's instructions.
+# The same patterns as sdd-grill, copied rather than loaded across skills (this skill runs without sdd-grill), so
+# both call the same texts secrets; tests/unit/test_sdd_secret_patterns.py fails when the two copies differ.
+# Deliberately conservative: a safety net, not a replacement for the skill's instructions.
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
     re.compile(r"(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{20,}"),
@@ -213,9 +214,9 @@ SECRET_PATTERNS = [
     re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}"),
     re.compile(r"(?<![A-Za-z0-9])xox[abpr]-[A-Za-z0-9-]{10,}"),
     re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}"),
-    # Anchored at the start of the scheme (unlike sdd-grill's copy) so a long run of letters is scanned once,
-    # not once per letter; it matches the same lines.
-    re.compile(r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
+    # A URL with a user and a password. The scheme is the whole run of scheme characters before "://" and holds a
+    # letter; starting only where that run starts scans a long run once, not once per character.
+    re.compile(r"(?<![A-Za-z0-9+.-])[0-9+.-]*[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
     re.compile(r"(?i)(?<![A-Za-z])(password|secret|token|api[_-]?key)\s*[=:]\s*\S"),
 ]
 

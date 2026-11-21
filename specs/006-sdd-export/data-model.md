@@ -456,12 +456,14 @@
 掃描的對象：草稿（`validate`、`write`）、讀取時的既有養分與世代紀錄（字串值與欄位名稱；命中即為 `invalid`）、
 `files` 的可讀檔案（`secret_hits`）與 `.sdd-export/README.md`（`view_secret_lines`）。
 
-與 005 的 `SECRET_PATTERNS` 相同：
+與 005 的 `SECRET_PATTERNS` 逐字相同（006 不載入 005，各自保存一份；`tests/unit/test_sdd_secret_patterns.py` 比對兩份的樣式文字，
+並以同一組樣本確認兩邊的判斷逐一相同，任何一邊改了而沒有同步就會失敗）：
 
 - `-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`
 - `ghp_` 後接 20 個以上英數；`github_pat_` 後接 20 個以上英數或底線
 - `sk-` 後接 20 個以上英數、底線或連字號；`xox[abpr]-` 後接 10 個以上英數或連字號；`AKIA` 後接 16 個大寫英數
-- URL 中的 `user:password@`
+- URL 中的 `user:password@`：`://` 前面那一段 scheme 字元（英數、`+`、`.`、`-`）中至少有一個英文字母即可，
+  與 URL 前面接什麼字元無關（`步驟 1.https://…`、`[0].https://…` 也算）。樣式只從那一段字元的開頭比對，數 MB 的單行也維持線性時間
 - `password`、`secret`、`token`、`api_key`（不分大小寫，`api-key`、`apikey` 亦同）後接 `=` 或 `:` 與一段非空白值
 
 ## 狀態轉移

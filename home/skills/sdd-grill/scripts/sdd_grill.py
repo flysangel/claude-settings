@@ -156,6 +156,8 @@ def remove_own_files(folder: Path) -> bool:
 # ------------------------------------------------------------------- secrets
 
 # Deliberately conservative (research.md R8): a safety net, not a replacement for the skill's instructions.
+# sdd-export keeps an identical copy (it runs without this skill); tests/unit/test_sdd_secret_patterns.py fails when
+# the two differ.
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
     re.compile(r"(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{20,}"),
@@ -163,7 +165,9 @@ SECRET_PATTERNS = [
     re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}"),
     re.compile(r"(?<![A-Za-z0-9])xox[abpr]-[A-Za-z0-9-]{10,}"),
     re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}"),
-    re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
+    # A URL with a user and a password. The scheme is the whole run of scheme characters before "://" and holds a
+    # letter; starting only where that run starts scans a long run once, not once per character.
+    re.compile(r"(?<![A-Za-z0-9+.-])[0-9+.-]*[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
     re.compile(r"(?i)(?<![A-Za-z])(password|secret|token|api[_-]?key)\s*[=:]\s*\S"),
 ]
 
@@ -286,13 +290,18 @@ CONFLICT = ".specify/sdd-grill/ holds files sdd-grill did not create; nothing wa
 
 
 class Invalid(Exception):
-    """holder: the path of the object, set when path ends in a field name taken from the input itself."""
+    """secret: what broke the rule looks like a secret (a field name, a repeated id); path never holds it."""
 
-    def __init__(self, path: str, reason: str, holder: str | None = None):
+    def __init__(self, path: str, reason: str, secret: bool = False):
         super().__init__(INVALID.format(path, reason))
         self.path = path
         self.reason = reason
-        self.holder = holder
+        self.secret = secret
+
+
+def secret_text(value) -> bool:
+    """A field name or a value from the input that must not be repeated in a message or a path."""
+    return isinstance(value, str) and looks_like_secret(value)
 
 
 def _join(path: str, key) -> str:
@@ -307,7 +316,10 @@ def _object(value, path: str, fields: tuple[str, ...], optional: tuple[str, ...]
         raise Invalid(path or "(top level)", "must be an object")
     for key in value:
         if key not in fields and key not in optional:
-            raise Invalid(_join(path, key), "is not a known field", holder=path or "(top level)")
+            if secret_text(key):
+                # Named by the object that holds it: the name itself is never put in the path or the message.
+                raise Invalid(path or "(top level)", "a field name here looks like a secret", secret=True)
+            raise Invalid(_join(path, key), "is not a known field")
     for key in fields:
         if key not in value:
             raise Invalid(_join(path, key), "is missing")
@@ -385,6 +397,8 @@ def validate_progress(data, root: Path) -> dict:
         if not FEATURE_ID.match(fid):
             raise Invalid(path + ".id", "must be lowercase letters and digits joined by single hyphens")
         if fid in ids:
+            if secret_text(fid):
+                raise Invalid(path + ".id", "repeats an id that looks like a secret", secret=True)
             raise Invalid(path + ".id", f'repeats the id "{fid}"')
         _text(entry["title"], path + ".title")
         later = {f.get("id") for f in progress["features"][i:] if isinstance(f, dict)}
@@ -590,10 +604,11 @@ def command_save(io: "Io") -> int:
     try:
         progress = validate_progress(data, root)
     except Invalid as error:
+        if error.secret:
+            return io.fail(SECRET.format(error.path))
         if looks_like_secret(str(error)):
-            # A field name that looks like a secret: name the object that holds it, never the name itself.
-            where = error.holder if error.holder is not None else error.path
-            return io.fail(SECRET.format("(not shown)" if looks_like_secret(where) else where))
+            # A last net for a message that would repeat something looking like a secret all the same.
+            return io.fail(SECRET.format("(not shown)" if looks_like_secret(error.path) else error.path))
         return io.fail(str(error))
 
     previous_state, previous = load_progress(root)

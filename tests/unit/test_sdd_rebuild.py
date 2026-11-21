@@ -2883,15 +2883,80 @@ def test_lineage_reports_where_the_new_lineage_holds_a_secret(sdd_rebuild, tmp_p
 
 
 @pytest.mark.parametrize("name", [f"{FAKE_TOKEN}.x", f"x.{FAKE_TOKEN}.y", f"https://u:{FAKE_TOKEN}@h.example.com",
-                                  FAKE_TOKEN])
-@pytest.mark.parametrize("where", ["target", "(top level)", "target.features[0]"])
+                                  FAKE_TOKEN, f"1.https://u:{FAKE_TOKEN}@h.example.com"])
+@pytest.mark.parametrize("where", ["target", "(top level)", "target.features[0]", "target.principles[0]",
+                                   "target.features[0].requirements[0]", "constitution"])
 def test_save_reports_a_secret_field_name_at_its_object(sdd_rebuild, tmp_path, sdd_export, name, where):
     old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
     before = tree_snapshot(new)
     holder = {"target": progress["target"], "(top level)": progress,
-              "target.features[0]": progress["target"]["features"][0]}[where]
+              "target.features[0]": progress["target"]["features"][0],
+              "target.principles[0]": progress["target"]["principles"][0],
+              "target.features[0].requirements[0]": progress["target"]["features"][0]["requirements"][0],
+              "constitution": progress["constitution"]}[where]
     holder[name] = "x"
     result = save(sdd_rebuild, new, progress)
 
     assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", where)
     assert not shows(result) and tree_snapshot(new) == before
+
+
+# A made-up id in the shape of an OpenAI key: a valid id (lowercase letters and hyphens) that looks like a secret.
+SECRET_ID = "sk-" + "fakerebuildid" * 2
+
+
+def test_save_does_not_repeat_a_repeated_id_that_looks_like_a_secret(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    before = tree_snapshot(new)
+    progress["target"]["principles"][0]["id"] = SECRET_ID
+    progress["target"]["lessons"][0]["id"] = SECRET_ID
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", "target.lessons[0].id")
+    assert not shows(result, SECRET_ID) and tree_snapshot(new) == before
+
+
+def test_save_does_not_repeat_a_repeated_decided_id_that_looks_like_a_secret(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress["pending_decided"] = [SECRET_ID, SECRET_ID]
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", "pending_decided[1]")
+    assert not shows(result, SECRET_ID)
+
+
+URL_PASSWORD = "FAKEurlPw31"
+
+
+@pytest.mark.parametrize("name", [f"https://u:{URL_PASSWORD}@h.example.invalid/", f"1.https://u:{URL_PASSWORD}@h/"])
+@pytest.mark.parametrize("where", ["(top level)", "target", "target.principles[0]", "target.features[0]",
+                                   "target.features[0].requirements[0]", "discards[0]"])
+def test_save_reports_a_url_field_name_with_a_password_at_its_object(sdd_rebuild, tmp_path, sdd_export, name, where):
+    """The review's case: a URL with a password as a field name in an object whose path ends in ']'."""
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress["discards"] = [{"id": "x", "text": None, "reason": None}]
+    before = tree_snapshot(new)
+    holder = {"(top level)": progress, "target": progress["target"],
+              "target.principles[0]": progress["target"]["principles"][0],
+              "target.features[0]": progress["target"]["features"][0],
+              "target.features[0].requirements[0]": progress["target"]["features"][0]["requirements"][0],
+              "discards[0]": progress["discards"][0]}[where]
+    holder[name] = "x"
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", where)
+    assert not shows(result, URL_PASSWORD) and tree_snapshot(new) == before
+
+
+@pytest.mark.parametrize("where", ["(top level)", "target.principles[0]", "discards[0]"])
+def test_a_secret_field_name_is_judged_by_the_name_itself(sdd_rebuild, tmp_path, sdd_export, where):
+    """validate_progress marks the error as a secret at the holder; save does not have to read the message."""
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    progress["discards"] = [{"id": "x", "text": None, "reason": None}]
+    holder = {"(top level)": progress, "target.principles[0]": progress["target"]["principles"][0],
+              "discards[0]": progress["discards"][0]}[where]
+    holder[f"https://u:{URL_PASSWORD}@h/"] = "x"
+    with pytest.raises(sdd_rebuild.Invalid) as raised:
+        sdd_rebuild.validate_progress(progress)
+    assert (raised.value.secret, raised.value.path) == (True, where)
+    assert URL_PASSWORD not in str(raised.value)

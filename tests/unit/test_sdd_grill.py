@@ -1565,3 +1565,42 @@ def test_save_does_not_repeat_a_secret_field_name(sdd_grill, grill_project, name
     )
     assert FAKE_TOKEN not in result.err and FAKE_TOKEN not in result.raw.decode("utf-8")
     assert not (root / PROGRESS).exists()
+
+
+URL_PASSWORD = "FAKEgrillPw42"
+
+
+@pytest.mark.parametrize("name", [f"https://u:{URL_PASSWORD}@h.example.invalid/", f"1.https://u:{URL_PASSWORD}@h/",
+                                  f"password={URL_PASSWORD}"])
+@pytest.mark.parametrize("where", ["(top level)", "constitution", "features[0]", "features[0].decisions[0]"])
+def test_a_secret_field_name_is_judged_by_the_name_itself(sdd_grill, grill_project, name, where):
+    """The decision is made on the field name, not on the message: the path that reaches the caller is the holder."""
+    progress = minimal_progress(features=[feature("a", status="discussing")], stage="feature", current_feature="a")
+    holder = {"(top level)": progress, "constitution": progress["constitution"], "features[0]": progress["features"][0],
+              "features[0].decisions[0]": progress["features"][0]["decisions"][0]}[where]
+    holder[name] = "x"
+    with pytest.raises(sdd_grill.Invalid) as raised:
+        sdd_grill.validate_progress(progress, grill_project())
+    assert (raised.value.secret, raised.value.path) == (True, where)
+    assert URL_PASSWORD not in str(raised.value)
+
+    result = save(sdd_grill, grill_project(), progress)
+    assert result.out["error"] == (
+        f"progress at {where} looks like a secret; describe what is needed instead of recording the value"
+    )
+    assert URL_PASSWORD not in result.raw.decode("utf-8") and URL_PASSWORD not in result.err
+
+
+def test_save_does_not_repeat_a_repeated_id_that_looks_like_a_secret(sdd_grill, grill_project):
+    secret_id = "sk-" + "fakegrillid" * 3
+    root = grill_project()
+    progress = minimal_progress(features=[feature(secret_id, status="discussing"), feature(secret_id)],
+                                stage="feature", current_feature=secret_id)
+    result = save(sdd_grill, root, progress)
+
+    assert result.code == 1
+    assert result.out["error"] == (
+        "progress at features[1].id looks like a secret; describe what is needed instead of recording the value"
+    )
+    assert secret_id not in result.raw.decode("utf-8") and secret_id not in result.err
+    assert not (root / PROGRESS).exists()
