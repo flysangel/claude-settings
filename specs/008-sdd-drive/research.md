@@ -179,6 +179,19 @@ echo "Report status completed with summary 'nothing to do'." | claude -p --model
 Windows 上對應的做法是 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`（必要時加 `CREATE_BREAKAWAY_FROM_JOB`）的兩層啟動；**Claude Code 在 Windows 如何終止背景指令未查證**
 （若以不允許脫離的 job object 管理，孫程序仍可能被終止），列為人工驗收與風險（T10）。電腦休眠時行程暫停，醒來後以牆上時鐘判斷是否已過重置時間（**推測**，屬一般作業系統行為）。
 
+### E12. `speckit-converge` 的實際行為（2026-11-21 為 FR-023、FR-024 補查；讀取 `.claude/skills/speckit-converge/SKILL.md`，Spec Kit 1.4.2）
+
+- 前置：以 `check-prerequisites.sh --json --require-spec --require-tasks --include-tasks` 取得目前的功能（依 `.specify/feature.json`）；`spec.md`、`plan.md`、`tasks.md`
+  任一缺少就停止並指出要先執行的指令。只應在 `speckit-implement` 對目前的 `tasks.md` 執行過之後使用。
+- 依據：只以 spec、plan、tasks（與 constitution）為意圖來源；「completion claims are not evidence」，已勾選的任務也重新對照程式；不看 git 歷史。
+- **唯一的寫入**：在 `tasks.md` **末尾**附加一個 `## Phase N: Convergence` 段落（N 為最大階段編號＋1），每個發現一行
+  `- [ ] T{M+1:03d} <imperative description> per <source-ref> (<gap-type>)`，`M` 為既有最大任務編號，`<gap-type>` 為 `missing`、`partial`、`contradicts`、`unrequested`，
+  constitution 違反排第一並標 `CRITICAL`。先前的 Convergence 段落不動，另起新的段落。
+- MUST NOT 修改 `spec.md`、`plan.md`；MUST NOT 改寫、重新編號、重排或刪除既有任務；MUST NOT 建立、修改或刪除程式碼。
+- **沒有發現**：`tasks.md` **逐位元組不變**（不留空的段落標題），回報「Converged」。
+- 會在對話中輸出發現的摘要表；不會 commit（skill 本身沒有提到 git）。`unrequested`（多做的工作）也會成為附加的任務。
+- 結論：「有沒有漏做」可以完全由檔案判定（`tasks.md` 是否在原內容之後多了 Convergence 段落），不需要採信子 session；FR-023、FR-024 都能可靠達成。
+
 ## 決策
 
 ### D1. 開子 session 的機制：腳本以 `claude -p` 啟動無頭 session，主 session 以 Bash 背景執行該腳本
@@ -434,6 +447,33 @@ spec 編號、原子寫入、機密樣式（004、007 的做法）；載入失�
 主 session 轉成維護者的當地時間說明）、`overage_status`，以及 `auto_resume` 的狀態與 `state_after`（目前進度）。主 session 的每一則用量上限回報 MUST 包含：
 原因（用量上限，不是失敗、未計入重試）、哪一種上限、何時重置（或「沒有重置時間／無法得知」）、目前進度、接下來會自動接續還是需要維護者再輸入 `/sdd-drive`。
 
+### D22. 對照檢查（check 階段，FR-007、FR-023、FR-024）
+
+- **位置**：每份 spec 的第四個子 session 階段 `check`，在「任務全部勾選＋測試通過」之後；以 Skill 工具呼叫 `speckit-converge`（Spec Kit，FR-023「MUST NOT 自行手寫」）。
+- **判定只看檔案**（E12）。driver 在啟動前記下 `tasks.md` 的內容、HEAD、受保護檔案與 remote refs，結束後比對：
+  - `tasks.md` 不變、HEAD 不變、工作區乾淨、沒有其他檔案改變 → `succeeded`，`convergence: converged`。
+  - `tasks.md` = 原內容＋合格的附加段落（只含空行、一行 `## Phase N: Convergence`、未勾選的 `- [ ] Tnnn …` 任務行與縮排的續行；新任務編號都大於原最大編號），
+    且從原 HEAD 起的 commit 與工作區只動到這個 spec 的 `tasks.md` → `gaps-found`，把附加的任務編號併入 `task_ids`（之後 implement 不得刪除它們，D9 的 `tasks-removed`）。
+  - 子 session 說 converged 但檔案有合格的附加段落 → 以檔案為準記 `gaps-found`，`detail.code: report-mismatch` 一併回報。
+  - 子 session 說找到漏做但 `tasks.md` 沒有變 → `verify-failed`（`check-no-tasks`）：沒有證據，不當成 converged，也不當成漏做。
+  - `tasks.md` 不是「原內容＋附加」（改寫、勾選、刪除任務、格式不合）→ `verify-failed`（`check-rewrote-tasks`）；動到 `tasks.md` 以外的檔案（程式碼、plan.md 等）→
+    `verify-failed`（`check-touched-files`，列出路徑）；受保護檔案（spec.md、constitution）→ `protected-changed`；未提交 → `uncommitted`；push → `pushed`。都不還原。
+- **commit**：由 check 子 session commit 附加的 `tasks.md`（與其他階段一致：子 session 結束時工作區必須乾淨）；converged 時 MUST NOT 產生任何 commit。
+- **失敗的計算**：`gaps-found` 是該 spec 的失敗（FR-023）：計入 `failures.check`，停止整個流程，不自動修正，不開始後續的 spec。本設計沒有重試上限——每一次失敗都停止，
+  只有維護者再次輸入 `/sdd-drive` 才會繼續，所以「implement → test → check → 又找到漏做」不會自行循環；每一圈都是維護者的決定（FR-024、SC-003）。
+- **接續**：維護者再次啟動時，附加的未勾選任務讓狀態回到 `implementing`、下一步 `implement`（只做未勾選的任務，即補做檢查指出的工作）→ `test` → `check`。
+  維護者若認為某一項不必做，可以自己在 tasks.md 處理（勾選或刪除）；`tasks.md` 因此改變，同樣需要重新測試與檢查。
+- **與工作區綁定、不沿用過期結果也不重複檢查**：
+  - 「完成」＝存在 `check` 的 `succeeded`／`converged` 嘗試，其 `tasks_hash` 等於目前 `tasks.md` 的雜湊。converged 不改變任何檔案，所以紀錄之後立即成立、不會再跑一次。
+  - 測試紀錄另記 HEAD；要進入 `check` 時，必須有「目前 `tasks_hash` 且目前 HEAD」的通過紀錄（工作區乾淨由 D9 保證）。測試之後有 commit（實作改變）→ 先重新測試，再檢查。
+  - 找到漏做之後，附加與補做都會改變 `tasks.md`，所以之前的結果自然失效（FR-024）。converged 之後該 spec 即為完成；之後由後續 spec 造成的變更屬於後續 spec，由它們的測試與檢查涵蓋，
+    不重新打開已完成的 spec（否則每份新 spec 的 commit 都會讓所有已完成的 spec 重跑檢查）。
+- **模型**：對照與推演需要仔細判斷，預設建議較強的模型（`opus`）；理由仍逐次撰寫（FR-019）。
+- **回報**：`watch` 從 `tasks.md` 的附加段落解析每一項（編號、描述、`source-ref`、`gap-type`，各自做機密取代、每項最多 300 字元、最多列 50 項並註明總數）給主 session 列出；
+  子 session 的輸出（包括 converge 在對話中的摘要表）不進入主 session。
+- **用量上限**：check 子 session 適用 D17–D21（不算失敗、可等待時自動接續一次）。
+- **Alternatives**：主 session 或腳本自己對照（違反 FR-023、也無法以腳本做語意判斷）；以子 session 的回報判定（不可靠）；找到漏做時自動補做（違反 FR-023）。
+
 ## 對實際執行同類流程的觀察的處理
 
 - **O1. 子 session 做不到的勾選任務（push 後確認 CI、人工驗收）**：tasks 的工作說明要求「需要維護者或 push 才能完成的項目寫在 Notes，不寫成勾選任務」。
@@ -444,7 +484,7 @@ spec 編號、原子寫入、機密樣式（004、007 的做法）；載入失�
 - **O3. 用量上限中斷**：D4、D8；以 `--resume` 接續同一個子 session，不計入失敗；2026-11-21 起有重置時間時由 driver 自動接續一次（D17–D21），處理「額度重置後沒有東西叫醒主 session」。
 - **O4. 文件沒寫明的決定**：D12。
 - **O5. 工作說明的品質**：D12，全部由腳本產生，沒有手寫或沿用舊說明的空間；路徑、分支、階段、測試指令都是計算出來的。
-- **O6. 完成後的 `speckit-converge` 檢查**：spec 沒有要求，不加入；見 T5。
+- **O6. 完成後的 `speckit-converge` 檢查**：2026-11-21 維護者決定納入（FR-023、FR-024），見 D22。
 - **O7. 測試環境的陷阱**：屬於被驅動的專案自己的測試品質。本 skill 自己的測試沿用 tests/conftest.py（停用 git 背景維護），
   測試中的資料夾名稱不含 Windows 不允許的字元，測試之間不共用狀態。
 - **O8. 主 session 上下文被壓縮**：D8，每個行動前重新 `status`。
@@ -457,8 +497,7 @@ spec 編號、原子寫入、機密樣式（004、007 的做法）；載入失�
 - **T3. 子 session 允許所有 Bash 指令**（只禁止 `git push`）：implement 需要執行建置、測試與 git；逐一列出允許的指令會隨專案不同而失效。
   代價是子 session 能執行任何 shell 指令（例如刪除檔案）；保護靠工作說明、使用者 settings 的 deny 規則、受保護檔案的事後偵測與「工作區乾淨才開始」。
 - **T4. 一律不 push**：CI 的兩平台驗證只在維護者 push 後發生；sdd-drive 判定的「完成」是本機測試通過，不含 CI。結束報告提醒維護者 push 並確認 CI。
-- **T5. 不納入 `speckit-converge`**：納入可在 implement 後找出測試驗不出的缺漏（同類流程的經驗中找到過許多），代價是每份 spec 多一個子 session 的用量與時間，
-  且是 spec 沒有的關卡。若要納入，需要修訂 spec（例如新增「implement 後以 converge 檢查，新增的任務一併完成」）。
+- **T5. 納入 `speckit-converge`（2026-11-21 維護者決定，取代原本的「不納入」）**：每份 spec 多一個 check 子 session（預設較強的模型）的用量與時間；找到漏做就停止，需要維護者再次啟動。見 D22。
 - **T6. 2 小時上限**（2026-11-21：受 D18 影響，子 session 改由脫離的 driver 執行，不再被 2 小時上限終止；主 session 每 110 分鐘重新 `watch` 一次。下列原文保留供對照）：Bash 背景執行的上限是 7200000 ms；更長的 implement 會被終止並落在 `interrupted`，下一次以 `--resume` 接續（不計入失敗）。
   可接受，但一份 spec 若常超過 2 小時，代表應該拆小。
 - **T7. 中斷被發現時先回報、下一次才接續**：符合 US3-3 與 FR-021「不自動重試」；代價是維護者要多輸入一次 `/sdd-drive`。
@@ -473,3 +512,8 @@ spec 編號、原子寫入、機密樣式（004、007 的做法）；載入失�
   維護者回來後輸入任何訊息或 `/sdd-drive` 才繼續。替代方案是請主 session 在流程開始時以 CronCreate 設定週期性的喚醒（session 限定、每次喚醒消耗少量用量、可用性未查證），未採用。
 - **T12. 重置時間沒有上限**：spec 只要求「有重置時間就等待」，因此 7 天的時間窗也會等待（Claude Code 內建的自動繼續則以 24 小時為限）。等待期間可取消。
 - **T13. 輸出格式改為 stream-json**：每行都要解析、不保存；只取結構化的限額資訊與最後的結果物件，與 D2 的 `json` 結果欄位相同。
+- **T14. 已經做完的 spec 也要通過對照檢查**（2026-11-21，FR-023 的直接結果）：導入 sdd-drive 前就已完成的 spec（例如本 repo 的 001–007）沒有本 skill 的檢查紀錄，
+  第一次執行時會依序為每一份跑一個 check 子 session，並可能在較早的 spec 就因找到漏做而停止。SC-002 要求「未經對照檢查確認的完成數為 0」，所以預設如此；
+  若維護者希望把既有的完成視為基準而略過，需要修訂 spec。
+- **T15. `unrequested`（多做的工作）也會停止流程**：converge 對多做的工作也附加任務（「審視或移除」），依 FR-023 任何附加都是漏做而停止。代價是可能因為合理的額外實作而停下，
+  由維護者在 tasks.md 處理後再啟動。
