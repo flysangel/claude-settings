@@ -26,7 +26,7 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 - 失敗時 JSON 有 `"error": "<一句英文>"` 與 `"reason": "<列舉值>"`，同一句 `error` 也寫到 stderr。SKILL.md 依 `reason` 分支。
 - **寫入範圍**：`status`、`brief`、`watch` 不寫入任何檔案。`run` 寫 `.specify/sdd-drive/`、`.specify/feature.json`，並在需要時建立或切換 git 分支（D11）；driver 只寫 `.specify/sdd-drive/`（刪除 `cancel` 也是）；`cancel` 只建立 `.specify/sdd-drive/cancel`；
   其餘的專案檔案只由子 session 修改。`test` 只寫 `.specify/sdd-drive/`（測試指令本身可能寫入專案自己的暫存檔，不在本 skill 的控制內）。
-  `finalize` 只寫 `.specify/sdd-drive/state.json`。`clear` 只刪除本 skill 的三個檔案與變空的資料夾。寫入一律「同資料夾的暫存檔再取代」。
+  `finalize` 只寫 `.specify/sdd-drive/state.json`。`clear` 只刪除本 skill 的四個檔案與變空的資料夾。寫入一律「同資料夾的暫存檔再取代」。
 - **不做的事**：任何指令都不 commit、不 push、不 stash、不 reset、不 checkout 檔案、不 merge、不刪除分支，不讀取也不修改
   `.specify/sdd-drive-state.json` 與 `.specify/.gitignore`。
 - 執行時以 `importlib` 載入 `<skill>/../sdd-grill/scripts/sdd_grill.py`（Spec Kit 狀態、spec 編號、原子寫入、機密樣式）；不存在或載入失敗時，
