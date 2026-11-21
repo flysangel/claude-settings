@@ -8,12 +8,14 @@
 
 維護者在主 session 輸入 `/sdd-drive`。主 session 的 Claude 依 SKILL.md 協調：每個行動前以腳本重新計算每份 spec 的狀態與下一步，
 依編號一次一份、一個階段一個子 session，開子 session 執行 plan、tasks、implement，之後親自（經由腳本）執行測試確認完成，
-才往下一個階段或下一份 spec；失敗、中斷或用量上限時停止並回報。
+才往下一個階段或下一份 spec；失敗或中斷時停止並回報。子 session 因有重置時間的用量上限中斷時，在重置後自動從中斷處接續一次，不需要維護者輸入指令；
+再次中斷或上限沒有重置時間時停止並回報（FR-021 修訂，2026-11-21）。
 
 做法：**協調式的 skill**。判斷（選模型與理由、轉述結果給維護者）寫在 SKILL.md；可決定的事集中在一支由 uv 執行、輸出 JSON 的腳本
-`sdd_drive.py`（`status`、`brief`、`run`、`test`、`finalize`、`clear`）。子 session 是腳本以 `claude -p` 啟動的無頭 session
-（`--model` 指定模型、`--session-id`／`--resume` 接續、`--json-schema` 結構化回報、`--output-format json` 判讀結束原因），
-主 session 以 Bash 的背景執行等待它完成（research D1，依實測 E1–E8）。工作說明完全由腳本產生；進度由檔案判定，
+`sdd_drive.py`（`status`、`brief`、`run`、`watch`、`cancel`、`test`、`finalize`、`clear`）。子 session 是腳本以 `claude -p` 啟動的無頭 session
+（`--model` 指定模型、`--session-id`／`--resume` 接續、`--json-schema` 結構化回報、`--output-format stream-json` 判讀結束原因與用量上限的重置時間），
+由 `run` 以脫離 session 的方式啟動的 **driver** 行程執行；driver 在可等待的用量上限時自己等到重置並以 `--resume` 接續一次，不依賴主 session 的回合
+（主 session 與子 session 共用額度，子 session 被擋下時主 session 多半也被擋下）。主 session 以 Bash 背景執行的 `watch` 等待 driver（research D1、D17–D21，依實測 E1–E11）。工作說明完全由腳本產生；進度由檔案判定，
 `.specify/sdd-drive/`（不入庫）只補充測試紀錄、失敗次數與可接續的 session。
 
 ## Technical Context
@@ -44,7 +46,8 @@ SKILL.md 的結構與內容檢查比照 `tests/unit/test_sdd_rebuild_skill.py`�
 - 主 session 不親自產生 plan、tasks 與程式碼（FR-002）；工作說明由腳本產生
 - 一律不 push；不捨棄、不覆蓋、不替維護者 commit 未提交的變更
 - 子 session 的完整輸出不寫入檔案、不進入主 session 的上下文；機密值不出現在輸出與紀錄
-- 一個 `run` 或 `test` 最長 2 小時（Bash 背景執行的上限，T6）
+- Bash 背景執行最長 2 小時：`watch` 每 110 分鐘結束一次由主 session 重新啟動；子 session 與等待重置在脫離的 driver 中進行，不受此限（D18）；`test` 最長 2 小時
+- 自動接續只由 driver 做、每次中斷最多一次；driver 不開始下一個階段（模型由主 session 選）
 - 產出只有 skill 文件或 script；Python 一律用 uv 執行
 
 **Scale/Scope**: 一個專案、數份到數十份 spec；同時只有一個流程；單一使用者
@@ -58,10 +61,10 @@ SKILL.md 的結構與內容檢查比照 `tests/unit/test_sdd_rebuild_skill.py`�
 | 原則 | 判定 | 說明 |
 |---|---|---|
 | I. 只包裝、不修改 Spec Kit | 通過 | plan、tasks、implement 只由子 session 以 Skill 工具呼叫 `speckit-*` 進行，工作說明禁止手寫其產物（FR-006）；`run` 事後偵測 Spec Kit 範本、腳本與 `speckit-*` skill 是否被改動（D10）。在 `.specify/` 只新增自己的 `.specify/sdd-drive/`，以資料夾名稱與 `.gitignore` 第一行的註解記錄歸屬（同 005）。`.specify/feature.json` 只改 `feature_directory`（原則 I 明定的例外）。不讀不改另一個工具的 `.specify/sdd-drive-state.json` 與 Spec Kit 的 `.specify/.gitignore` |
-| II. Windows 與 Linux 完全對等 | 通過 | 子 session 的啟動、判讀、檢查都在腳本內，以 Python subprocess 執行 `claude`（兩個平台都可用）；提示走 stdin，不依賴 shell 的引號；檔案鎖依平台用 `fcntl`／`msvcrt`；測試指令要求兩個平台寫法相同。可測的部分（腳本）有單元測試在兩個平台的 CI 執行；不可測的部分（真實子 session）以內容檢查與 quickstart 的人工驗收（含 Windows）涵蓋（D15） |
-| III. 保護既有檔案 | 通過 | 腳本只寫自己的資料夾與 `feature.json`；工作區不乾淨時不開始（D9）；不 stash、reset、checkout、clean、merge；分岔的分支不處理（`branch-diverged`）；受保護檔案被改動時回報不還原；`.specify/sdd-drive/` 有不明檔案時視為衝突。`status`、`brief` 只讀；`finalize`、`clear` 冪等 |
+| II. Windows 與 Linux 完全對等 | 通過（含一項風險） | 子 session 的啟動、判讀、檢查與用量上限的等待都在腳本內，以 Python subprocess 執行 `claude`（兩個平台都可用）；提示走 stdin，不依賴 shell 的引號；檔案鎖依平台用 `fcntl`／`msvcrt`；測試指令要求兩個平台寫法相同。可測的部分（腳本）有單元測試在兩個平台的 CI 執行；不可測的部分（真實子 session）以內容檢查與 quickstart 的人工驗收（含 Windows）涵蓋（D15）。driver 的脫離啟動依平台用對應的建立旗標，CI 在兩個平台以「終止啟動它的行程樹」驗證存活；Claude Code 在 Windows 終止背景指令的方式無法在 CI 重現，以人工驗收 15 確認，失敗時的結果是 `lost`（停止並回報，不會造成錯誤狀態）（T10） |
+| III. 保護既有檔案 | 通過 | 腳本只寫自己的資料夾與 `feature.json`；工作區不乾淨時不開始（D9）；不 stash、reset、checkout、clean、merge；分岔的分支不處理（`branch-diverged`）；受保護檔案被改動時回報不還原；`.specify/sdd-drive/` 有不明檔案時視為衝突。driver 只寫自己的資料夾；自動接續前確認工作區與中斷時相同，不同就不接續（D20）。`status`、`brief`、`watch` 只讀；`finalize`、`clear`、`cancel` 冪等 |
 | IV. 先確認再寫入 | 通過（不適用） | 本 skill 不產生或改寫 constitution 與 spec；工作說明禁止子 session 修改它們，`run` 事後偵測（FR-016）。全自動不經核可的是 plan、tasks、實作，屬維護者已接受的取捨（spec Assumptions） |
-| V. 個人使用、repo 公開 | 通過 | 紀錄中來自外部的字串（理由、子 session 回報、錯誤文字、測試指令）寫入與讀回都以共同的機密樣式掃描（寫入與讀取對稱），腳本計算的欄位只驗證格式；子 session 的完整輸出不保存；輸出中的機密以 `(not shown…)` 取代；紀錄不入庫；SKILL.md、README、腳本、工作說明沒有絕對路徑與信箱（結構測試） |
+| V. 個人使用、repo 公開 | 通過 | 紀錄中來自外部的字串（理由、子 session 回報、錯誤文字、測試指令）寫入與讀回都以共同的機密樣式掃描（寫入與讀取對稱），腳本計算的欄位（含 `limit`、`auto_resume`、`driver`）只驗證格式；子 session 的完整輸出（stream-json）不保存，只取結構化的限額資訊與結果物件；輸出中的機密以 `(not shown…)` 取代；紀錄不入庫；SKILL.md、README、腳本、工作說明沒有絕對路徑與信箱（結構測試） |
 | VI. 文件語言 | 通過 | SKILL.md、腳本訊息、工作說明為英文；README 為繁體中文；本 spec 的設計文件為繁體中文 |
 
 **Complexity Tracking：沒有例外。**
@@ -78,7 +81,7 @@ specs/008-sdd-drive/
 ├── quickstart.md        # 自動測試與人工驗收
 ├── contracts/
 │   ├── cli.md           # sdd_drive.py 的指令介面
-│   └── skill.md         # SKILL.md 的必要指示：5 個階段、41 種結果的下一步；工作說明的必含事項
+│   └── skill.md         # SKILL.md 的必要指示：階段 1–6 與 3B（7 個）、58 種結果的下一步；工作說明的必含事項
 └── tasks.md             # Phase 2（/speckit-tasks 產生，不在本階段）
 ```
 
@@ -86,7 +89,7 @@ specs/008-sdd-drive/
 
 ```text
 home/skills/sdd-drive/
-├── SKILL.md                     # 英文；frontmatter 與 5 個階段（contracts/skill.md）
+├── SKILL.md                     # 英文；frontmatter 與 7 個階段（contracts/skill.md）
 ├── README.md                    # 繁體中文簡述
 └── scripts/
     └── sdd_drive.py             # uv inline metadata；載入 ../../sdd-grill/scripts/sdd_grill.py；含工作說明範本與回報的 JSON Schema
@@ -108,7 +111,8 @@ README.md                        # repo 的說明：更新「目前狀態」並�
 |---|---|
 | 前置條件（Spec Kit、三個 `speckit-*`、`claude`、git） | 依 `reason` 向維護者說明並停止 |
 | 每份 spec 的狀態、範本判定、下一步、失敗次數、規模提示 | 每個行動前先 `status`，不憑記憶 |
-| 鎖（同時只有一個流程）、`finalize` | 看到 `running` 時不啟動、不 `finalize` |
+| 鎖（同時只有一個流程）、`finalize` | 看到 `running` 時不啟動、不 `finalize`，改以 `watch` 接手 |
+| driver：脫離啟動、用量上限的判讀（`limit`）、等待重置、自動接續一次、取消、等待期間工作區檢查 | 依 `watch` 的 `status` 與 `auto_resume` 回報；不自己等待或排程；維護者要求時 `cancel` |
 | 分支的建立與切換、`feature.json` | 不自己操作 git 與 `feature.json` |
 | 工作說明、`claude` 的啟動參數（模型、接續、權限、結構化回報） | 選模型並寫理由；接續時加 `--resume` |
 | 結果分類（D4）與檢查（產物、任務、受保護檔案、push、未提交） | 依 `outcome` 回報與停止；不改為親自實作 |
@@ -139,8 +143,9 @@ README.md                        # repo 的說明：更新「目前狀態」並�
 | FR-018 英文與繁中 README | — | 內容檢查 |
 | FR-019、SC-008 逐次選模型 | SKILL.md 通則 8；`run` 必填 `--model`、`--reason`；`hints` | 單元測試（缺少時 `usage`、參數傳給 `claude`）；內容檢查；人工驗收 2 |
 | FR-020 回報模型與理由 | `run` 輸出 `model`、`model_used`、`reason`；SKILL.md 階段 3、5 | 單元測試；內容檢查 |
-| FR-021、SC-009 用量上限不算失敗 | D4 分類；`failures` 不計入；不自動重試 | 單元測試（429、樣式文字、沒有結果、失敗次數不變）；人工驗收 11 |
-| FR-022 接續 | `--session-id`／`--resume`；leftovers 指紋 | 單元測試（接續參數、leftovers 允許接續）；人工驗收 5、11 |
+| FR-021、SC-009 用量上限不算失敗、回報原因／種類／重置時間／進度 | D4、D17、D21；`failures` 不計入 | 單元測試（各種 `rate_limit_info`、只有文字、沒有結果、失敗次數不變）；內容檢查（通則 13）；人工驗收 11、12 |
+| FR-021、SC-010 有重置時間時自動接續一次；再次中斷或沒有重置時間時停止 | D18、D19；driver 等待後 `--resume`；`auto` 計數 | 單元測試（自動接續一次、再次中斷停止、不可等待停止、手動啟動後重設、取消、工作區改變、driver 消失、存活於行程樹終止）；人工驗收 11、13–15 |
+| FR-022 接續 | `--session-id`／`--resume`；leftovers 指紋 | 單元測試（接續參數、leftovers 允許接續）；人工驗收 5、11、14 |
 | Edge Cases | contracts/skill.md 階段 1–4 的對應列 | 單元測試＋內容檢查 |
 
 `tests/unit/test_claude_md.py::test_referenced_skills_exist_in_home_skills` 目前因缺少 `home/skills/sdd-drive` 而 skip；
@@ -155,11 +160,17 @@ README.md                        # repo 的說明：更新「目前狀態」並�
 3. **T5 不納入 `speckit-converge`**：spec 沒有這一關；要納入需要修訂 spec。
 4. **T4 一律不 push**：「完成」是本機測試通過，不含兩個平台的 CI。
 5. **T2 測試指令取自 plan.md 的 `**Testing**:` 行**；**T7 中斷被發現時先回報、下一次才接續**。
-6. **用量上限的實際訊息無法實測**（research E5）：分類錯誤時仍落在不計入失敗的結果，行為不變；以人工驗收 11 確認。
+6. **用量上限的實際訊息無法實測**（research E5、E9）：被拒絕時的 `rate_limit_info` 形狀依程式內容推得；判斷不出來一律不自動接續（停止），以人工驗收 11 確認。
+7. **自動接續的代價**（2026-11-21 新增，research T9–T13）：
+   - T9：driver 是脫離終端機的行程，維護者離開或關閉終端機後仍會在重置時接續一次並消耗用量；結果寫在 `.specify/sdd-drive/state.json`，下一次 `/sdd-drive` 回報。
+   - T10：Windows 上 driver 能否撐過 Claude Code 終止背景指令未經實測（Linux 已實測），失敗時退化為停止並回報。
+   - T11：driver 只保證被中斷的階段自動接續；之後的階段要主 session 繼續，主 session 若也被擋下則依賴 Claude Code 內建的「Continue automatically at usage limit」（有條件），不適用時流程在該階段完成後停下。
+   - T12：重置時間沒有上限（7 天的時間窗也等）。T13：輸出格式改為 stream-json。
+   - 連帶影響 T6：長的 implement 不再被 2 小時上限終止。
 
 ## 仍待釐清的事項
 
-沒有。只用 Claude Code 能滿足所有 MUST（research E2、E3、E6、E8 與 D1）；上面的取捨由維護者在核可時決定。
+沒有。只用 Claude Code 能滿足所有 MUST（research E2、E3、E6、E8、E9、E11 與 D1、D17–D21）；上面的取捨（含 T9–T13）由維護者在核可時決定。
 
 ## Complexity Tracking
 
