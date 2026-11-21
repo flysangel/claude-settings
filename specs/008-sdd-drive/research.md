@@ -165,9 +165,25 @@ echo "Report status completed with summary 'nothing to do'." | claude -p --model
   也就是說，判斷不出來一律歸為「等也沒用」。
 - 維護者的例子（花費上限＋5 小時時間窗）：被拒絕的時間窗是 `five_hour`、有 `resetsAt` → 等待有用；花費上限本身沒有重置時間，但時間窗重置後就不需要它。
 
+### E11. 等待的行程能否在 Bash 背景指令被終止後存活（Linux 實測）
+
+以 Bash 工具的 `run_in_background: true`、很短的 `timeout`（6–8 秒）執行一支 Python，讓它啟動子程序後自己睡 300 秒，等 Claude Code 在時限到時終止它：
+
+| 啟動方式 | 結果（**實測**） |
+|---|---|
+| 一般子程序（同一個行程群組） | 被終止 |
+| `start_new_session=True`（新的 session／行程群組，父程序仍在） | **也被終止**：Claude Code 終止的是整個子孫行程樹，不只行程群組 |
+| 兩層啟動：中間程序以 `start_new_session=True` 啟動孫程序後立刻結束，孫程序被系統收養 | **存活**，25 秒後如期寫入檔案 |
+
+結論：等待的行程要用「兩層啟動並脫離 session」才能撐過 Bash 背景執行的 2 小時上限；這樣啟動的行程也會在維護者關閉終端機或結束 Claude Code 後繼續存在（**推測**：已脫離終端機的 session，不會收到 SIGHUP）。
+Windows 上對應的做法是 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`（必要時加 `CREATE_BREAKAWAY_FROM_JOB`）的兩層啟動；**Claude Code 在 Windows 如何終止背景指令未查證**
+（若以不允許脫離的 job object 管理，孫程序仍可能被終止），列為人工驗收與風險（T10）。電腦休眠時行程暫停，醒來後以牆上時鐘判斷是否已過重置時間（**推測**，屬一般作業系統行為）。
+
 ## 決策
 
 ### D1. 開子 session 的機制：腳本以 `claude -p` 啟動無頭 session，主 session 以 Bash 背景執行該腳本
+
+> 2026-11-21 修訂（FR-021 自動接續）：輸出格式改為 `--output-format stream-json --verbose`（取得 `rate_limit_info`，D17）；子 session 改由脫離的 driver 行程啟動、主 session 以 `watch` 等待（D18）。下文其餘理由不變。
 
 - **Decision**：腳本 `sdd_drive.py run` 以 subprocess 啟動 `claude -p`（`--output-format json`、`--model`、`--session-id` 或 `--resume`、
   `--json-schema`、權限參數，提示由 stdin 傳入），等它結束後判讀結果物件、檢查檔案狀態、寫入紀錄，最後在 stdout 印出一份精簡的 JSON。
@@ -215,6 +231,8 @@ echo "Report status completed with summary 'nothing to do'." | claude -p --model
 
 ### D4. 結果的分類（`run` 的 `outcome`）
 
+> 2026-11-21 修訂：`usage-limit` 的下一步改為「可等待時由 driver 在重置後自動接續一次」，見 D17–D21。分類規則本身不變；`usage-limit` 另依 `rate_limit_info` 判斷是否可等待。
+
 | `outcome` | 判定（依序取第一個成立的） | 計入失敗 | 下一次 `/sdd-drive` |
 |---|---|---|---|
 | `launch-failed` | 找不到 `claude` 或無法啟動程序 | 否 | 重新檢查前置條件 |
@@ -256,6 +274,8 @@ echo "Report status completed with summary 'nothing to do'." | claude -p --model
 
 ### D7. 同一專案同時只有一個流程（FR-012）
 
+> 2026-11-21 修訂：鎖改由 driver 持有，涵蓋子 session 執行與等待重置的整段期間（D18）。
+
 - **Decision**：`.specify/sdd-drive/lock` 以作業系統的檔案鎖保護（Linux `fcntl.flock`、Windows `msvcrt.locking`，非阻塞）。`run` 與 `test`
   在整個執行期間持有它，程序結束（含被終止）時由作業系統釋放。`status` 以嘗試取得鎖的方式判斷是否有流程在執行（`running`），並立即釋放。
 - **Rationale**：不依賴 PID（PID 會被重用；Windows 上 `os.kill(pid, 0)` 會終止程序，不能用來探測）；不會因當機留下永久的鎖。
@@ -263,6 +283,8 @@ echo "Report status completed with summary 'nothing to do'." | claude -p --model
 - 只能靠 SKILL.md 的部分：主 session 在等待背景執行時不另外啟動第二個 `run`（腳本也會以 `running` 拒絕）。
 
 ### D8. 用量上限與中斷後的接續（FR-021、FR-022、SC-009）
+
+> 2026-11-21 修訂：「回報後停止、不自動重試」改為 D17–D21 的「有重置時間時自動接續一次」；以下關於紀錄、指紋、`--resume`、`finalize` 的設計仍適用。
 
 - `run` 在啟動子 session 前先寫入一筆嘗試（`outcome: null`、`session_id`、模型、理由），結束時補上結果。程序被終止時這筆嘗試留著 `outcome: null`。
 - 下一次 `status` 發現「最後一筆嘗試沒有結果且鎖沒有被持有」：`pending_finalize: true`。主 session 執行 `finalize`（記為 `interrupted`），
@@ -348,6 +370,70 @@ echo "Report status completed with summary 'nothing to do'." | claude -p --model
 一支 `home/skills/sdd-drive/scripts/sdd_drive.py`（uv inline metadata、只用標準函式庫），以 `importlib` 載入相鄰的 `sdd_grill.py` 取得 Spec Kit 狀態判定、
 spec 編號、原子寫入、機密樣式（004、007 的做法）；載入失敗時結束碼 3、`reason: "dependency"`。指令：`status`、`brief`、`run`、`test`、`finalize`、`clear`（見 contracts/cli.md）。
 
+### D17. 用量上限的判讀與重置時間（FR-021）
+
+- **Decision**：driver 以 stream-json 逐行讀取子 session 的輸出，只保留三種結構化資訊：`status: "rejected"` 的 `rate_limit_event.rate_limit_info`、
+  assistant 訊息的 `api_error` 與 `api_error_params.rate_limit_info`、最後的 `result` 物件；其餘內容不保存。`outcome` 為 `usage-limit` 時，依 E10 判斷
+  `limit.waitable`：`true` 時 `limit.resets_at` 是被拒絕的時間窗重置時間的最大值；`false` 涵蓋沒有重置時間（花費上限、額外用量）與判斷不出來的所有情況。
+  訊息文字不解析（沒有日期，格式不保證）。
+- **Rationale**：結構化欄位是 Claude Code 自己用來組訊息與決定自動繼續的同一份資料（E9 第 2、5 點）；判斷不出來歸為不可等待，符合修訂後的 FR-021。
+- **Alternatives**：解析 `resets 3:10pm (Asia/Taipei)` 文字（沒有日期、跨日與時區名稱的換算不可靠、格式可能改變）；只看 `api_error_status: 429`（無法分辨有沒有重置時間）。
+
+### D18. 由脫離的 driver 行程等待並自動接續，主 session 以 `watch` 等待
+
+- **Decision**：
+  - `run`（主 session 以 Bash 背景執行）在鎖內完成所有檢查與準備（D9–D11），寫入一筆 `launch` 記號後以兩層啟動、脫離 session 的方式啟動 **driver**
+    （同一支腳本的內部指令），釋放鎖；driver 立刻以阻塞方式取得鎖並確認記號，之後在整個生命期間持有鎖。
+  - driver 啟動子 session、判讀與檢查（D4、D9、D10）、寫入結果。結果是可等待的 `usage-limit` 且符合 D19 的次數規則時，driver 記下
+    `auto_resume: "waiting"` 與重置時間，**自己**等待到 `resets_at` 再加 120 秒（以牆上時鐘每 30 秒檢查一次，可處理休眠；每次檢查取消要求，D20），
+    重新確認工作區指紋與等待前相同，以 `--resume` 啟動同一個子 session（`auto: true` 的新嘗試），照常判讀、檢查、寫入，然後結束。
+    driver 不會開始下一個階段或下一份 spec（下一步的模型要由主 session 判斷，FR-019）。
+  - `run` 在啟動 driver 後轉為 `watch`：等到 driver 結束、driver 進入等待（每個等待只回報一次），或 110 分鐘到時，輸出目前的結果後結束。
+    主 session 收到通知、依輸出回報後再執行 `watch`（仍以 Bash 背景執行），直到 driver 結束。
+- **Rationale**：
+  - 主 session 與子 session 用同一個帳號的額度，子 session 被擋下時主 session 的下一個回合很可能也被擋下（任務說明的前提）；
+    把「等待並接續」放在不需要 Claude 回合的行程裡，接續不依賴主 session 能不能動。
+  - Bash 背景執行最長 2 小時、Monitor 1 小時，五小時的時間窗等不完；Linux 實測兩層脫離的行程能撐過 Bash 指令被終止（E11）。
+  - 主 session 只在 driver 結束後需要動作；若主 session 當時被擋下，互動式 Claude Code 內建的「Continue automatically at usage limit」
+    會在重置後讓主 session 繼續（E9 第 5 點），主 session 依 SKILL.md 先 `status`，driver 已在接續或已結束，主 session 接著 `watch` 或往下一步。
+  - 順帶解決 T6：長的 implement 不再被 2 小時上限終止。
+- **Alternatives considered**：
+  - **主 session 的 Claude 記得時間到了再繼續**（CronCreate 一次性排程或 Bash `sleep` 到重置）：需要主 session 在被擋下的當下還能呼叫工具，不可靠；
+    CronCreate 只存在於該 session 的記憶體、只在閒置時觸發，且在一般 Claude Code 是否提供未查證（E9 第 6 點）。不採用為主要機制。
+  - **只依賴 Claude Code 內建的自動繼續**：條件多（claude.ai 帳號、非 usage-based 計費、24 小時內、等待期間 Claude Code 不能結束、可被設定關閉），
+    且只繼續主 session、不會叫醒子 session；主 session 被喚醒後再開子 session 雖然可行，但不滿足的情況下就完全不會接續。保留為「讓主 session 在 driver 之後繼續整個流程」的輔助。
+  - **Bash 背景指令鏈式等待（每 110 分鐘由主 session 重新啟動）**：每一段都需要主 session 的回合，等待期間主 session 被擋下就斷了。
+  - **`claude --bg` 背景 session**：本身是消耗額度的 Claude session，同樣會被擋下。
+  - **作業系統排程（cron、systemd timer、Windows 工作排程器）**：兩個平台做法不同，會在專案外留下設定，且不屬於「只用 Claude Code」。
+
+### D19. 自動接續「一次」的計數與持久化（FR-021、SC-010）
+
+- 每筆嘗試記 `auto`（是否為自動接續）。driver 只在被中斷的嘗試 `auto: false` 時自動接續；自動接續的嘗試再次 `usage-limit` → 不再等待，停止（`auto_resume: "already-auto"`）。
+- 計數存在 `state.json`（跨行程、跨主 session）；維護者再次輸入 `/sdd-drive` 啟動的 `run` 是 `auto: false`，因此之後若再遇到可等待的上限，可以再自動接續一次（計數隨維護者的手動啟動重設）。
+- 不計入失敗次數（`failures` 只算 `failed`、`verify-failed`），SC-009 不受影響。
+
+### D20. 等待期間的鎖、維護者介入與取消
+
+- **鎖**：driver 在等待期間持有鎖；`status` 顯示 `running: true` 與 `driver.phase: "waiting"`、`waiting_until`、上限的種類。第二個 `run` 或 `test` 以 `running` 拒絕（FR-012）。
+- **維護者在等待期間輸入 `/sdd-drive`**（同一個或新的主 session）：回報正在等待哪一份 spec 的哪個階段、上限的種類、預計接續的時間與目前進度，
+  說明要取消可以直接告訴 Claude；然後以背景執行 `watch`，讓這個主 session 在 driver 結束後接手流程。兩個主 session 同時 `watch` 時，
+  driver 結束後第一個 `run` 取得鎖，另一個得到 `running` 或 `not-next` 而回到 `status`（不會重複執行）。
+- **取消**：維護者要求取消時，主 session 執行 `cancel`：在 `.specify/sdd-drive/` 建立 `cancel` 檔案（不需要鎖，不寫 `state.json`）。driver 每 30 秒與接續前各檢查一次，
+  看到時記 `auto_resume: "cancelled"`、刪除該檔案、結束；主 session 回報已取消並停止，下一次 `/sdd-drive` 手動接續。driver 不在等待時 `cancel` 回報 `not-waiting`
+  （子 session 執行中不提供中止；維護者可以在 driver 結束後再處理）。
+- **等待期間工作區被改動**：接續前的指紋與等待前不同 → 不接續（`auto_resume: "skipped-changed"`），結束；理由同 D9（不把維護者的變更混進子 session 的 commit）。
+- **主 session 的對話已關閉**：driver 仍會在重置後接續一次並把結果寫進 `state.json`，之後結束，不會再啟動其他行程。下一次 `/sdd-drive` 的 `status` 以 `last_attempt`
+  呈現最近一筆嘗試，SKILL.md 先回報「你不在時發生了什麼」（自動接續的結果）再往下。這是 spec 要求「不需要維護者再輸入指令」的直接結果，代價見 T9。
+- **driver 意外消失**（重新開機、被手動終止）：鎖被釋放、`driver` 仍有記錄 → `status` 的 `pending_finalize`，`finalize` 把等待中的自動接續記為 `auto_resume: "lost"`
+  （未接續的嘗試仍是 `usage-limit`），回報後停止；下一次 `/sdd-drive` 手動接續。主 session 不代替 driver 做自動接續（腳本分辨不出某次 `/sdd-drive` 是維護者還是自動繼續觸發的）。
+- **得知時重置時間已過**：driver 計算出的 `resets_at` 已過（例如子 session 很晚才結束），只等 120 秒的緩衝就接續；主 session 很晚才醒來時，driver 已經接續或結束，依其結果處理。
+
+### D21. 回報（FR-021）
+
+`watch` 與 `status` 輸出 `limit`：`waitable`、被拒絕的上限種類（`types`，例如 `["five_hour"]`、`["overage"]`）、`resets_at`（UTC 的 ISO 8601，
+主 session 轉成維護者的當地時間說明）、`overage_status`，以及 `auto_resume` 的狀態與 `state_after`（目前進度）。主 session 的每一則用量上限回報 MUST 包含：
+原因（用量上限，不是失敗、未計入重試）、哪一種上限、何時重置（或「沒有重置時間／無法得知」）、目前進度、接下來會自動接續還是需要維護者再輸入 `/sdd-drive`。
+
 ## 對實際執行同類流程的觀察的處理
 
 - **O1. 子 session 做不到的勾選任務（push 後確認 CI、人工驗收）**：tasks 的工作說明要求「需要維護者或 push 才能完成的項目寫在 Notes，不寫成勾選任務」。
@@ -355,7 +441,7 @@ spec 編號、原子寫入、機密樣式（004、007 的做法）；載入失�
   之後檢查不得減少（`tasks-removed`），防止以刪除任務達成「全部勾選」。push 後的 CI 驗證留給維護者（結束報告提醒），見 T4。
 - **O2. 子 session 的回報不能直接採信**：完成只看檔案狀態（D5）與腳本親自執行的測試（D6）。測試依賴執行順序屬於測試本身的品質；腳本只執行整套指令一次，
   無法偵測。implement 的工作說明要求新測試不得依賴執行順序，並列出 tests/conftest.py 這類專案慣例由子 session 自行遵循（屬子 session 的實作品質，不另設關卡）。
-- **O3. 用量上限中斷**：D4、D8；以 `--resume` 接續同一個子 session，不計入失敗。
+- **O3. 用量上限中斷**：D4、D8；以 `--resume` 接續同一個子 session，不計入失敗；2026-11-21 起有重置時間時由 driver 自動接續一次（D17–D21），處理「額度重置後沒有東西叫醒主 session」。
 - **O4. 文件沒寫明的決定**：D12。
 - **O5. 工作說明的品質**：D12，全部由腳本產生，沒有手寫或沿用舊說明的空間；路徑、分支、階段、測試指令都是計算出來的。
 - **O6. 完成後的 `speckit-converge` 檢查**：spec 沒有要求，不加入；見 T5。
@@ -373,8 +459,17 @@ spec 編號、原子寫入、機密樣式（004、007 的做法）；載入失�
 - **T4. 一律不 push**：CI 的兩平台驗證只在維護者 push 後發生；sdd-drive 判定的「完成」是本機測試通過，不含 CI。結束報告提醒維護者 push 並確認 CI。
 - **T5. 不納入 `speckit-converge`**：納入可在 implement 後找出測試驗不出的缺漏（同類流程的經驗中找到過許多），代價是每份 spec 多一個子 session 的用量與時間，
   且是 spec 沒有的關卡。若要納入，需要修訂 spec（例如新增「implement 後以 converge 檢查，新增的任務一併完成」）。
-- **T6. 2 小時上限**：Bash 背景執行的上限是 7200000 ms；更長的 implement 會被終止並落在 `interrupted`，下一次以 `--resume` 接續（不計入失敗）。
+- **T6. 2 小時上限**（2026-11-21：受 D18 影響，子 session 改由脫離的 driver 執行，不再被 2 小時上限終止；主 session 每 110 分鐘重新 `watch` 一次。下列原文保留供對照）：Bash 背景執行的上限是 7200000 ms；更長的 implement 會被終止並落在 `interrupted`，下一次以 `--resume` 接續（不計入失敗）。
   可接受，但一份 spec 若常超過 2 小時，代表應該拆小。
 - **T7. 中斷被發現時先回報、下一次才接續**：符合 US3-3 與 FR-021「不自動重試」；代價是維護者要多輸入一次 `/sdd-drive`。
 - **T8. 既有的 `.specify/sdd-drive-state.json`**：本 skill 使用 `.specify/sdd-drive/` 資料夾，完全忽略那個檔案與 `.specify/.gitignore` 中對應的一行，
   不讀、不改、不刪、不回報；維護者可自行刪除它們。已有的 001–007 沒有本 skill 的測試紀錄，第一次執行時會先執行一次測試（D5）再處理 008 之後的 spec。
+- **T9. 自動接續會在維護者不在場時消耗用量，且需要一個脫離終端機的等待行程**（2026-11-21，FR-021 修訂的代價）：driver 在維護者關閉終端機或離開後仍會等待並接續一次；
+  它只做一次、只接續被中斷的那個子 session、結束後不留行程，結果寫在 `.specify/sdd-drive/state.json`，下一次 `/sdd-drive` 回報。想避免時在等待期間取消。
+- **T10. Windows 上的脫離行程未經實測**：Linux 實測兩層脫離能撐過 Claude Code 終止背景指令（E11）；Windows 以對應的建立旗標實作，CI 以「終止啟動它的行程樹」驗證，
+  但 Claude Code 在 Windows 的終止方式無法在 CI 重現，列為人工驗收。若實際上會被終止，結果是 `auto_resume: "lost"`、回報後停止（等同沒有自動接續，不會造成錯誤的狀態）。
+- **T11. 主 session 在 driver 之後繼續整個流程依賴 Claude Code 內建的自動繼續**：driver 保證被中斷的階段自動接續一次（SC-010 的範圍）；之後的階段需要主 session 選模型。
+  主 session 若在等待期間被用量上限擋下，而內建的自動繼續不適用（設定關閉、usage-based 計費、重置超過 24 小時、Claude Code 已結束），流程在 driver 完成該階段後停下，
+  維護者回來後輸入任何訊息或 `/sdd-drive` 才繼續。替代方案是請主 session 在流程開始時以 CronCreate 設定週期性的喚醒（session 限定、每次喚醒消耗少量用量、可用性未查證），未採用。
+- **T12. 重置時間沒有上限**：spec 只要求「有重置時間就等待」，因此 7 天的時間窗也會等待（Claude Code 內建的自動繼續則以 24 小時為限）。等待期間可取消。
+- **T13. 輸出格式改為 stream-json**：每行都要解析、不保存；只取結構化的限額資訊與最後的結果物件，與 D2 的 `json` 結果欄位相同。
