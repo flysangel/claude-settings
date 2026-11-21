@@ -162,8 +162,8 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 
 ## watch
 
-只讀。等待直到下列任一成立，輸出當時的結果後結束（結束碼 0）：driver 結束（`driver` 清除且鎖釋放）；driver 進入 `waiting`（每個等待中的嘗試只回報一次：
-啟動 `watch` 時已在等待者，立即回報）；`--minutes` 到時（預設 110，範圍 1–115）；`launch` 超過 60 秒仍未被 driver 取得（`launch-failed`）。
+只讀。等待直到下列任一成立，輸出當時的結果後結束（結束碼 0）：driver 結束（`driver` 清除且鎖釋放）；driver 在這次 `watch` 期間由非等待轉入 `waiting`（每個等待中的嘗試只回報一次；
+啟動 `watch` 時已在等待者不立即回報，而是等到 driver 離開等待或時間到；`run` 啟動 driver 後轉為 `watch` 的那一段屬於同一次 `watch`）；`--minutes` 到時（預設 110，範圍 1–115；到時仍在等待則輸出 `status: waiting` 與 `waiting_until`）；`launch` 超過 60 秒仍未被 driver 取得（`launch-failed`）。
 沒有 driver、沒有 `launch`，且最後一筆嘗試已有結果時，回報該筆結果（讓剛結束的 driver 的結果不會遺失）；連嘗試都沒有時 `no-driver`。
 
 輸出：
