@@ -571,3 +571,235 @@ def run_export_real(root: Path, env: dict[str, str], *argv: str, stdin: str | No
         input=(stdin or "").encode("utf-8"),
         capture_output=True,
     )
+
+
+# ------------------------------------------------------------- sdd-rebuild
+
+SDD_REBUILD_PY = REPO_ROOT / "home" / "skills" / "sdd-rebuild" / "scripts" / "sdd_rebuild.py"
+SDD_EXPORT_FIXTURES = REPO_ROOT / "tests" / "unit" / "fixtures" / "sdd_export"
+SDD_REBUILD_FIXTURES = REPO_ROOT / "tests" / "unit" / "fixtures" / "sdd_rebuild"
+
+
+def _load_sdd_rebuild():
+    spec = importlib.util.spec_from_file_location("sdd_rebuild", SDD_REBUILD_PY)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["sdd_rebuild"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="session")
+def sdd_rebuild(sdd_export, sdd_grill):
+    # sdd_export and sdd_grill are loaded first, so the script shares those very modules (and the tests' patches).
+    module = _load_sdd_rebuild()
+    # E() and G() read the neighbour cache directly; load it here so no test depends on another test having done so.
+    _, _, missing = module.neighbours()
+    assert missing == []
+    return module
+
+
+def export_fixture(name: str) -> dict:
+    import json
+
+    return json.loads((SDD_EXPORT_FIXTURES / name).read_bytes().decode("utf-8"))
+
+
+def files_for_draft(draft: dict) -> dict[str, str]:
+    """Stand-in files for every evidence path and spec a nutrients draft names (the lineage excepted)."""
+    files: dict[str, str] = {}
+
+    def visit(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == "evidence":
+                    for entry in item:
+                        if entry != "maintainer" and not entry.startswith("commit:") and entry != ".sdd-rebuild/lineage.json":
+                            files[entry] = "# stand-in\n"
+                elif key == "spec" and isinstance(item, str):
+                    files[item] = "# Feature Specification\n"
+                else:
+                    visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(draft)
+    return files
+
+
+def place_export(sdd_export_module, root: Path, nutrients: dict | bytes, readme: bool = True) -> None:
+    """Put nutrients into root/.sdd-export/ the way sdd-export's write leaves them (README and .gitattributes too)."""
+    import json
+
+    data = json.loads(nutrients.decode("utf-8")) if isinstance(nutrients, bytes) else nutrients
+    raw = nutrients if isinstance(nutrients, bytes) else sdd_export_module.serialize(data, "nutrients")
+    folder = root / ".sdd-export"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "nutrients.json").write_bytes(raw)
+    if readme:
+        (folder / "README.md").write_bytes(sdd_export_module.render_readme(data))
+    (folder / ".gitattributes").write_bytes(sdd_export_module.GITATTRIBUTES.encode("utf-8"))
+
+
+def export_with_006(sdd_export_module, root: Path, draft: dict) -> ExportResult:
+    """Write a draft into root/.sdd-export/ with sdd-export's real write (check first for the state)."""
+    import json
+
+    state = run_export(sdd_export_module, root, "check").out["state"]
+    result = run_export(sdd_export_module, root, "write", "--expect", state, stdin=json.dumps(draft, ensure_ascii=False))
+    assert result.code == 0, (result.out, result.err)
+    return result
+
+
+def make_rebuild_old(
+    sdd_export_module,
+    parent: Path,
+    draft: dict | None,
+    *,
+    name: str = "old-tool",
+    lineage: dict | bytes | None = None,
+    keep_lineage: bool = True,
+    git: bool = False,
+    extra: dict[str, str | bytes] | None = None,
+) -> Path:
+    """A fake old project; with a draft, its nutrients are written by sdd-export's real write.
+
+    lineage is the old project's .sdd-rebuild/lineage.json (needed for a draft of generation 2 or more);
+    keep_lineage=False removes it after the export, as if someone deleted it.
+    """
+    files: dict[str, str | bytes] = {"README.md": "# old\n"}
+    if draft is not None:
+        files.update(files_for_draft(draft))
+    if lineage is not None:
+        import json
+
+        files[".sdd-rebuild/lineage.json"] = (
+            lineage if isinstance(lineage, bytes) else sdd_export_module.serialize(lineage, "lineage")
+        )
+    files.update(extra or {})
+    root = make_old_project(parent, name, git=git, files=files)
+    if draft is not None:
+        export_with_006(sdd_export_module, root, draft)
+    if lineage is not None and not keep_lineage:
+        (root / ".sdd-rebuild" / "lineage.json").unlink()
+        (root / ".sdd-rebuild").rmdir()
+    return root
+
+
+def make_rebuild_new(
+    parent: Path,
+    name: str = "new-tool",
+    *,
+    git: bool = True,
+    constitution: str | None = None,
+    specs: dict[str, str] | None = None,
+    **speckit_options,
+) -> Path:
+    """A fake new project with Spec Kit set up (the files sdd-grill's speckit_state requires)."""
+    root = parent / name
+    root.mkdir(parents=True)
+    write_fake_speckit(root, constitution=constitution, specs=specs, **speckit_options)
+    if git:
+        git_run(root, "init", "--quiet")
+        git_run(root, "config", "user.name", "test")
+        git_run(root, "config", "user.email", "test@example.invalid")
+    return root
+
+
+def simulate_specify(root: Path, short_name: str, content: str | None = None) -> str:
+    """What speckit-specify leaves behind: specs/<next number>-<short name>/spec.md and .specify/feature.json."""
+    import json
+    import re
+
+    numbers = [int(m.group(1)) for p in (root / "specs").glob("*") if (m := re.match(r"^(\d{3,})-", p.name))] \
+        if (root / "specs").is_dir() else []
+    folder = f"specs/{(max(numbers) + 1 if numbers else 1):03d}-{short_name}"
+    write_tree(root, {f"{folder}/spec.md": content or f"# Feature Specification: {short_name}\n"})
+    (root / ".specify" / "feature.json").write_bytes(
+        (json.dumps({"feature_directory": folder}, indent=2) + "\n").encode("utf-8"))
+    return folder
+
+
+def simulate_constitution(root: Path, content: str | None = None) -> None:
+    """What speckit-constitution leaves behind: a filled-in constitution."""
+    write_tree(root, {".specify/memory/constitution.md": content or WRITTEN_CONSTITUTION})
+
+
+class RebuildResult:
+    def __init__(self, code: int, stdout: bytes, stderr: bytes):
+        import json
+
+        self.code = code
+        self.raw = stdout
+        self.err = stderr.decode("utf-8")
+        self.out = json.loads(stdout.decode("utf-8")) if stdout.strip() else None
+
+
+def run_rebuild(module, root: Path, *argv: str, stdin: str | bytes | dict | None = None) -> RebuildResult:
+    """Call sdd_rebuild.main the way `uv run sdd_rebuild.py <argv>` would, with root as the new project."""
+    import io
+    import json
+
+    if isinstance(stdin, dict):
+        stdin = json.dumps(stdin, ensure_ascii=False)
+    if isinstance(stdin, str):
+        stdin = stdin.encode("utf-8")
+    out, err = io.BytesIO(), io.BytesIO()
+    code = module.main(list(argv), root=root, stdin=io.BytesIO(stdin or b""), stdout=out, stderr=err)
+    return RebuildResult(code, out.getvalue(), err.getvalue())
+
+
+def run_rebuild_real(root: Path, env: dict[str, str], *argv: str, stdin: str | None = None, script: Path | None = None):
+    """Run the real script through uv in root."""
+    import subprocess
+
+    return subprocess.run(
+        ["uv", "run", str(script or SDD_REBUILD_PY), *argv],
+        cwd=root,
+        env=env,
+        input=(stdin or "").encode("utf-8"),
+        capture_output=True,
+    )
+
+
+def target_item(item: dict, section: str) -> dict:
+    """The target entry that keeps a source item as it is (basis "inherit", content null)."""
+    if section == "principles":
+        return {"id": item["id"], "basis": "inherit", "from": [], "title": None, "text": None}
+    if section == "lessons":
+        return {"id": item["id"], "basis": "inherit", "from": [], "kind": None, "title": None, "text": None}
+    if section == "requirements":
+        return {"id": item["id"], "basis": "inherit", "from": [], "kind": None, "text": None}
+    return {
+        "id": item["id"], "basis": "inherit", "from": [], "title": None, "summary": None,
+        "depends_on": list(item["depends_on"]), "existing_spec": None, "spec_dir": None, "reviewed": False,
+        "requirements": [target_item(entry, "requirements") for entry in item["requirements"]],
+    }
+
+
+def keep_all_progress(old_project: Path | str, nutrients: dict, old_lineage: str, **overrides) -> dict:
+    """A progress (phase deciding, stage items) that keeps every item of the nutrients as it is."""
+    progress = {
+        "schema": 1,
+        "tool": "sdd-rebuild",
+        "old_project": str(old_project),
+        "language": "zh-TW",
+        "phase": "deciding",
+        "stage": "items",
+        "old_lineage": old_lineage,
+        "constitution": {"action": "create", "governance": []},
+        "target": {
+            "principles": [target_item(p, "principles") for p in nutrients["principles"]],
+            "features": [target_item(f, "features") for f in nutrients["features"]],
+            "lessons": [target_item(l, "lessons") for l in nutrients["lessons"]],
+        },
+        "discards": [],
+        "pending_decided": [r["id"] for f in nutrients["features"] for r in f["requirements"] if r["status"] == "pending"]
+        + [i["id"] for s in ("principles", "lessons") for i in nutrients[s] if i["status"] == "pending"],
+        "adjustments": [],
+        "deferred": [],
+        "for_plan": [],
+        "generation": {"constitution": "pending"},
+    }
+    progress.update(overrides)
+    return progress
