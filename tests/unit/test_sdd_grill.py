@@ -1540,3 +1540,28 @@ def test_real_run_writes_utf8_lf_json(grill_project, tmp_path):
     assert json.loads(checked.stdout.decode("utf-8"))["saved"]["requirement"] == "記帳工具，要簡單"
     assert "記帳工具".encode("utf-8") in checked.stdout
     assert usage.returncode == 1 and b"usage" in usage.stderr
+
+
+# ------------- a field name that looks like a secret is reported at the object that holds it
+
+# A made-up token in the shape of a GitHub token; no real credential.
+FAKE_TOKEN = "ghp_" + "Zq6FakeGrill" * 2
+
+
+@pytest.mark.parametrize("name", [FAKE_TOKEN, f"{FAKE_TOKEN}.x", f"x.{FAKE_TOKEN}.y",
+                                  f"https://u:{FAKE_TOKEN}@h.example.com"])
+@pytest.mark.parametrize("where", ["(top level)", "features[0]", "features[0].decisions[0]"])
+def test_save_does_not_repeat_a_secret_field_name(sdd_grill, grill_project, name, where):
+    root = grill_project()
+    progress = minimal_progress(features=[feature("a", status="discussing")], stage="feature", current_feature="a")
+    holder = {"(top level)": progress, "features[0]": progress["features"][0],
+              "features[0].decisions[0]": progress["features"][0]["decisions"][0]}[where]
+    holder[name] = "x"
+    result = save(sdd_grill, root, progress)
+
+    assert result.code == 1
+    assert result.out["error"] == (
+        f"progress at {where} looks like a secret; describe what is needed instead of recording the value"
+    )
+    assert FAKE_TOKEN not in result.err and FAKE_TOKEN not in result.raw.decode("utf-8")
+    assert not (root / PROGRESS).exists()

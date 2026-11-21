@@ -286,10 +286,13 @@ CONFLICT = ".specify/sdd-grill/ holds files sdd-grill did not create; nothing wa
 
 
 class Invalid(Exception):
-    def __init__(self, path: str, reason: str):
+    """holder: the path of the object, set when path ends in a field name taken from the input itself."""
+
+    def __init__(self, path: str, reason: str, holder: str | None = None):
         super().__init__(INVALID.format(path, reason))
         self.path = path
         self.reason = reason
+        self.holder = holder
 
 
 def _join(path: str, key) -> str:
@@ -304,7 +307,7 @@ def _object(value, path: str, fields: tuple[str, ...], optional: tuple[str, ...]
         raise Invalid(path or "(top level)", "must be an object")
     for key in value:
         if key not in fields and key not in optional:
-            raise Invalid(_join(path, key), "is not a known field")
+            raise Invalid(_join(path, key), "is not a known field", holder=path or "(top level)")
     for key in fields:
         if key not in value:
             raise Invalid(_join(path, key), "is missing")
@@ -587,6 +590,10 @@ def command_save(io: "Io") -> int:
     try:
         progress = validate_progress(data, root)
     except Invalid as error:
+        if looks_like_secret(str(error)):
+            # A field name that looks like a secret: name the object that holds it, never the name itself.
+            where = error.holder if error.holder is not None else error.path
+            return io.fail(SECRET.format("(not shown)" if looks_like_secret(where) else where))
         return io.fail(str(error))
 
     previous_state, previous = load_progress(root)

@@ -43,7 +43,7 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 | 1 | `usage` | 全部 | 用法錯誤 |
 | 1 | `old-mismatch` | `check` | `--old` 與進度的 `old_project` 不同 |
 | 1 | `invalid` | `save`、`preview` | 進度不符合結構，或 `preview` 的檢查不通過（`errors` 列出；含組好的世代紀錄有機密樣式時的 `secret`） |
-| 1 | `secret` | `save` | 字串符合機密樣式（只指出欄位路徑；欄位名稱符合時指出所在物件的路徑） |
+| 1 | `secret` | `save` | 字串符合機密樣式（只指出欄位路徑；欄位名稱符合時指出所在物件的路徑，最上層為 `(top level)`；名稱含句點時也一樣，路徑不由名稱切割而來） |
 | 1 | `frozen` | `save` | 已確認的內容被修改，或已產生文件後要改回 `deciding` |
 | 1 | `finished` | `save` | 世代紀錄已寫入，只能 `focus`、`clear` |
 | 1 | `source` | `save` | 建立或更新快照時舊專案的養分無法使用（`export_dir` 不是 `ours`，含養分有機密樣式時） |

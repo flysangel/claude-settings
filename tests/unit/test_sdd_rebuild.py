@@ -2878,3 +2878,20 @@ def test_lineage_reports_where_the_new_lineage_holds_a_secret(sdd_rebuild, tmp_p
     assert ("secret", "lessons[0].text") in [(e["check"], e["path"]) for e in result.out["rebuild_errors"]]
     assert not shows(result) and tree_snapshot(new) == before
 
+
+# ------------- (F2) a field name that looks like a secret is reported at the object that holds it
+
+
+@pytest.mark.parametrize("name", [f"{FAKE_TOKEN}.x", f"x.{FAKE_TOKEN}.y", f"https://u:{FAKE_TOKEN}@h.example.com",
+                                  FAKE_TOKEN])
+@pytest.mark.parametrize("where", ["target", "(top level)", "target.features[0]"])
+def test_save_reports_a_secret_field_name_at_its_object(sdd_rebuild, tmp_path, sdd_export, name, where):
+    old, new, progress = started(sdd_rebuild, tmp_path, sdd_export)
+    before = tree_snapshot(new)
+    holder = {"target": progress["target"], "(top level)": progress,
+              "target.features[0]": progress["target"]["features"][0]}[where]
+    holder[name] = "x"
+    result = save(sdd_rebuild, new, progress)
+
+    assert (result.code, result.out["reason"], result.out["path"]) == (1, "secret", where)
+    assert not shows(result) and tree_snapshot(new) == before

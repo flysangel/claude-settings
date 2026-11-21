@@ -603,9 +603,12 @@ SOURCE_FIELDS = ("nutrients", "nutrients_sha256", "lineage_state", "lineage", "l
 
 
 class Invalid(Exception):
-    def __init__(self, path: str, message: str):
+    """holder: the path of the object, set when path ends in a field name taken from the input itself."""
+
+    def __init__(self, path: str, message: str, holder: str | None = None):
         super().__init__(f"the progress is invalid at {path}: {message}")
         self.path = path
+        self.holder = holder
 
 
 def _join(path: str, key) -> str:
@@ -622,7 +625,7 @@ def _object(value, path: str, fields: tuple, optional: tuple = ()) -> dict:
             raise Invalid(_join(path, key), "is missing")
     for key in value:
         if key not in fields and key not in optional:
-            raise Invalid(_join(path, key), "is not a field of the progress; remove it")
+            raise Invalid(_join(path, key), "is not a field of the progress; remove it", holder=path or "(top level)")
     return {key: value[key] for key in fields}
 
 
@@ -1235,8 +1238,11 @@ def command_save(io: Io, options: dict) -> int:
         progress = validate_progress(read_stdin_json(io))
     except Invalid as error:
         if E().looks_like_secret(str(error)):
-            # A field name that looks like a secret: name where it is, not the name itself.
-            where = error.path.rpartition(".")[0] or "(top level)"
+            # A field name that looks like a secret: name the object that holds it, never the name itself (a name
+            # may hold dots, so it is not cut off the path).
+            where = error.holder if error.holder is not None else error.path
+            if E().looks_like_secret(where):
+                where = "(not shown)"
             return io.fail(SECRET.format(where), "secret", path=where)
         return io.fail(str(error), "invalid", path=error.path)
     secret = G().find_secret(progress)
