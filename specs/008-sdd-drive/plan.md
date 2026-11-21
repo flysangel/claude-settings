@@ -76,7 +76,7 @@ SKILL.md 的結構與內容檢查比照 `tests/unit/test_sdd_rebuild_skill.py`�
 ```text
 specs/008-sdd-drive/
 ├── plan.md              # 本文件
-├── research.md          # 實測紀錄 E1–E8、決策 D1–D16、經驗的處理 O1–O8、設計取捨 T1–T8
+├── research.md          # 實測紀錄 E1–E12、決策 D1–D22、經驗的處理 O1–O8、設計取捨 T1–T15
 ├── data-model.md        # 本 skill 的檔案、紀錄、spec 狀態、下一步、受保護檔案、子 session 的回報
 ├── quickstart.md        # 自動測試與人工驗收
 ├── contracts/
@@ -155,7 +155,7 @@ README.md                        # repo 的說明：更新「目前狀態」並�
 
 ## 設計取捨（核可時請特別注意）
 
-詳見 [research.md](./research.md)「設計取捨」T1–T8。最需要決定的是：
+詳見 [research.md](./research.md)「設計取捨」T1–T15（T1–T13 已於 2026-11-21 核可，T5 改為納入）。重點：
 
 1. **T1 每個階段一個子 session**（而不是 spec 字面上的「一個子 session 依序處理」）：為了逐階段選模型、不採信子 session、便宜的接續。
 2. **T3 子 session 允許所有 Bash 指令**（只禁止 `git push`，並以 `acceptEdits`、`--permission-prompts none` 執行）。
