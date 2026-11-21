@@ -76,7 +76,7 @@ claude -p "Reply OK" --model haiku --output-format json --max-budget-usd 0.0001 
 
 - 結果物件一律在 stdout，與結束碼一起足以分辨：正常結束（`is_error: false`）、API 錯誤（`terminal_reason: "api_error"` 與 HTTP 狀態碼
   `api_error_status`）、其他非正常結束（`subtype` 以 `error_` 開頭或 `terminal_reason` 不是 `completed`）。
-- **用量上限無法在實測中觸發**（需要真的用完額度）。依 E3 的欄位，用量上限屬於 API 錯誤，預期 `terminal_reason: "api_error"` 且
+- **用量上限無法在實測中觸發**（需要真的用完額度；重置時間的取得見 E9、E10，2026-11-21 補查）。依 E3 的欄位，用量上限屬於 API 錯誤，預期 `terminal_reason: "api_error"` 且
   `api_error_status: 429`；`result` 的文字會提到 limit 與重設時間。這一點列為人工驗收項目，判讀規則的設計見決策 D4：
   即使判讀錯誤，也只會落在「中斷」而不是「失敗」，FR-021 的行為不變。
 - stdout 沒有可解析的結果物件（程序被終止、當機、Bash 工具逾時）視為「沒有回報就結束」。
@@ -114,6 +114,56 @@ echo "Report status completed with summary 'nothing to do'." | claude -p --model
 提示可以從 stdin 傳入（不受 Windows 命令列長度限制、不必處理引號）。另一個觀察：`--disallowedTools`、`--allowedTools` 是可變長度參數，
 第一次把提示放在它們後面時被當成工具名稱吃掉，`claude` 回報 `Input must be provided either through stdin or as a prompt argument`；
 因此提示一律走 stdin，參數順序由腳本固定。
+
+### E9. 用量上限的結構化資訊與重置時間（2026-11-21 為 FR-021 修訂補查）
+
+標示：**實測**＝在本機實際執行觀察到；**程式內容**＝以 `strings` 讀取已安裝的 `claude` 2.1.319 執行檔（`~/.local/share/claude/versions/2.1.319`）
+中的程式文字，是這個版本實際會執行的邏輯，但不是公開文件、可能隨版本改變；**推測**＝由前兩者推論、未能直接觀察。
+公開文件與 `claude --help` 都沒有提到重置時間的欄位（**實測**：help 中沒有相關選項）。
+
+1. **實測**：`echo "Reply OK" | claude -p --model haiku --output-format stream-json --verbose --no-session-persistence` 的輸出中有一行
+   `type: "rate_limit_event"`：
+
+   ```json
+   {"rate_limit_info": {"status": "allowed", "resetsAt": 1795264800, "rateLimitType": "five_hour",
+     "overageStatus": "rejected", "overageDisabledReason": "org_level_disabled_until", "isUsingOverage": false,
+     "unifiedWindows": {"five_hour": {"utilization": 0.6, "resetsAt": 1795264800, "status": "allowed"},
+                        "seven_day": {"utilization": 0.41, "resetsAt": 1795741200, "status": "allowed"}}}}
+   ```
+
+   `resetsAt` 是 Unix 時間（秒），每個時間窗各有 `status` 與 `resetsAt`。`--output-format json`（單一結果物件）沒有這個資訊；最後一行仍是與 E2 相同的 `result` 物件。
+2. **程式內容**：請求被用量上限拒絕時，該則 assistant 訊息帶 `api_error: "usage_limit_reached"` 與
+   `api_error_params.rate_limit_info`，說明為「what the refused request's own response said about the limit, in the shape rate_limit_event carries
+   … its status, limit and reset are the text's: status is rejected」。資訊來自 API 回應標頭 `anthropic-ratelimit-unified-status`、
+   `anthropic-ratelimit-unified-reset`、`anthropic-ratelimit-unified-overage-status` 等。`rateLimitType` 的值有 `five_hour`、`seven_day`、
+   `seven_day_opus`、`seven_day_sonnet`、`seven_day_overage_included`、`overage`；另有 `dailyCapPaused`、`overageResetsAt`。
+3. **程式內容**：訊息文字由這些欄位組成，例如 `You've hit your ${名稱}`、`You've hit your monthly spend limit · raise it at …`，
+   有時間窗資訊時再接 ` · your ${limitName} resets ${resetTime}`；`resetTime` 是只有時刻與時區名稱的可讀文字（例如 `3:10pm (Asia/Taipei)`），
+   沒有日期。維護者看過的訊息 `You've hit your monthly spend limit · raise it at … · your 5-hour limit resets 3:10pm (Asia/Taipei)`
+   就是「額外用量（overage）被拒絕＋5 小時時間窗用完」的組合：時間窗重置後就回到方案內的額度，不再需要額外用量。
+4. **推測**：無頭的 `claude -p` 被用量上限拒絕時，stream-json 會有 `status: "rejected"` 的 `rate_limit_event`，以及帶
+   `api_error_params.rate_limit_info` 的 assistant 訊息（第 2 點的程式文字明說兩者形狀相同）；最後的 `result` 為 `is_error: true`、
+   `api_error_status: 429`。無法在不耗盡額度的情況下實測，列為人工驗收。
+5. **程式內容**：互動式的 Claude Code 內建「Continue automatically at usage limit」（設定 `autoContinueAtUsageLimit`，預設 `true`）：
+   主 session 自己被用量上限擋下時，於重置後自動送出「You can continue now. Continue the task you were working on when the usage limit was reached;
+   do not repeat work that is already complete.」繼續原本的工作。條件包括：以 claude.ai 帳號登入、計費方式不是 `usage_based`、遠端功能開關未關閉、
+   重置時間在 24 小時內（否則顯示 `the usage limit now resets more than 24 hours out, so this task will not resume on its own`）、
+   連續自動繼續有次數上限（更新紀錄：修正了「continuing more than three times without a prompt from you」）；Claude Code 在等待期間結束或重新啟動時
+   不會繼續（`Claude Code exited during the wait, so the task will not resume on its own`）。這是主 session 的機制，不作用在 `claude -p` 子 session。
+6. **程式內容**：`CronCreate` 這類排程工具的說明寫明「Jobs live only in this Claude session — nothing is written to disk」「Jobs only fire while the REPL is idle」；
+   本 session（Orca 內的 Claude Code）可見，但在一般的 Claude Code 是否預設提供未查證。`ScheduleWakeup` 只在 `/loop` 的動態模式可用。
+   Bash 工具的背景執行上限 7200000 ms（2 小時），`Monitor` 上限 1 小時（**實測**：本 session 的工具定義）。
+
+### E10. 由 E9 推得的判斷：「等到重置就能繼續」或「等也沒用」
+
+- 有用的資訊只有結構化的 `rate_limit_info`；訊息文字沒有日期與可靠的格式，**不解析文字**。
+- 等待有用：`status` 為 `rejected`，且被拒絕的原因是時間窗：`unifiedWindows` 中 `status: "rejected"` 的時間窗至少一個、每一個都有 `resetsAt`
+  → 重置時間取它們的最大值；沒有 `unifiedWindows` 時，`rateLimitType` 屬於 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet`
+  且有 `resetsAt` → 取 `resetsAt`。
+- 等也沒用（停止）：`rateLimitType` 為 `overage`、`seven_day_overage_included` 或沒有；`dailyCapPaused: true`；被拒絕的時間窗缺 `resetsAt`；
+  沒有任何 `rate_limit_info`（只有文字或只有 429）；欄位不合格式；重置時間早於子 session 開始的時間（資訊自相矛盾）。
+  也就是說，判斷不出來一律歸為「等也沒用」。
+- 維護者的例子（花費上限＋5 小時時間窗）：被拒絕的時間窗是 `five_hour`、有 `resetsAt` → 等待有用；花費上限本身沒有重置時間，但時間窗重置後就不需要它。
 
 ## 決策
 
