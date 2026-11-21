@@ -37,6 +37,23 @@ def deploy():
     return _load_deploy()
 
 
+def on_this_platform(names):
+    """Drop the folder names Windows cannot create (it forbids < > : " / \\ | ? * in a name)."""
+    if os.name != "nt":
+        return list(names)
+    return [name for name in names if not set(name) & set('<>:"/\\|?*')]
+
+
+def folder_sets_for_this_platform(sets):
+    """The same sets with the impossible names removed, without the duplicates that leaves behind."""
+    result = []
+    for names in sets:
+        usable = on_this_platform(names)
+        if usable not in result:
+            result.append(usable)
+    return result
+
+
 def write_tree(root: Path, files: dict[str, str | bytes]) -> None:
     for rel, content in files.items():
         path = root / rel

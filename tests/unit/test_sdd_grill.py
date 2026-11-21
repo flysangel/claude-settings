@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from conftest import (
+    folder_sets_for_this_platform,
     CONSTITUTION_TEMPLATE,
     SDD_GRILL_PY,
     WRITTEN_CONSTITUTION,
@@ -1676,7 +1677,7 @@ def test_find_secret_reports_a_secret_field_name_at_its_holder(sdd_grill):
 # Spec folder names a project may hold. Some look like secrets by the patterns (sk- followed by 20 characters, a
 # made-up ghp_ token, "token=", "api-key:"); they are names of folders, not secrets the maintainer typed.
 SECRET_LOOKING_SK = "004-sk-learn-pipeline-integration"
-FOLDER_SETS = [
+FOLDER_SETS = folder_sets_for_this_platform([
     [],
     ["001-plain"],
     [SECRET_LOOKING_SK],
@@ -1684,7 +1685,7 @@ FOLDER_SETS = [
     ["001-資料匯出", "002-ghp_" + "Fk3Fold" * 3, "003-a b"],
     # The name alone does not look like a secret; "specs/006-password:/spec.md" does.
     ["006-password:"],
-]
+])
 
 
 def project_with_folders(grill_project, names: list[str]) -> Path:

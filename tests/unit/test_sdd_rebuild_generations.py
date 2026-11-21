@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from conftest import (
+    on_this_platform,
     SDD_EXPORT_FIXTURES,
     SDD_REBUILD_FIXTURES,
     export_fixture,
@@ -761,7 +762,7 @@ def test_generations_1_to_3_with_spec_folders_named_like_secret_patterns(sdd_reb
     assert (gen2 / "specs/000-sk-learn-pipeline-integration/spec.md").is_file()
     export_with_006(sdd_export, gen2, draft_from_lineage(lineage2, "my-tool"))
     gen3, lineage3 = rebuild(sdd_rebuild, sdd_export, gen2, tmp_path, "gen3", decide_gen3,
-                             specs={"000-token=refresh": "# 既有的 spec\n", "000-api-key:rotation": "# 既有的 spec\n"},
+                             specs={name: "# 既有的 spec\n" for name in on_this_platform(["000-token=refresh", "000-api-key:rotation"])},
                              pattern_named="deploy")
     assert lineage3["generation"] == 3
     spec_dirs = [f["spec_dir"] for f in lineage3["features"]]

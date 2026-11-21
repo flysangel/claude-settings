@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from conftest import (
+    folder_sets_for_this_platform,
     REPO_ROOT,
     SDD_REBUILD_PY,
     WRITTEN_CONSTITUTION,
@@ -2967,13 +2968,13 @@ def test_a_secret_field_name_is_judged_by_the_name_itself(sdd_rebuild, tmp_path,
 # Spec folder names a new project may already hold. Some look like secrets by the patterns (sk- followed by 20
 # characters, a made-up ghp_ token, "token=", "api-key:"); they are names of folders, not secrets anyone typed.
 SECRET_LOOKING_SK = "004-sk-learn-pipeline-integration"
-FOLDER_SETS = [
+FOLDER_SETS = folder_sets_for_this_platform([
     [],
     ["001-plain"],
     [SECRET_LOOKING_SK],
     ["004-token=refresh", "005-api-key:rotation"],
     ["001-資料匯出", "002-ghp_" + "Fk3Fold" * 3, "003-a b", "006-password:"],
-]
+])
 
 
 def present(module, new: Path) -> dict:
