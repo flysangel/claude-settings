@@ -21,7 +21,8 @@ uv run --with pytest pytest
 自動接續後再次中斷時停止、`cancel`、等待期間工作區改變時不接續、`finalize` 把消失的 driver 記為 `lost`、失敗次數不變、手動啟動後計數重設、
 等待期間第二個 `run` 得到 `running`。對照檢查的部分：假的 `claude` 分別讓 `tasks.md` 不變、附加合格的 Convergence 段落並 commit、說 converged 卻附加、
 說找到卻沒附加、改寫或勾選既有任務、改動程式碼或 plan.md、附加後不 commit，驗證 `converged`、`gaps-found`（含 `findings` 與 `report-mismatch`）與各個 `verify-failed`；
-並驗證 converged 後立即判定完成、不重複檢查，`tasks.md` 或 HEAD 改變後先重新測試再檢查，找到漏做後下一步回到 `implement`。另以「終止啟動 driver 的行程樹」（Linux：`killpg` 加 `kill`；Windows：`taskkill /T /F`）驗證 driver 仍存活並完成（兩個平台的 CI）。
+並驗證 converged 後立即判定完成、不重複檢查；既有的基準（第一次寫入時已全部勾選且沒有 `implement` 嘗試）只測試、不檢查，加了新任務並經本 skill 補做後改為需要檢查，
+`clear` 之後沒有基準；`tasks.md` 或 HEAD 改變後先重新測試再檢查，找到漏做後下一步回到 `implement`。另以「終止啟動 driver 的行程樹」（Linux：`killpg` 加 `kill`；Windows：`taskkill /T /F`）驗證 driver 仍存活並完成（兩個平台的 CI）。
 
 ## 人工驗收（真實的子 session；在暫存目錄的假專案進行，不在本 repo）
 
@@ -35,6 +36,7 @@ uv run --with pytest pytest
 | 2 | 檢查 1 的結果 | 分支 `001-hello`、`002-bye` 存在且後者疊在前者之上；每份都有 plan、tasks（全部勾選）與實作的 commit；遠端沒有變化；不是每個子 session 都用同一個最強的模型 | D11、SC-008 |
 | 3 | 再輸入一次 `/sdd-drive` | 回報沒有待處理的 spec，不開子 session | US4-4 |
 | 4 | 新增 `003-x`，其 spec 要求一個不可能的條件（例如與 constitution 矛盾），`/sdd-drive` | 003 的 plan 以 `requirements` 失敗；回報 spec、步驟、原因；spec.md 與 constitution 未被修改 | US3、FR-016 |
+| 4a | 在一個已有兩份完成的 spec（任務全部勾選、測試通過）但從未執行過 sdd-drive 的專案輸入 `/sdd-drive` | 宣告這兩份是既有的基準；執行一次測試後判定完成，沒有開 check 子 session；接著處理下一份 | FR-025 |
 | 4b | 新增 `003-w`：spec 有兩條需求，實作 1 的子 session 完成後，在它的 commit 之上手動刪除第二條需求的實作與對應測試、保持任務全部勾選與測試通過，再 `/sdd-drive` | 測試通過後對照檢查找到漏做：流程停止，回報逐項列出附加的任務（含 `FR-002` 這類來源與 `missing`），tasks.md 末尾多了 Convergence 段落且已 commit，程式碼未被修改；再次 `/sdd-drive` 依序補做、測試、再檢查，通過後才判定完成 | US2-4–6、FR-023、FR-024 |
 | 5 | 新增 `003-y` 與 `004-z`，在 003 的 implement 執行中於主 session 按 Esc 並結束 Claude Code；重新開啟後 `/sdd-drive` | 第一次回報「流程中斷」與依檔案的進度、不計入失敗；第二次 `/sdd-drive` 接續 003 的 implement（不重做 plan、tasks、已勾選的任務），完成後才開始 004 | US3-3、US4、SC-004、T7 |
 | 6 | 在 5 的子 session 執行中，從另一個終端機在同一專案啟動 Claude Code 並輸入 `/sdd-drive` | 回報已有執行中的流程，不開第二個子 session | FR-012 |
