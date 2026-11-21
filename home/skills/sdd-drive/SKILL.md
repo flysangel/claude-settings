@@ -75,7 +75,7 @@ Order: run `status`, handle it with the table below, announce, then go to Stage 
 | `reason: no-specs` | Say there is no spec yet: create specs with `/sdd-grill` or `/sdd-rebuild` first. Stop. |
 | `reason: claude-missing` | Say the `claude` command was not found, so no child session can start. Do not do the work yourself. Stop. |
 | `reason: conflict` | Say `.specify/sdd-drive/` holds files this skill did not create and ask the maintainer to check them. Do not delete anything. Stop. |
-| `reason: state-unreadable` | Name the field path from `detail` (never a value). Explain that the records hold the failure counts, the test and check records, and which specs are the existing baseline. Offer `clear` once the maintainer agrees, and explain that after clearing no spec is a baseline any more, so every finished spec is tested and checked once again. Until they agree, stop. Never suggest deleting `.specify/sdd-drive/` by hand. |
+| `reason: state-unreadable` | Name the field path from `detail` (never a value). Explain that the records hold the failure counts, the test and check records, and which specs are the existing baseline. Offer `clear` once the maintainer agrees, and explain that after clearing no spec is a baseline any more, so every finished spec is tested and checked once again. Until they agree, stop. When they agree, run `clear` (not in the background): on `cleared: true` go back to the start of Stage 1; on any `reason`, report it and stop. Never suggest deleting `.specify/sdd-drive/` by hand. |
 | `running: true` with `driver.phase` `running` or `resuming` | Report that a run is already in progress: its spec and phase (`running_attempt`), when it started, and whether it is an automatic resume. Do not start a second child session and do not `finalize`. Run `watch` in the background to take over (Stage 3B). |
 | `running: true` with `driver.phase: waiting` | Report per rule 13 that the driver is waiting for the usage limit to reset: which spec and phase, the kind of limit, when it will resume automatically (`driver.waiting_until`), and the current progress. Say the maintainer can simply ask to cancel the automatic resume. Run `watch` in the background (Stage 3B). |
 | `running: true` with only a launch in progress (`driver` is null) | Run `watch` in the background (Stage 3B). |
@@ -123,10 +123,10 @@ The output of `watch` (Stage 3B) has the same form and is handled with this tabl
 | last `outcome: usage-limit`, `auto_resume: skipped-changed` | Report that the working tree changed while waiting, so the driver did not resume, to keep those changes out of the child's commits. List the paths from `status`'s `dirty`. Ask the maintainer to handle them, then type `/sdd-drive` again. Stop. |
 | an attempt has `auto: true` and the last `outcome` is `succeeded` | Report that the driver resumed automatically after the reset and finished the phase (time, model). Go back to the start of Stage 3 or Stage 4 (run `status` first). |
 | an attempt has `auto: true` and the last `outcome` is something else | Handle it with the row of that outcome, and say in the report that it is the result of the automatic resume. |
-| `outcome: api-error` | Report the API error and `detail.text` (for example not logged in, or the model is unavailable). It is not counted as a failure and progress is kept. Do not do the work yourself and do not retry automatically. Stop; say the next `/sdd-drive` resumes after it is handled. |
-| `outcome: interrupted` | Report that the child ended without a report (`detail.code`) and the progress from `state_after`; it is not counted as a failure. Stop; the next `/sdd-drive` resumes. |
+| `outcome: api-error` (and `resume_failed` is not `true`) | Report the API error and `detail.text` (for example not logged in, or the model is unavailable). It is not counted as a failure and progress is kept. Do not do the work yourself and do not retry automatically. Stop; say the next `/sdd-drive` resumes after it is handled. |
+| `outcome: interrupted` (and `resume_failed` is not `true`) | Report that the child ended without a report (`detail.code`) and the progress from `state_after`; it is not counted as a failure. Stop; the next `/sdd-drive` resumes. |
 | `outcome: launch-failed` | Report that the child session could not start and why (`detail.text`). Do not do the work yourself. Stop. |
-| `resume_failed: true` | Report that the original child session could not be resumed (for example its history is not on this machine). Run the same phase once with a fresh session: `run ... --resume --fresh`. The new session still continues from the unfinished part of the files. If that fails too, handle its `outcome`. |
+| `resume_failed: true` (whatever the `outcome`) | Report that the original child session could not be resumed (for example its history is not on this machine). Run the same phase once with a fresh session: `run ... --resume --fresh`. The new session still continues from the unfinished part of the files. If that fails too, handle its `outcome`. |
 | `permission_denials` is not empty | List the denied tools in the phase report; it does not change the other rows. |
 | `reason: secret` | Rewrite the reason without the secret and run once more. |
 | `reason: running` | Report that another run is in progress (another main session may have taken over). Stop, and do not `watch`, so two main sessions never drive at once. |
@@ -186,6 +186,6 @@ Only when the maintainer explicitly asks, run `cancel` (not in the background).
 
 | Result | Next step |
 |---|---|
-| `cancel_requested: true` | Say the driver stops within 30 seconds. Run `watch` in the background; when it shows `auto_resume: cancelled`, report with the matching Stage 3 row and stop. |
+| `cancel_requested: true` | Say the driver stops within 30 seconds. Run `watch` in the background (Stage 3B); when it shows `auto_resume: cancelled`, report with the matching Stage 3 row and stop. |
 | `reason: not-waiting` | From `status`, say there is no automatic resume waiting now (it may have started or finished already); continue with Stage 1. |
 | anything else | Rule 10. |

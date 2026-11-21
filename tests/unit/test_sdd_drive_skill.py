@@ -426,3 +426,24 @@ def test_script_and_work_description_have_no_absolute_paths_or_emails():
     templates = "".join(re.findall(r'(?s)BRIEF_[A-Z_]+ = (?:\{.*?\n\}|""".*?""")', script))
     assert "Project root: ." in templates
     assert not ABSOLUTE_PATH.search(templates) and not EMAIL.search(templates) and not CJK.search(templates)
+
+
+# ============================================== T057 walkthrough findings
+
+
+def test_resume_failed_takes_precedence_over_api_error_and_interrupted():
+    assert "`resume_failed` is not `true`" in row("Stage 3:", "outcome: api-error")
+    assert "`resume_failed` is not `true`" in row("Stage 3:", "outcome: interrupted")
+    assert "whatever the `outcome`" in row("Stage 3:", "resume_failed: true")
+
+
+def test_clear_after_state_unreadable_has_a_next_step():
+    line = row("Stage 1", "state-unreadable")
+    assert "run `clear`" in line and "go back to the start of Stage 1" in line and "report it and stop" in line
+
+
+def test_cross_references_point_at_existing_stages():
+    titles = [t.split(":")[0] for t in sections() if t.startswith("Stage")]
+    for reference in set(re.findall(r"Stage (\d+B?)", text())):
+        assert f"Stage {reference}" in titles, reference
+    assert "Stage 3B" in row("Stage 6", "cancel_requested: true")
