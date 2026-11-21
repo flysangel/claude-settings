@@ -39,21 +39,29 @@
 
 ### User Story 2 - 確認真的完成才往下 (Priority: P1)
 
-一份 spec 被視為完成，必須是它的任務全部做完而且測試通過，而不是子 session 自己宣稱完成。
+一份 spec 被視為完成，必須是它的任務全部做完、測試通過，而且對照 spec 的檢查沒有找到漏做的工作，
+而不是子 session 自己宣稱完成。
 
 **Why this priority**: 全自動沒有人工關卡，完成的判定就是唯一的品質閘門；判定不可靠，後面的 spec 會建立在壞掉的基礎上。
 
 **Independent Test**: 安排一份 spec 的實作留下未完成的任務或失敗的測試，
-確認它不被判定為完成，後續的 spec 沒有開始。
+確認它不被判定為完成，後續的 spec 沒有開始；另外安排一份任務全部勾選、測試也通過，但漏做了一條需求的實作，
+確認對照檢查找到後它不被判定為完成，流程停止並回報。
 
 **Acceptance Scenarios**:
 
 1. **Given** 一份 spec 的實作結束，**When** 判定是否完成，
-   **Then** 只有在任務全部完成且測試通過時才判定為完成。
+   **Then** 只有在任務全部完成、測試通過，且對照檢查沒有找到漏做的工作時才判定為完成。
 2. **Given** 一份 spec 還有未完成的任務或失敗的測試，**When** 判定，
    **Then** 不判定為完成，也不開始下一份。
 3. **Given** 某份 spec 的 plan 或 tasks 只是未填寫的範本，**When** 判定該步驟，
    **Then** 不視為已產生。
+4. **Given** 一份 spec 的任務全部完成且測試通過，**When** 進行對照檢查，
+   **Then** 由另一個子 session 透過 Spec Kit 對照 spec、plan 與 tasks 檢查實作有沒有漏做的工作。
+5. **Given** 對照檢查找到漏做的工作，**When** 判定，
+   **Then** 不判定為完成；流程停止並回報找到了什麼，不自動修正，也不開始下一份。
+6. **Given** 對照檢查因找到漏做而停止之後，**When** 維護者再次輸入 `/sdd-drive`，
+   **Then** 從補做那些工作開始，補完後重新通過測試與對照檢查才判定為完成。
 
 ---
 
@@ -123,7 +131,8 @@
 - **FR-004**: 每份 spec MUST 依序完成 plan、tasks、implement，且 MUST NOT 停下來等待維護者核可。
 - **FR-005**: plan 階段的技術選型 MUST 由 AI 依 constitution 決定。
 - **FR-006**: plan、tasks、implement MUST 透過 Spec Kit 進行；本 skill MUST NOT 手寫它們的產物。
-- **FR-007**: 一份 spec MUST 在任務全部完成且測試通過時才被判定為完成；未填寫的範本 MUST NOT 被視為已產生的 plan 或 tasks。
+- **FR-007**: 一份 spec MUST 在任務全部完成、測試通過，且對照檢查（FR-023）沒有找到漏做的工作時才被判定為完成；
+  未填寫的範本 MUST NOT 被視為已產生的 plan 或 tasks。
 - **FR-008**: 前一份 spec 判定為完成之前，MUST NOT 開始下一份。
 - **FR-009**: 任何步驟失敗時 MUST 停止整個流程，MUST NOT 跳過失敗的 spec 去處理後續的 spec。
 - **FR-010**: 流程結束或停止時，主 session MUST 回報每份 spec 的狀態；失敗時 MUST 說明 spec、步驟與原因。
@@ -145,6 +154,11 @@
   MUST 停止並回報，MUST NOT 再自動重試。
 - **FR-022**: 用量上限中斷之後接續時（自動接續，或維護者再次啟動），本 skill MUST 從中斷處接續，
   MUST NOT 重做該階段已完成的部分。
+- **FR-023**: 一份 spec 的任務全部完成且測試通過之後，本 skill MUST 以另一個子 session 透過 Spec Kit 對照 spec、plan 與 tasks
+  檢查實作有沒有漏做的工作；本 skill MUST NOT 自行手寫這項檢查。對照檢查找到漏做的工作時，MUST 視為該 spec 的失敗：
+  停止整個流程並回報找到的內容，MUST NOT 自動修正，MUST NOT 開始後續的 spec。
+- **FR-024**: 維護者在對照檢查停止之後再次啟動時，本 skill MUST 先補做檢查指出的工作，補完後 MUST 重新通過測試與對照檢查，
+  才判定該 spec 完成。任務或實作在上一次對照檢查之後有變動時，MUST 重新檢查，MUST NOT 沿用先前的結果。
 
 ### Key Entities
 
@@ -158,7 +172,7 @@
 ### Measurable Outcomes
 
 - **SC-001**: 從輸入指令到全部 spec 完成，維護者需要輸入的指令數為 1，需要回答的問題數為 0（沒有失敗時）。
-- **SC-002**: 被判定為完成的 spec 中，仍有未完成任務或失敗測試的數量為 0。
+- **SC-002**: 被判定為完成的 spec 中，仍有未完成任務、失敗測試，或未經對照檢查確認沒有漏做的數量為 0。
 - **SC-003**: 某份 spec 失敗後，編號在它之後的 spec 被開始處理的數量為 0。
 - **SC-004**: 中斷後接續時，已完成的 spec 被重做的數量為 0。
 - **SC-005**: 失敗時，維護者只讀主 session 的回報就知道是哪一份、哪個步驟與原因，不需要開啟子 session 的紀錄。
@@ -170,6 +184,8 @@
 
 ## Assumptions
 
+- 對照檢查使用 Spec Kit 的 `speckit-converge`；它找到漏做時如何表示（例如在 tasks.md 附加未勾選的任務）、
+  本 skill 如何據此判定，由 plan 決定。對照檢查的結果依子 session 的判斷，無法保證找出所有漏做的工作。
 - 哪些模型可用、各階段預設對應哪一級模型，以及如何指定，由 plan 決定；FR-019 只要求逐次評估，不規定固定的對應表。
 - 開子 session 的機制、主 session 如何得知子 session 的結果，由 plan 決定。
 - 全自動代表維護者不會在實作前看到 plan；想限制的技術決定應寫進專案的 constitution。這是維護者已知悉並接受的取捨。
