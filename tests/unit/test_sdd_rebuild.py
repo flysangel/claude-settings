@@ -833,7 +833,7 @@ def test_problem_format(sdd_rebuild):
 
 CHECK_KEYS = [
     "dependencies", "export_skill", "speckit", "missing", "constitution", "numbering", "specs", "rebuild_dir",
-    "rebuild_conflicts", "progress", "changed", "saved", "old", "export_dir", "nutrients_edited", "nutrients_errors",
+    "rebuild_conflicts", "rebuild_errors", "rebuilt_generation", "progress", "changed", "saved", "old", "export_dir", "nutrients_edited", "nutrients_errors",
     "conflicts", "nutrients", "pending", "old_lineage", "old_lineage_errors", "needs_old_lineage", "source_state",
     "source_changed", "source_diff", "next",
 ]
@@ -856,6 +856,7 @@ def test_check_first_generation(sdd_rebuild, tmp_path, sdd_export):
         "ok", [], "missing", "sequential", [])
     assert (out["rebuild_dir"], out["rebuild_conflicts"], out["progress"], out["changed"], out["saved"]) == (
         "none", [], "none", [], None)
+    assert (out["rebuild_errors"], out["rebuilt_generation"]) == ([], None)
     assert out["old"] == {"path": os.path.realpath(old), "state": "ok"}
     assert (out["export_dir"], out["nutrients_edited"], out["nutrients_errors"], out["conflicts"]) == ("ours", False, [], [])
     assert out["nutrients"] == nutrients_of(old)
@@ -1036,6 +1037,7 @@ def test_check_rebuild_dir_conflict(sdd_rebuild, tmp_path, sdd_export, case):
 
     assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuild-conflict", "conflict")
     assert result.out["rebuild_conflicts"]
+    assert (result.out["rebuild_errors"], result.out["rebuilt_generation"]) == ([], None)
 
 
 def export_fixture_bytes(name: str) -> bytes:
@@ -1049,6 +1051,9 @@ def test_check_rebuild_dir_invalid(sdd_rebuild, tmp_path, sdd_export, content):
     result = check(sdd_rebuild, new, gen1(tmp_path, sdd_export))
 
     assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuild-conflict", "invalid")
+    assert result.out["rebuild_conflicts"] == [] and result.out["rebuilt_generation"] is None
+    # Why the lineage cannot be used, as sdd-export reports it (a newer schema has no field errors).
+    assert result.out["rebuild_errors"] or content.endswith(b"9}")
 
 
 def test_check_empty_rebuild_dir_is_fine(sdd_rebuild, tmp_path, sdd_export):
@@ -1064,6 +1069,8 @@ def test_check_a_project_rebuilt_already(sdd_rebuild, tmp_path, sdd_export):
     result = check(sdd_rebuild, new, gen1(tmp_path, sdd_export))
 
     assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuilt", "ours")
+    # The generation comes from check, so that SKILL.md never has to open the lineage to say it.
+    assert (result.out["rebuilt_generation"], result.out["rebuild_errors"]) == (2, [])
 
 
 @pytest.mark.parametrize(
@@ -2834,3 +2841,40 @@ def test_a_claimed_spec_that_was_deleted_is_left_to_verify(sdd_rebuild, tmp_path
     result = run_rebuild(sdd_rebuild, new, "verify")
     assert (result.code, result.out["reason"]) == (1, "mismatch-documents")
     assert "spec-missing" in [f["check"] for f in result.out["failures"]]
+
+
+# ------------- (F1) the new project's lineage, edited by hand to hold a secret, never reaches the output
+
+
+def new_lineage_with_secret(new: Path, sdd_export, where: str = "lessons[0].text") -> None:
+    data = json.loads(export_fixture_bytes("lineage-gen2.json").decode("utf-8"))
+    if where == "lessons[0].text":
+        data["lessons"][0]["text"] += f" password={FAKE_TOKEN}"
+    else:
+        data["lessons"][0][f"https://u:{FAKE_TOKEN}@h.example.com"] = "x"
+    write_tree(new, {".sdd-rebuild/lineage.json": sdd_export.serialize(data, "lineage")})
+
+
+@pytest.mark.parametrize("where, path", [("lessons[0].text", "lessons[0].text"), ("name", "lessons[0]")])
+def test_check_reports_where_the_new_lineage_holds_a_secret(sdd_rebuild, tmp_path, sdd_export, where, path):
+    new = make_rebuild_new(tmp_path)
+    new_lineage_with_secret(new, sdd_export, where)
+    before = tree_snapshot(new)
+    result = check(sdd_rebuild, new, gen1(tmp_path, sdd_export))
+
+    assert (result.code, result.out["reason"], result.out["rebuild_dir"]) == (3, "rebuild-conflict", "invalid")
+    assert (result.out["rebuild_conflicts"], result.out["rebuilt_generation"]) == ([], None)
+    assert ("secret", path) in [(e["check"], e["path"]) for e in result.out["rebuild_errors"]]
+    assert not shows(result) and tree_snapshot(new) == before
+
+
+def test_lineage_reports_where_the_new_lineage_holds_a_secret(sdd_rebuild, tmp_path, sdd_export):
+    old, new, progress = ready(sdd_rebuild, tmp_path, sdd_export)
+    new_lineage_with_secret(new, sdd_export)
+    before = tree_snapshot(new)
+    result = run_rebuild(sdd_rebuild, new, "lineage")
+
+    assert (result.code, result.out["reason"], result.out["rebuild_conflicts"]) == (3, "rebuild-conflict", [])
+    assert ("secret", "lessons[0].text") in [(e["check"], e["path"]) for e in result.out["rebuild_errors"]]
+    assert not shows(result) and tree_snapshot(new) == before
+

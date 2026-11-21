@@ -961,28 +961,33 @@ def take_snapshot(root: Path, old_project: str) -> dict | None:
 # ------------------------------------------------------------ .sdd-rebuild/
 
 
-def rebuild_dir_state(root: Path) -> tuple[str, list[str]]:
-    """data-model "RebuildDir": none, empty, ours, conflict (with the paths) or invalid."""
+def rebuild_dir_state(root: Path) -> tuple[str, list[str], list[dict], int | None]:
+    """data-model "RebuildDir": none, empty, ours, conflict (with the paths) or invalid (with sdd-export's errors),
+    and the lineage's generation when it is ours.
+
+    The generation is all that is passed on of the lineage itself: SKILL.md never needs to open the file. The errors
+    hold only checks and field paths; a text that looks like a secret makes the lineage invalid (sdd-export's reading).
+    """
     folder = root / REBUILD_DIR
     if not folder.exists() and not folder.is_symlink():
-        return "none", []
+        return "none", [], [], None
     if folder.is_symlink() or not folder.is_dir():
-        return "conflict", [REBUILD_DIR]
+        return "conflict", [REBUILD_DIR], [], None
     entries = sorted(folder.iterdir(), key=lambda p: p.name)
     if not entries:
-        return "empty", []
+        return "empty", [], [], None
     strangers = [f"{REBUILD_DIR}/{e.name}" for e in entries
                  if e.name not in REBUILD_FILES or e.is_symlink() or not e.is_file()]
     if not strangers and not (folder / LINEAGE_NAME).is_file():
         strangers = [f"{REBUILD_DIR}/{e.name}" for e in entries]
     if strangers:
-        return "conflict", strangers
-    state, _, _ = E().load_lineage(folder / LINEAGE_NAME)
+        return "conflict", strangers, [], None
+    state, lineage, problems = E().load_lineage(folder / LINEAGE_NAME)
     if state == "conflict":
-        return "conflict", [f"{REBUILD_DIR}/{LINEAGE_NAME}"]
+        return "conflict", [f"{REBUILD_DIR}/{LINEAGE_NAME}"], [], None
     if state != "present":
-        return "invalid", []
-    return "ours", []
+        return "invalid", [], shown_problems([p.as_dict() for p in problems]), None
+    return "ours", [], [], lineage["generation"]
 
 
 # -------------------------------------------------------------- next step
@@ -1076,7 +1081,7 @@ def changed_since(root: Path, saved: dict) -> list[str]:
 def command_check(io: Io, options: dict) -> int:
     root = io.root
     speckit, missing = G().speckit_state(root)
-    rebuild_dir, rebuild_conflicts = rebuild_dir_state(root)
+    rebuild_dir, rebuild_conflicts, rebuild_errors, rebuilt_generation = rebuild_dir_state(root)
     progress_state, saved = load_progress(root)
     out = {key: None for key in CHECK_KEYS}
     out.update({
@@ -1089,6 +1094,8 @@ def command_check(io: Io, options: dict) -> int:
         "specs": G().existing_specs(root),
         "rebuild_dir": rebuild_dir,
         "rebuild_conflicts": rebuild_conflicts,
+        "rebuild_errors": rebuild_errors,
+        "rebuilt_generation": rebuilt_generation,
         "progress": progress_state,
         "changed": changed_since(root, saved) if saved else [],
         "saved": saved,
@@ -1493,9 +1500,10 @@ def command_lineage(io: Io, options: dict) -> int:
     progress, failure = confirmed_progress(io)
     if progress is None:
         return failure
-    state, conflicts = rebuild_dir_state(root)
+    state, conflicts, errors, _ = rebuild_dir_state(root)
     if state in ("conflict", "invalid"):
-        return io.fail(REBUILD_CONFLICT, "rebuild-conflict", EXIT_STATE, rebuild_conflicts=conflicts)
+        return io.fail(REBUILD_CONFLICT, "rebuild-conflict", EXIT_STATE, rebuild_conflicts=conflicts,
+                       rebuild_errors=errors)
     result = verify_documents(root, progress)
     if not result["ok"]:
         return io.fail(MISMATCH, "mismatch-documents", **result)
@@ -1614,7 +1622,7 @@ def export_skill_present() -> bool:
 
 CHECK_KEYS = (
     "dependencies", "export_skill", "speckit", "missing", "constitution", "numbering", "specs", "rebuild_dir",
-    "rebuild_conflicts", "progress", "changed", "saved", "old", "export_dir", "nutrients_edited", "nutrients_errors",
+    "rebuild_conflicts", "rebuild_errors", "rebuilt_generation", "progress", "changed", "saved", "old", "export_dir", "nutrients_edited", "nutrients_errors",
     "conflicts", "nutrients", "pending", "old_lineage", "old_lineage_errors", "needs_old_lineage", "source_state",
     "source_changed", "source_diff", "next",
 )
