@@ -1835,3 +1835,386 @@ def test_run_exit_code_is_zero_when_the_child_fails(m, tmp_path, monkeypatch):
     scenarios(monkeypatch, {"do": [], "exit": 1, "report": {"status": "failed", "summary": "x",
                                                              "failure": {"kind": "other", "step": "s", "reason": "r"}}})
     assert run_phase(m, root, "001-alpha", "plan").code == 0
+
+
+# ======================================================== T041 manual resume
+
+
+def interrupted_plan(m, tmp_path, monkeypatch, scenario=None):
+    root = make_project(tmp_path, specs={"001-alpha": {}, "002-beta": {}})
+    scenarios(monkeypatch, scenario or {"do": [], "no_result": True})
+    first = run_phase(m, root, "001-alpha", "plan", "opus", "Design.").json["attempts"][0]
+    assert first["outcome"] in ("interrupted", "usage-limit", "api-error")
+    return root, first
+
+
+def test_resume_is_next_after_an_interruption(m, tmp_path, monkeypatch):
+    root, first = interrupted_plan(m, tmp_path, monkeypatch)
+    nxt = status(m, root)["next"]
+    assert (nxt["action"], nxt["session_id"], nxt["model"], nxt["last_outcome"]) == (
+        "resume", first["session_id"], "opus", "interrupted")
+    assert nxt["limit"] is None and nxt["auto_resume"] is None
+    assert run_phase(m, root, "001-alpha", "plan", "opus", "r").json["reason"] == "not-next"
+
+
+def test_run_resume_continues_the_same_session(m, tmp_path, monkeypatch):
+    root, first = interrupted_plan(m, tmp_path, monkeypatch)
+    scenarios(monkeypatch, {"test_command": PASS_CMD})
+    data = run_phase(m, root, "001-alpha", "plan", "opus", "Resuming the interrupted session.", "--resume").json
+    view = data["attempts"][0]
+    assert (view["outcome"], view["resume"], view["session_id"], view["auto"]) == (
+        "succeeded", True, first["session_id"], False)
+    call = calls(tmp_path)[-1]
+    assert call["argv"][6:8] == ["--resume", first["session_id"]] and "--session-id" not in call["argv"]
+    assert "First check the current state of the files again" in call["stdin"]
+    assert status(m, root)["next"]["phase"] == "tasks"
+
+
+def test_resume_fresh_starts_a_new_session(m, tmp_path, monkeypatch):
+    root, first = interrupted_plan(m, tmp_path, monkeypatch)
+    scenarios(monkeypatch, {"test_command": PASS_CMD})
+    data = run_phase(m, root, "001-alpha", "plan", "opus", "Fresh session.", "--resume", "--fresh").json
+    view = data["attempts"][0]
+    assert view["session_id"] != first["session_id"] and view["resume"] is False
+    call = calls(tmp_path)[-1]
+    assert "--session-id" in call["argv"] and "--resume" not in call["argv"]
+    assert "First check the current state of the files again" in call["stdin"]
+
+
+def test_failed_resume_is_resume_failed_and_not_counted(m, tmp_path, monkeypatch):
+    root, first = interrupted_plan(m, tmp_path, monkeypatch)
+    scenarios(monkeypatch, {"fail_resume": True})
+    data = run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume").json
+    view = data["attempts"][0]
+    assert (view["resume_failed"], view["counts_as_failure"], view["outcome"]) == (True, False, "api-error")
+    assert data["failures"] == {}
+    assert status(m, root)["next"]["action"] == "resume"
+
+
+def test_leftovers_allow_resume_and_changed_ones_do_not(m, tmp_path, monkeypatch):
+    root, first = interrupted_plan(m, tmp_path, monkeypatch, {"do": [], "commit": False, "no_result": True,
+                                                              "files": {"specs/001-alpha/research.md": "half\n"}})
+    data = status(m, root)
+    assert data["dirty"] == ["specs/001-alpha/research.md"] and data["leftovers"] is True
+    write_tree(root, {"mine.txt": "x"})
+    data = status(m, root)
+    assert data["leftovers"] is False
+    assert run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume").json["reason"] == "dirty"
+    (root / "mine.txt").unlink()
+    scenarios(monkeypatch, {"do": ["plan"], "test_command": PASS_CMD})
+    data = run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume").json
+    assert data["attempts"][0]["outcome"] == "succeeded"
+    assert git_run(root, "status", "--porcelain") == ""
+
+
+def test_done_specs_are_not_redone_and_planned_goes_to_tasks(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (1, 1)}, "002-beta": {"plan": True},
+                                         "003-gamma": {}})
+    write_state(root, blank_state(baseline=["001-alpha"], tests=[test_record("001-alpha", hash_of(m, root, "001-alpha"))]))
+    nxt = status(m, root)["next"]
+    assert (nxt["spec"], nxt["phase"], nxt["action"]) == ("002-beta", "tasks", "run")
+
+
+def test_resume_does_not_redo_checked_tasks(m, tmp_path, monkeypatch):
+    root = implementing(tmp_path)
+    scenarios(monkeypatch, {"do": ["implement-partial"], "no_result": True})
+    run_phase(m, root, "001-alpha", "implement")
+    assert status(m, root)["specs"][0]["tasks_open"] == 2
+    scenarios(monkeypatch, {"do": ["implement"]})
+    data = run_phase(m, root, "001-alpha", "implement", "sonnet", "r", "--resume").json
+    assert data["attempts"][0]["outcome"] == "succeeded"
+    assert status(m, root)["specs"][0]["tasks_open"] == 0
+
+
+# ======================================================== T042 usage limits
+
+
+def window_event(reset: float | None, kind: str = "five_hour", status: str = "rejected", **extra) -> dict:
+    window = {"utilization": 1.0, "status": status}
+    if reset is not None:
+        window["resetsAt"] = reset
+    info = {"status": "rejected", "rateLimitType": kind, "overageStatus": "rejected",
+            "unifiedWindows": {kind: window}}
+    if reset is not None:
+        info["resetsAt"] = reset
+    info.update(extra)
+    return {"type": "rate_limit_event", "rate_limit_info": info}
+
+
+LIMIT_RESULT = {"is_error": True, "api_error_status": 429, "result": "You've hit your limit"}
+
+
+def test_compute_limit_cases(m):
+    start = "2026-11-21T10:00:00Z"
+    reset = m.parse_ts("2026-11-21T15:10:00Z")
+    later = m.parse_ts("2026-11-28T00:00:00Z")
+    windows = {"status": "rejected", "rateLimitType": "five_hour", "overageStatus": "rejected",
+               "unifiedWindows": {"five_hour": {"status": "rejected", "resetsAt": reset},
+                                  "seven_day": {"status": "rejected", "resetsAt": later},
+                                  "seven_day_opus": {"status": "allowed", "resetsAt": later + 99}}}
+    assert m.compute_limit([windows], start) == {"waitable": True, "types": ["five_hour", "seven_day"],
+                                                 "resets_at": "2026-11-28T00:00:00Z", "overage_status": "rejected"}
+    assert m.compute_limit([{"status": "rejected", "rateLimitType": "overage", "overageStatus": "rejected"}], start) == {
+        "waitable": False, "types": ["overage"], "resets_at": None, "overage_status": "rejected"}
+    missing = {"status": "rejected", "rateLimitType": "five_hour", "unifiedWindows": {"five_hour": {"status": "rejected"}}}
+    assert m.compute_limit([missing], start)["waitable"] is False
+    assert m.compute_limit([], start) == {"waitable": False, "types": ["unknown"], "resets_at": None,
+                                          "overage_status": None}
+    spend = {"status": "rejected", "rateLimitType": "overage", "overageStatus": "rejected",
+             "unifiedWindows": {"five_hour": {"status": "rejected", "resetsAt": reset}}}
+    assert m.compute_limit([spend], start) == {"waitable": True, "types": ["five_hour", "overage"],
+                                               "resets_at": "2026-11-21T15:10:00Z", "overage_status": "rejected"}
+    simple = {"status": "rejected", "rateLimitType": "seven_day_sonnet", "resetsAt": reset}
+    assert m.compute_limit([simple], start)["resets_at"] == "2026-11-21T15:10:00Z"
+    assert m.compute_limit([dict(simple, dailyCapPaused=True)], start)["waitable"] is False
+    assert m.compute_limit([dict(simple, resetsAt=m.parse_ts("2026-11-21T09:00:00Z"))], start)["waitable"] is False
+    assert m.compute_limit([dict(simple, resetsAt="soon")], start)["waitable"] is False
+    weird = {"status": "rejected", "rateLimitType": "monthly_thing", "overageStatus": "maybe"}
+    assert m.compute_limit([weird], start) == {"waitable": False, "types": ["unknown"], "resets_at": None,
+                                               "overage_status": None}
+
+
+@pytest.mark.parametrize("result", [LIMIT_RESULT, {"is_error": True, "api_error_status": None,
+                                                   "result": "Claude usage limit reached"},
+                                    {"is_error": True, "api_error_status": 500, "result": "RATE LIMIT exceeded"}])
+def test_usage_limit_is_detected_from_429_or_text(m, tmp_path, monkeypatch, result):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, {"do": [], "result": result})
+    view = run_phase(m, root, "001-alpha", "plan").json["attempts"][0]
+    assert (view["outcome"], view["counts_as_failure"]) == ("usage-limit", False)
+    assert view["limit"]["waitable"] is False and view["auto_resume"] == "not-waitable"
+
+
+def test_only_overage_is_not_waitable_and_progress_is_kept(m, tmp_path, monkeypatch):
+    root = implementing(tmp_path)
+    overage = {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "rateLimitType": "overage",
+                                                               "overageStatus": "rejected", "resetsAt": 1}}
+    scenarios(monkeypatch, {"do": ["implement-partial"], "commit": False, "events": [overage], "result": LIMIT_RESULT})
+    data = run_phase(m, root, "001-alpha", "implement").json
+    view = data["attempts"][0]
+    assert view["limit"] == {"waitable": False, "types": ["overage"], "resets_at": None, "overage_status": "rejected"}
+    assert view["auto_resume"] == "not-waitable" and data["status"] == "finished"
+    assert data["failures"] == {}
+    assert "specs/001-alpha/tasks.md" in git_run(root, "status", "--porcelain")
+    data = status(m, root)
+    assert data["next"]["action"] == "resume" and data["leftovers"] is True
+    assert data["next"]["limit"]["types"] == ["overage"] and data["next"]["auto_resume"] == "not-waitable"
+    raw = state_file(root).read_text(encoding="utf-8")
+    assert "unifiedWindows" not in raw and "rateLimitType" not in raw
+
+
+def test_api_error_params_rate_limit_info_is_read(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    reset = int(time.time()) + 3600
+    assistant = {"type": "assistant", "api_error": "usage_limit_reached",
+                 "api_error_params": {"rate_limit_info": {"rateLimitType": "seven_day", "resetsAt": reset}},
+                 "message": {"content": []}}
+    scenarios(monkeypatch, {"do": [], "events": [assistant], "result": LIMIT_RESULT})
+    first = run_phase(m, root, "001-alpha", "plan").json
+    assert first["status"] == "waiting"
+    limit = first["attempts"][0]["limit"]
+    assert (limit["waitable"], limit["types"]) == (True, ["seven_day"])
+    drive(m, root, "cancel")
+    assert drive(m, root, "watch").json["attempts"][-1]["auto_resume"] == "cancelled"
+
+
+# ======================================================== T043 automatic resume, cancel, driver survival
+
+
+def limit_scenario(reset_in: float = 1.0, **extra) -> dict:
+    return dict({"do": [], "events": [window_event(int(time.time() + reset_in))], "result": LIMIT_RESULT}, **extra)
+
+
+def test_waitable_limit_waits_and_resumes_once(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, limit_scenario(2), {"test_command": PASS_CMD})
+    first = run_phase(m, root, "001-alpha", "plan", "opus", "Design.").json
+    assert first["status"] == "waiting" and first["waiting_until"]
+    view = first["attempts"][0]
+    assert (view["outcome"], view["auto_resume"], view["limit"]["waitable"]) == ("usage-limit", "waiting", True)
+    data = status(m, root)
+    assert data["running"] is True and data["driver"]["phase"] == "waiting"
+    assert data["driver"]["waiting_until"] == first["waiting_until"]
+    assert data["running_attempt"]["limit"]["types"] == ["five_hour"]
+    assert data["next"]["action"] == "wait"
+    assert run_phase(m, root, "001-alpha", "plan", "opus", "r", "--resume").json["reason"] == "running"
+    assert drive(m, root, "test", "--spec", "001-alpha").json["reason"] == "running"
+    final = drive(m, root, "watch").json
+    assert final["status"] == "finished"
+    assert [a["outcome"] for a in final["attempts"]] == ["usage-limit", "succeeded"]
+    resumed = final["attempts"][1]
+    assert (resumed["auto"], resumed["resume"], resumed["session_id"], resumed["model"], resumed["reason"]) == (
+        True, True, view["session_id"], "opus", AUTO_REASON)
+    assert final["attempts"][0]["auto_resume"] == "started"
+    assert final["failures"] == {}
+    assert calls(tmp_path)[1]["argv"][6:8] == ["--resume", view["session_id"]]
+    assert len(calls(tmp_path)) == 2  # the driver did not start the next phase
+    assert read_state(root)["driver"] is None
+    waiting_until = m.parse_ts(first["waiting_until"])
+    reset = m.parse_ts(view["limit"]["resets_at"])
+    assert reset + TIMING["margin_seconds"] <= waiting_until <= reset + TIMING["margin_seconds"] + 1
+
+
+def test_watch_started_while_waiting_does_not_report_at_once(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, limit_scenario(60))
+    first = run_phase(m, root, "001-alpha", "plan").json
+    assert first["status"] == "waiting"
+    monkeypatch.setenv("SDD_DRIVE_TEST_TIMING", json.dumps(dict(TIMING, watch_seconds=0.6)))
+    started = time.monotonic()
+    second = drive(m, root, "watch").json
+    assert time.monotonic() - started >= 0.5
+    assert second["status"] == "waiting" and second["waiting_until"] == first["waiting_until"]
+    cancel = drive(m, root, "cancel")
+    assert cancel.code == 0 and cancel.json == {"cancel_requested": True, "waiting_until": first["waiting_until"]}
+    assert drive(m, root, "cancel").code == 0  # an existing cancel file counts as success
+    monkeypatch.setenv("SDD_DRIVE_TEST_TIMING", json.dumps(TIMING))
+    final = drive(m, root, "watch").json
+    assert final["status"] == "finished" and final["attempts"][-1]["auto_resume"] == "cancelled"
+    assert not (root / ".specify/sdd-drive/cancel").exists()
+    assert len(calls(tmp_path)) == 1
+    assert status(m, root)["next"]["action"] == "resume"
+
+
+def test_two_watches_in_a_row_do_not_report_the_same_wait(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, limit_scenario(1.5), {"test_command": PASS_CMD})
+    assert run_phase(m, root, "001-alpha", "plan").json["status"] == "waiting"
+    second = drive(m, root, "watch").json
+    assert second["status"] == "finished"
+    assert [a["outcome"] for a in second["attempts"]] == ["usage-limit", "succeeded"]
+
+
+def test_cancel_without_a_waiting_driver(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    result = drive(m, root, "cancel")
+    assert (result.code, result.json["reason"]) == (1, "not-waiting")
+    assert not (root / ".specify/sdd-drive").exists()
+
+
+def test_second_limit_after_the_automatic_resume_stops(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, limit_scenario(1), limit_scenario(60))
+    assert run_phase(m, root, "001-alpha", "plan").json["status"] == "waiting"
+    final = drive(m, root, "watch").json
+    assert [a["auto_resume"] for a in final["attempts"]] == ["started", "already-auto"]
+    assert final["status"] == "finished" and len(calls(tmp_path)) == 2
+    nxt = status(m, root)["next"]
+    assert (nxt["action"], nxt["auto_resume"]) == ("resume", "already-auto")
+    # A run started by the maintainer may wait once more.
+    scenarios(monkeypatch, limit_scenario(60))
+    again = run_phase(m, root, "001-alpha", "plan", "opus", "Resuming.", "--resume").json
+    assert again["status"] == "waiting" and again["attempts"][0]["auto"] is False
+    drive(m, root, "cancel")
+    assert drive(m, root, "watch").json["attempts"][-1]["auto_resume"] == "cancelled"
+
+
+def test_changed_worktree_while_waiting_skips_the_resume(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, limit_scenario(1.5))
+    assert run_phase(m, root, "001-alpha", "plan").json["status"] == "waiting"
+    write_tree(root, {"mine.txt": "x"})
+    final = drive(m, root, "watch").json
+    assert final["attempts"][-1]["auto_resume"] == "skipped-changed" and len(calls(tmp_path)) == 1
+    assert status(m, root)["dirty"] == ["mine.txt"]
+
+
+def test_reset_already_past_waits_only_the_margin(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, limit_scenario(1, sleep=2.5), {"test_command": PASS_CMD})
+    first = run_phase(m, root, "001-alpha", "plan").json
+    assert first["status"] == "waiting"
+    ended = m.parse_ts(read_state(root)["attempts"][0]["ended_at"])
+    assert m.parse_ts(first["waiting_until"]) - ended <= TIMING["margin_seconds"] + 2
+    assert drive(m, root, "watch").json["attempts"][-1]["outcome"] == "succeeded"
+
+
+def test_vanished_driver_is_finalized_as_lost(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    limit = {"waitable": True, "types": ["five_hour"], "resets_at": T1, "overage_status": None}
+    write_state(root, blank_state(attempts=[attempt(1, outcome="usage-limit", limit=limit, auto_resume="waiting",
+                                                    detail={"code": "usage-limit", "paths": [], "text": None})],
+                                  driver={"token": UUID2, "pid": 4242, "phase": "waiting", "attempt": 1,
+                                          "waiting_until": T1, "started_at": T0}))
+    data = status(m, root)
+    assert data["running"] is False and data["pending_finalize"] is True and data["next"]["action"] == "finalize"
+    result = drive(m, root, "finalize").json
+    assert (result["outcome"], result["auto_resume"]) == ("usage-limit", "lost")
+    state = read_state(root)
+    assert state["attempts"][0]["auto_resume"] == "lost" and state["driver"] is None
+    nxt = status(m, root)["next"]
+    assert (nxt["action"], nxt["auto_resume"]) == ("resume", "lost")
+
+
+def kill_tree(process: subprocess.Popen) -> None:
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True)
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            os.kill(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.wait(timeout=30)
+
+
+def test_driver_survives_when_the_run_process_tree_is_killed(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, {"test_command": PASS_CMD, "sleep": 3})
+    kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    process = subprocess.Popen([PY, str(SCRIPT), "run", "--spec", "001-alpha", "--phase", "plan", "--model", "opus",
+                                "--reason", "Design."], cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, **kwargs)
+    wait_for(lambda: state_file(root).exists() and read_state(root)["driver"] is not None)
+    kill_tree(process)
+    record = wait_for(lambda: read_state(root)["attempts"][0]["outcome"], seconds=60)
+    assert record == "succeeded"
+    wait_for(lambda: read_state(root)["driver"] is None and not m.lock_held(root))
+    assert status(m, root)["specs"][0]["state"] == "planned"
+
+
+# ======================================================== T044 clear
+
+
+def test_clear_writes_an_empty_record(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True, "tasks": (1, 1)}})
+    write_state(root, blank_state(baseline=["001-alpha"], attempts=[attempt(1)]))
+    folder = root / ".specify/sdd-drive"
+    (folder / "cancel").write_bytes(b"")
+    (folder / ".state.json.x.tmp").write_bytes(b"")
+    result = drive(m, root, "clear")
+    assert result.code == 0 and result.json == {"cleared": True, "baseline_reset": True}
+    assert read_state(root) == blank_state(baseline=[], baseline_reset=True)
+    assert sorted(p.name for p in folder.iterdir()) == [".gitignore", "lock", "state.json"]
+    assert status(m, root)["specs"][0]["baseline"] is False
+    assert drive(m, root, "clear").json == {"cleared": True, "baseline_reset": True}
+
+
+def test_clear_works_when_the_record_is_unreadable_and_creates_gitignore(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    folder = root / ".specify/sdd-drive"
+    folder.mkdir(parents=True)
+    (folder / "state.json").write_bytes(b"{broken")
+    assert drive(m, root, "status").json["reason"] == "state-unreadable"
+    assert drive(m, root, "clear").code == 0
+    assert (folder / ".gitignore").read_bytes() == OWN_GITIGNORE
+    assert status(m, root)["next"]["action"] == "run"
+
+
+def test_clear_refuses_while_running_and_on_conflict(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    write_state(root, blank_state(launch={"token": UUID2, "at": iso(1)}))
+    assert drive(m, root, "clear").json["reason"] == "running"
+    write_state(root, blank_state(driver={"token": UUID2, "pid": 1, "phase": "running", "attempt": 1,
+                                          "waiting_until": None, "started_at": T0}))
+    assert drive(m, root, "clear").json["reason"] == "running"
+    write_state(root, blank_state())
+    with hold_lock(root):
+        assert drive(m, root, "clear").json["reason"] == "running"
+    (root / ".specify/sdd-drive/mine.txt").write_bytes(b"x")
+    before = tree_snapshot(root)
+    assert drive(m, root, "clear").json["reason"] == "conflict"
+    assert tree_snapshot(root) == before

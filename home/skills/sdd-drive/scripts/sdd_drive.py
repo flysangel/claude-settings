@@ -1823,7 +1823,9 @@ def run_child(root: Path, attempt_id: int) -> None:
         "head": head(root) if git else None,
         "tree": tree_hashes(root, git) if phase == "check" else None,
     }
-    prompt = brief_text(root, spec, phase, resume=attempt["resume"] or attempt["reason"] == AUTO_REASON)
+    earlier = [a for a in state["attempts"] if a["spec"] == spec and a["phase"] == phase and a["id"] < attempt_id]
+    continuing = attempt["resume"] or bool(earlier and earlier[-1]["outcome"] in RESUMABLE)  # --resume or --fresh
+    prompt = brief_text(root, spec, phase, resume=continuing)
     command = claude_command() or ["claude"]
     record: dict = {}
     try:
