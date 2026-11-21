@@ -27,8 +27,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -292,6 +294,41 @@ WINDOWS = os.name == "nt"
 NO_WINDOW = 0x08000000
 
 
+SHARING_SECONDS = 5.0
+
+
+def shared(action):
+    """Run a file action; on Windows retry it for a few seconds while it fails with PermissionError.
+
+    Windows refuses to replace a file that another process has open, and refuses to open a file that is being
+    replaced; the driver writes state.json while watch and status read it, so both sides see these brief
+    sharing violations. On other systems a PermissionError is permanent and is raised at once.
+    """
+    deadline = time.monotonic() + SHARING_SECONDS
+    while True:
+        try:
+            return action()
+        except PermissionError:
+            if not WINDOWS or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+
+
+def atomic_write(path: Path, data: bytes) -> None:
+    """Write to a temporary file in the same folder, then replace path with it (see shared)."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        shared(lambda: os.replace(tmp, path))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def run_cmd(args: list[str], root: Path, **kwargs) -> subprocess.CompletedProcess:
     if WINDOWS:
         kwargs.setdefault("creationflags", NO_WINDOW)
@@ -359,7 +396,18 @@ def own_dir_state(root: Path) -> str:
     if not folder.is_dir() or folder.is_symlink():
         return "conflict"
     for entry in folder.iterdir():
-        if entry.is_symlink() or not entry.is_file():
+        try:
+            mode = entry.lstat().st_mode
+        except FileNotFoundError:
+            # Gone since the listing: a temporary file just renamed over state.json, or cancel just removed by the
+            # driver. What is no longer there is not a conflict.
+            continue
+        except OSError:
+            # Windows: a file of ours that is being replaced or removed may refuse even its attributes.
+            if entry.name in OWN_FILES or TEMP_FILE.match(entry.name):
+                continue
+            return "conflict"
+        if not stat.S_ISREG(mode):
             return "conflict"
         if entry.name not in OWN_FILES and not TEMP_FILE.match(entry.name):
             return "conflict"
@@ -373,7 +421,7 @@ def ensure_own_dir(root: Path) -> None:
     folder = own_dir(root)
     folder.mkdir(parents=True, exist_ok=True)
     if not (folder / GITIGNORE_NAME).exists():
-        G().atomic_write(folder / GITIGNORE_NAME, OWN_GITIGNORE.encode("utf-8"))
+        atomic_write(folder / GITIGNORE_NAME, OWN_GITIGNORE.encode("utf-8"))
 
 
 # --------------------------------------------------------------------- lock
@@ -673,7 +721,7 @@ def load_state(root: Path) -> dict | None:
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_bytes().decode("utf-8"))
+        data = json.loads(shared(path.read_bytes).decode("utf-8"))
     except (OSError, ValueError):
         raise Unreadable("(file)")
     return validate_state(data)
@@ -691,7 +739,7 @@ def save_state(root: Path, state: dict) -> None:
     """Write the records (same-folder temporary file, then replace); the first write freezes the baseline."""
     ensure_own_dir(root)
     validate_state(json.loads(dumps(state)))
-    G().atomic_write(state_path(root), dumps(state))
+    atomic_write(state_path(root), dumps(state))
 
 
 def apply_secrets(attempt: dict) -> dict:
@@ -826,7 +874,7 @@ def set_feature_directory(root: Path, spec: str) -> None:
         if isinstance(loaded, dict):
             data = loaded
     data["feature_directory"] = f"specs/{spec}"
-    G().atomic_write(path, dumps(data))
+    atomic_write(path, dumps(data))
 
 
 PROTECTED_DIRS = (".specify/templates", ".specify/scripts")
@@ -2179,7 +2227,7 @@ def command_cancel(io: Io, options: dict) -> int:
         raise fail("not-waiting")
     path = own_dir(io.root) / CANCEL_NAME
     if not path.exists():
-        G().atomic_write(path, b"")
+        atomic_write(path, b"")
     return io.emit({"cancel_requested": True, "waiting_until": driver["waiting_until"]})
 
 

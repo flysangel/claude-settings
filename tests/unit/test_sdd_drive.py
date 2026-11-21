@@ -435,6 +435,105 @@ def test_own_dir_conflict(drive_module, tmp_path, change):
     assert tree_snapshot(root) == before
 
 
+def test_own_dir_ignores_entries_that_vanish_while_it_is_read(drive_module, tmp_path, monkeypatch):
+    """The driver renames its temporary file over state.json and removes cancel while watch and status list the folder.
+
+    Before the fix such an entry was seen as "not a regular file" and every reader stopped with conflict.
+    """
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    write_state(root, blank_state())
+    folder = root / ".specify" / "sdd-drive"
+    real_iterdir = Path.iterdir
+
+    def iterdir_with_ghosts(self):
+        yield from real_iterdir(self)
+        if self == folder:
+            yield folder / ".state.json.gone.tmp"
+            yield folder / "cancel"
+
+    monkeypatch.setattr(Path, "iterdir", iterdir_with_ghosts)
+    drive_module.load_grill()
+    assert drive_module.own_dir_state(root) == "ours"
+    assert status(drive_module, root)["own_dir"] == "ours"
+
+
+def test_own_dir_stays_ours_while_state_is_rewritten(drive_module, tmp_path):
+    """A writer thread replaces state.json over and over; no read may see conflict or an unreadable file."""
+    import threading
+
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    drive_module.load_grill()
+    state = drive_module.empty_state([])
+    drive_module.save_state(root, state)
+    stop = threading.Event()
+
+    def writer():
+        while not stop.is_set():
+            drive_module.save_state(root, state)
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            assert drive_module.own_dir_state(root) == "ours"
+            assert drive_module.load_state(root) is not None
+    finally:
+        stop.set()
+        thread.join()
+
+
+def test_state_reads_and_writes_wait_out_windows_sharing_violations(drive_module, tmp_path, monkeypatch):
+    """Windows refuses to replace an open file and to open a file being replaced; both sides retry briefly."""
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    m = drive_module
+    m.load_grill()
+    m.save_state(root, m.empty_state([]))
+    monkeypatch.setattr(m, "WINDOWS", True)
+    failures = {"replace": 3, "read": 3}
+    real_replace, real_read_bytes = os.replace, Path.read_bytes
+
+    def busy_replace(src, dst):
+        if failures["replace"]:
+            failures["replace"] -= 1
+            raise PermissionError(13, "Access is denied", str(dst))
+        return real_replace(src, dst)
+
+    def busy_read_bytes(self):
+        if self.name == "state.json" and failures["read"]:
+            failures["read"] -= 1
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(m.os, "replace", busy_replace)
+    monkeypatch.setattr(Path, "read_bytes", busy_read_bytes)
+    state = m.empty_state(["001-alpha"])
+    m.save_state(root, state)
+    assert m.load_state(root)["baseline"] == ["001-alpha"]
+    assert failures == {"replace": 0, "read": 0}
+    assert not [p.name for p in (root / ".specify" / "sdd-drive").iterdir() if p.name.endswith(".tmp")]
+
+
+def test_permission_errors_are_not_retried_outside_windows(drive_module, tmp_path, monkeypatch):
+    m = drive_module
+    monkeypatch.setattr(m, "WINDOWS", False)
+    seen = []
+
+    def refuse():
+        seen.append(1)
+        raise PermissionError(13, "Permission denied")
+
+    with pytest.raises(PermissionError):
+        m.shared(refuse)
+    assert seen == [1]
+    monkeypatch.setattr(m, "WINDOWS", True)
+    monkeypatch.setattr(m, "SHARING_SECONDS", 0.1)
+    seen.clear()
+    with pytest.raises(PermissionError):
+        m.shared(refuse)
+    assert len(seen) > 1
+
+
 def test_first_write_creates_gitignore_and_state(drive_module, tmp_path, monkeypatch):
     root = make_project(tmp_path, specs={"001-alpha": {}})
     scenarios(monkeypatch, {"test_command": PASS_CMD})
