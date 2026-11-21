@@ -466,30 +466,61 @@ def validate_progress(data, root: Path) -> dict:
     return progress
 
 
-def _valid_hashes(value) -> bool:
-    return isinstance(value, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in value.items())
+# The script fields hold what the script computed from the project, never what Claude sent; save does not scan them
+# for secrets, so reading does not either (a spec folder may be named like a secret, e.g. 004-sk-learn-...). They are
+# held to the exact form the script writes instead, so that nothing typed by hand fits in them.
+HASH = re.compile(r"[0-9a-f]{64}")
+GIT_OBJECT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+SAVED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+SPEC_FILE = re.compile(r"specs/([^/]+)/spec\.md")
 
 
-def _valid_stored(data: dict) -> bool:
-    """The script fields of a stored progress have the shape the script writes."""
-    print_ = data.get("fingerprint")
+def is_hash(value) -> bool:
+    return isinstance(value, str) and HASH.fullmatch(value) is not None
+
+
+def recorded_folder(name: str, text: str, folders: set[str]) -> bool:
+    """A spec folder the script may have recorded: any name, but text (the name, or the path that holds it) may look
+    like a secret only while the folder is in the project (check lists it then anyway); otherwise it was typed in by
+    hand."""
+    return name not in (".", "..") and (name in folders or not looks_like_secret(text))
+
+
+def valid_spec_hashes(value, folders: set[str]) -> bool:
+    """The specs of a fingerprint or baseline: {"specs/<folder>/spec.md": hash} as fingerprint() writes them."""
+    if not isinstance(value, dict):
+        return False
+    for key, digest in value.items():
+        match = SPEC_FILE.fullmatch(key) if isinstance(key, str) else None
+        if match is None or not recorded_folder(match.group(1), key, folders) or not is_hash(digest):
+            return False
+    return True
+
+
+def valid_fingerprint(value, folders: set[str], fields=("constitution", "specs", "head")) -> bool:
+    """A fingerprint (or, with fields without head, a baseline's constitution and specs) as the script writes it."""
+    return (
+        isinstance(value, dict)
+        and set(value) == set(fields)
+        and (value["constitution"] is None or is_hash(value["constitution"]))
+        and valid_spec_hashes(value["specs"], folders)
+        and ("head" not in fields or value["head"] is None
+             or (isinstance(value["head"], str) and GIT_OBJECT.fullmatch(value["head"]) is not None))
+    )
+
+
+def is_saved_at(value) -> bool:
+    return isinstance(value, str) and SAVED_AT.fullmatch(value) is not None
+
+
+def _valid_stored(data: dict, root: Path) -> bool:
+    """The script fields of a stored progress have the exact form the script writes."""
+    folders = set(spec_folders(root))
     baseline = data.get("baseline")
     return (
-        isinstance(data.get("saved_at"), str)
-        and isinstance(print_, dict)
-        and set(print_) == {"constitution", "specs", "head"}
-        and (print_["constitution"] is None or isinstance(print_["constitution"], str))
-        and _valid_hashes(print_["specs"])
-        and (print_["head"] is None or isinstance(print_["head"], str))
-        and (
-            baseline is None
-            or (
-                isinstance(baseline, dict)
-                and set(baseline) == {"constitution", "specs"}
-                and (baseline["constitution"] is None or isinstance(baseline["constitution"], str))
-                and _valid_hashes(baseline["specs"])
-            )
-        )
+        is_saved_at(data.get("saved_at"))
+        and valid_fingerprint(data.get("fingerprint"), folders)
+        and (baseline is None or valid_fingerprint(baseline, folders, ("constitution", "specs")))
     )
 
 
@@ -507,10 +538,12 @@ def load_progress(root: Path, folder: str = OWN_DIR) -> tuple[str, dict | None]:
         validate_progress(data, root)
     except (OSError, ValueError, Invalid):
         return "unreadable", None
-    if not _valid_stored(data):
+    if not _valid_stored(data, root):
         return "unreadable", None
-    # Edited by hand to hold something that looks like a secret: never shown (check prints saved), never used.
-    if find_secret(data) is not None:
+    # Edited by hand to hold something that looks like a secret: never shown (check prints saved), never used. Only
+    # the fields save scans are scanned here, so that whatever save wrote reads back; the script fields have their
+    # exact form instead (_valid_stored).
+    if find_secret({key: data[key] for key in PROGRESS_FIELDS}) is not None:
         return "unreadable", None
     return "present", data
 

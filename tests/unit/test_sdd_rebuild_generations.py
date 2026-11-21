@@ -68,9 +68,14 @@ def old_lineage_choice(check: dict) -> str:
     return "skipped"
 
 
-def rebuild(R, E, old: Path, parent: Path, name: str, decide=None, choice: str | None = None):
-    """A whole rebuild with 007's commands, from check to clear; returns (new project, lineage)."""
-    new = make_rebuild_new(parent, name)
+def rebuild(R, E, old: Path, parent: Path, name: str, decide=None, choice: str | None = None,
+            specs: dict[str, str] | None = None, pattern_named: str | None = None):
+    """A whole rebuild with 007's commands, from check to clear; returns (new project, lineage).
+
+    specs: spec folders the new project already holds. pattern_named: the id of a feature whose spec Spec Kit puts in
+    a folder named like a secret pattern; claim refuses it and the folder is renamed, as SKILL.md says.
+    """
+    new = make_rebuild_new(parent, name, specs=specs)
     before = tree_snapshot(old)
     check = ok(run_rebuild(R, new, "check", "--old", str(old)))
     nutrients = check["nutrients"]
@@ -86,8 +91,15 @@ def rebuild(R, E, old: Path, parent: Path, name: str, decide=None, choice: str |
     progress["generation"]["constitution"] = "reviewed"
     save(R, new, progress)
     for feature in progress["target"]["features"]:
-        simulate_specify(new, feature["id"])
-        feature["spec_dir"] = ok(run_rebuild(R, new, "claim", feature["id"]))["spec_dir"]
+        if feature["id"] == pattern_named:
+            folder = simulate_specify(new, f"sk-learn-{feature['id']}-pipeline")
+            assert run_rebuild(R, new, "claim", feature["id"]).out["reason"] == "secret"
+            renamed = folder.replace("sk-learn", "sklearn")
+            (new / folder).rename(new / renamed)
+            feature["spec_dir"] = ok(run_rebuild(R, new, "claim", feature["id"], "--dir", renamed))["spec_dir"]
+        else:
+            simulate_specify(new, feature["id"])
+            feature["spec_dir"] = ok(run_rebuild(R, new, "claim", feature["id"]))["spec_dir"]
         feature["reviewed"] = True
         save(R, new, progress)
     ok(run_rebuild(R, new, "verify"))
@@ -735,3 +747,23 @@ def test_an_old_lineage_with_a_secret_never_reaches_the_new_lineage(sdd_rebuild,
     assert results[0][1].out["old_lineage"] == "invalid"
     assert FAKE_TOKEN not in (new / ".sdd-rebuild" / "lineage.json").read_text(encoding="utf-8")
     assert len(results) > 10 and leaked(results) == []
+
+
+# ------------- generations whose new projects hold spec folders named like secret patterns
+
+
+def test_generations_1_to_3_with_spec_folders_named_like_secret_patterns(sdd_rebuild, sdd_export, tmp_path):
+    """A folder of the maintainer's named like a pattern sits in each new project, and in generation 3 Spec Kit names a
+    generated spec like one (claim refuses it; the folder is renamed). Every step reads back what the last wrote."""
+    old = make_rebuild_old(sdd_export, tmp_path, gen1_with_pending(), name="gen1")
+    gen2, lineage2 = rebuild(sdd_rebuild, sdd_export, old, tmp_path, "gen2", decide_gen2,
+                             specs={"000-sk-learn-pipeline-integration": "# 既有的 spec\n"})
+    assert (gen2 / "specs/000-sk-learn-pipeline-integration/spec.md").is_file()
+    export_with_006(sdd_export, gen2, draft_from_lineage(lineage2, "my-tool"))
+    gen3, lineage3 = rebuild(sdd_rebuild, sdd_export, gen2, tmp_path, "gen3", decide_gen3,
+                             specs={"000-token=refresh": "# 既有的 spec\n", "000-api-key:rotation": "# 既有的 spec\n"},
+                             pattern_named="deploy")
+    assert lineage3["generation"] == 3
+    spec_dirs = [f["spec_dir"] for f in lineage3["features"]]
+    assert any("sklearn-deploy-pipeline" in d for d in spec_dirs) and not any("sk-learn" in d for d in spec_dirs)
+    assert validate(sdd_export, gen3, draft_from_lineage(lineage3, "my-tool")).code == 0

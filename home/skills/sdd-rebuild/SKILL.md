@@ -394,6 +394,11 @@ Look at `constitution` and `specs` from `check`.
 Outcomes:
 
 - Everything here is decided: save (with the constitution action and any matched features) and go to stage 5.
+- `save` answers `secret` at a feature's `existing_spec`: the name of that existing spec's folder has the form of a
+  secret pattern (for example `sk-` followed by 20 or more letters, digits or hyphens); it is not a secret anyone
+  typed, but the progress cannot record it. Tell the maintainer so, and ask: they rename that folder to a name
+  without that form (for example `sklearn` instead of `sk-learn`) and the feature is matched to the renamed folder,
+  or the feature gets a new spec, or it is discarded.
 - The maintainer wants to change an existing spec: explain that this skill never changes existing specs; recommend
   doing it after the rebuild with `/sdd-grill` or by hand; then ask whether the feature is matched to the existing
   spec or gets a new spec.
@@ -612,6 +617,13 @@ Outcomes:
 - `claim` answers `none`: `speckit-specify` did not produce a spec. List `incomplete` if it is not empty (folders
   without a `spec.md`; say that this skill does not delete them). Ask: invoke `speckit-specify` again for this
   feature (recommended), or stop. If it fails again, stop; the progress is kept.
+- `claim` answers `secret`: the name of the folder it was to record (the only candidate, or the one given with
+  `--dir`) has the form of a secret pattern, for example `sk-` followed by 20 or more letters, digits or hyphens. It is not a secret anyone typed, but the progress and the
+  lineage cannot record a name of that form; nothing was written. Tell the maintainer so, and ask: rename that folder
+  to a name without that form, keeping its number (for example `sklearn` instead of `sk-learn`; recommended), or
+  stop. Once the maintainer has renamed it, run `claim <feature id> --dir <the renamed folder>` and continue with
+  step 3. `.specify/feature.json` may still name the old folder: leave it; the next `speckit-specify` or `focus`
+  (stage 13) rewrites it.
 - `claim` answers `ambiguous` or `mismatch`: there is more than one new spec folder, or the new one is not the one
   `.specify/feature.json` points at (`feature_directory`). List `candidates` and `feature_directory`. The folder to
   recommend is the one `speckit-specify` reported in this run, when it is among the candidates and its `spec.md`
@@ -786,9 +798,10 @@ Then continue from `next.step`:
   another window, and nothing reported by `speckit-specify` in this conversation tells them apart. Use Read on the
   `spec.md` of each candidate and judge whether its title and content describe `next.feature` as confirmed. When
   one does, ask the maintainer whether it is the spec this rebuild generated (recommended when it matches); once
-  they confirm, run `claim <next.feature> --dir <that folder>`, continue with step 3 of stage 10, and do not generate
-  it again. When none of the candidates is this feature's spec, or the maintainer says so, handle it like that
-  outcome of stage 10 (generate the spec, then record it with `--dir`).
+  they confirm, run `claim <next.feature> --dir <that folder>` (if it answers `secret`, handle it as in stage 10),
+  continue with step 3 of stage 10, and do not generate it again. When none of the candidates is this feature's
+  spec, or the maintainer says so, handle it like that outcome of stage 10 (generate the spec, then record it with
+  `--dir`).
 - `specify`: continue stage 10 with `next.feature`.
 - `review`: continue stage 10 with the comparison (step 3) of `next.feature`, in its recorded `spec_dir`. If that
   `spec.md` does not exist, run `verify` and handle `spec-missing` as in stage 11; never generate it again.

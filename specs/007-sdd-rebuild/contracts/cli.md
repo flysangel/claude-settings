@@ -28,7 +28,7 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 - 執行時以 `importlib` 載入 `<skill>/../sdd-export/scripts/sdd_export.py` 與 `<skill>/../sdd-grill/scripts/sdd_grill.py`；
   任一個不存在或載入失敗時，所有指令以結束碼 3、`reason: "dependency"` 結束，`missing` 列出缺少的 skill 名稱。
 - **機密**（原則 V）：舊專案的養分與世代紀錄、既有的進度都可能在寫入後被手動編輯。007 以 006 的機密樣式掃描它們的每個字串
-  （欄位名稱也算），也掃描 `preview`、`lineage` 組好的世代紀錄；命中時只輸出 `check: "secret"` 與欄位路徑（`detail` 不含值），
+  （欄位名稱也算；既有的進度只掃描 `save` 掃描的欄位與快照，腳本由新專案計算的欄位改驗證格式，見 data-model「機密」），也掃描 `preview`、`lineage` 組好的世代紀錄；命中時只輸出 `check: "secret"` 與欄位路徑（`detail` 不含值），
   不建立快照、不寫入任何檔案。任何指令的輸出（含 `error`、`detail`、差異、轉述的 006 錯誤）都不含命中的值；006 的錯誤的路徑或說明
   含有機密樣式時改以 `{"check": "secret", "path": "(not shown)", ...}` 取代。不新增 `reason`：命中時沿用下表既有的 `reason`。
 - 唯一的外部指令是 `git`（經 005 的 `fingerprint` 執行 `rev-parse`，只讀）。
@@ -43,7 +43,7 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 | 1 | `usage` | 全部 | 用法錯誤 |
 | 1 | `old-mismatch` | `check` | `--old` 與進度的 `old_project` 不同 |
 | 1 | `invalid` | `save`、`preview` | 進度不符合結構，或 `preview` 的檢查不通過（`errors` 列出；含組好的世代紀錄有機密樣式時的 `secret`） |
-| 1 | `secret` | `save` | 字串符合機密樣式（只指出欄位路徑；欄位名稱符合時指出所在物件的路徑，最上層為 `(top level)`；名稱含句點時也一樣，路徑不由名稱切割而來；判斷依欄位名稱本身，與所在物件的路徑無關。重複的 `id` 本身像機密時同樣回報 `secret` 與該 `id` 的路徑） |
+| 1 | `secret` | `save`、`claim` | `claim`：要記錄的資料夾路徑符合機密樣式，見 claim。`save`：字串符合機密樣式（只指出欄位路徑；欄位名稱符合時指出所在物件的路徑，最上層為 `(top level)`；名稱含句點時也一樣，路徑不由名稱切割而來；判斷依欄位名稱本身，與所在物件的路徑無關。重複的 `id` 本身像機密時同樣回報 `secret` 與該 `id` 的路徑） |
 | 1 | `frozen` | `save` | 已確認的內容被修改，或已產生文件後要改回 `deciding` |
 | 1 | `finished` | `save` | 世代紀錄已寫入，只能 `focus`、`clear` |
 | 1 | `source` | `save` | 建立或更新快照時舊專案的養分無法使用（`export_dir` 不是 `ours`，含養分有機密樣式時） |
@@ -64,7 +64,7 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
 | 3 | `rebuilt` | `check` | 新專案已有世代紀錄（`rebuild_dir: "ours"`）而沒有進度 |
 | 3 | `rebuild-conflict` | `check`、`lineage` | `rebuild_dir` 為 `conflict` 或 `invalid` |
 | 3 | `nutrients-conflict`、`nutrients-unreadable`、`nutrients-invalid`、`nutrients-newer` | `check` | 舊專案的 `.sdd-export/` 無法使用（006 的判定，或養分有機密樣式時的 `nutrients-invalid`；沒有進度時才判定） |
-| 3 | `progress-unreadable` | `check` | 進度無法解析、不符合結構，或含有機密樣式（可以 `clear`） |
+| 3 | `progress-unreadable` | `check` | 進度無法解析、不符合結構（含腳本寫入的欄位不是腳本寫出的格式），或 `save` 掃描的欄位、快照含有機密樣式（可以 `clear`） |
 
 `check` 的 `reason` 依上表由上而下取第一個成立的。`export_dir` 為 `none`、`empty`（需要先匯出）不是錯誤，結束碼 0。
 
@@ -200,7 +200,11 @@ uv run <skill>/scripts/sdd_rebuild.py clear                       清除進度
    所以這不證明候選屬於這個功能；SKILL.md 在執行前先確認 `speckit-specify` 回報的資料夾與其 `spec.md` 的內容）。否則不記錄：沒有候選 → `none`（另列 `incomplete`：
    不在 `baseline`、沒有 `spec.md` 的 `specs/` 子資料夾）；兩個以上 → `ambiguous`；一個但不等於 `feature_directory` → `mismatch`。
 4. 帶 `--dir`：值 MUST 是候選之一（否則 `usage`）；記錄。只在維護者確認後使用。
-5. 記錄 = 把 `spec_dir` 寫入該功能並原子保存進度。
+5. 要記錄的資料夾 `specs/<名稱>` 或 `specs/<名稱>/spec.md` 符合機密樣式時（例如 `sk-` 後接 20 個以上的英數字或連字號）不記錄、不寫入，
+   `reason: "secret"`，輸出同下（`spec_dir` 為 `null`）。這不是維護者輸入的機密，而是名稱的格式符合樣式，之後無法記錄在進度與世代紀錄中；
+   `error` 請維護者把資料夾改成不符合樣式的名稱（例如把 `sk-learn` 改為 `sklearn`），再以 `claim <feature-id> --dir <改名後的資料夾>` 記錄（改名後 `feature.json` 仍指向舊名稱，
+   不帶 `--dir` 會得到 `mismatch`；`focus` 最後會改寫 `feature.json`）。
+6. 記錄 = 把 `spec_dir` 寫入該功能並原子保存進度。
 
 輸出 `{"feature": "...", "spec_dir": "specs/004-overview", "feature_directory": "specs/004-overview", "candidates": [...], "incomplete": [...]}`。
 

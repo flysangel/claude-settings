@@ -843,25 +843,43 @@ def snapshot_problem(progress: dict, snapshot: dict) -> Invalid | None:
     return None
 
 
-def stored_shape_ok(data: dict) -> bool:
+COUNTED = ("governance", "deferred", "for_plan")
+
+
+def stored_shape_ok(data: dict, root: Path) -> bool:
+    """The script fields of a stored progress have the exact form the script writes.
+
+    Save does not scan what the script computed from the project for secrets (a spec folder may be named like one,
+    e.g. 004-sk-learn-...), so reading does not either; the exact form keeps anything typed by hand out of them.
+    The snapshot (source) is scanned like the progress instead: sdd-export's patterns already kept it clean.
+    """
     source = data.get("source")
-    fingerprint = data.get("fingerprint")
     baseline = data.get("baseline")
+    folders = set(G().spec_folders(root))
     return (
         all(key in data for key in SCRIPT_FIELDS)
         and isinstance(source, dict) and all(key in source for key in SOURCE_FIELDS)
         and isinstance(source["nutrients"], dict) and isinstance(source["nutrients"].get("generation"), int)
         and isinstance(source["lineage_state"], str)
         and (source["lineage"] is None or isinstance(source["lineage"], dict))
-        and (data["rebuilt_at"] is None or isinstance(data["rebuilt_at"], str))
-        and isinstance(data["saved_at"], str)
-        and isinstance(fingerprint, dict) and set(fingerprint) == {"constitution", "specs", "head"}
+        and (data["rebuilt_at"] is None or (isinstance(data["rebuilt_at"], str) and bool(E().DATE.fullmatch(data["rebuilt_at"]))))
+        and G().is_saved_at(data["saved_at"])
+        and G().valid_fingerprint(data["fingerprint"], folders)
         and (baseline is None or (isinstance(baseline, dict)
                                   and set(baseline) == {"constitution", "specs", "confirmed_counts"}
-                                  and isinstance(baseline["specs"], dict)
-                                  and isinstance(baseline["confirmed_counts"], dict)))
-        and (data["lineage_written"] is None or isinstance(data["lineage_written"], str))
+                                  and G().valid_fingerprint({k: baseline[k] for k in ("constitution", "specs")},
+                                                            folders, ("constitution", "specs"))
+                                  and isinstance(baseline["confirmed_counts"], dict)
+                                  and set(baseline["confirmed_counts"]) == set(COUNTED)
+                                  and all(type(baseline["confirmed_counts"][k]) is int and baseline["confirmed_counts"][k] >= 0
+                                          for k in COUNTED)))
+        and (data["lineage_written"] is None or G().is_hash(data["lineage_written"]))
     )
+
+
+def scanned_part(data: dict) -> dict:
+    """What save scans (the progress Claude sent) and what sdd-export's patterns scanned (the snapshot)."""
+    return {**{key: data[key] for key in PROGRESS_FIELDS}, "source": data["source"]}
 
 
 def load_progress(root: Path) -> tuple[str, dict | None]:
@@ -877,10 +895,11 @@ def load_progress(root: Path) -> tuple[str, dict | None]:
         validate_progress(data)
     except (OSError, ValueError, Invalid):
         return "unreadable", None
-    if not stored_shape_ok(data) or snapshot_problem(data, data["source"]) is not None:
+    if not stored_shape_ok(data, root) or snapshot_problem(data, data["source"]) is not None:
         return "unreadable", None
-    # Written before the old project's content was scanned, or edited by hand: never shown, never used.
-    if secret_paths(data):
+    # Written before the old project's content was scanned, or edited by hand: never shown, never used. Only what
+    # save scans (and the snapshot) is scanned here, so that whatever save, claim and lineage wrote reads back.
+    if secret_paths(scanned_part(data)):
         return "unreadable", None
     return "present", data
 
@@ -1414,6 +1433,19 @@ CLAIM_ERRORS = {
     "ambiguous": "more than one new spec folder was found; choose one with --dir after the maintainer confirms",
     "mismatch": "the new spec folder is not the one .specify/feature.json points at; confirm it and use --dir",
 }
+# Not a secret the maintainer typed: a folder name that only has the form the patterns look for. The progress, the
+# lineage and the next export scan these paths, so a claim of it could never be read back or written.
+PATTERN_NAME = (
+    "the name of the new spec folder has the form of a secret pattern (for example sk- followed by 20 or more "
+    "letters, digits or hyphens), so it cannot be recorded in the progress or the lineage; nothing was written. "
+    "Rename the folder to a name without that form (for example sklearn instead of sk-learn), then run "
+    "claim <feature-id> --dir <the renamed folder>"
+)
+
+
+def pattern_name(folder: str) -> bool:
+    """A spec folder whose path (as spec_dir, or as the spec.md of the next export) matches a secret pattern."""
+    return E().looks_like_secret(folder) or E().looks_like_secret(f"{folder}/spec.md")
 
 
 def command_claim(io: Io, options: dict) -> int:
@@ -1444,6 +1476,8 @@ def command_claim(io: Io, options: dict) -> int:
         return io.fail(CLAIM_ERRORS["mismatch"], "mismatch", **out)
     else:
         chosen = candidates[0]
+    if pattern_name(chosen):
+        return io.fail(PATTERN_NAME, "secret", **out)
     for feature in progress["target"]["features"]:
         if feature["id"] == feature_id:
             feature["spec_dir"] = chosen
