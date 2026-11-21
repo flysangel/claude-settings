@@ -80,3 +80,24 @@ claude -p "Reply OK" --model haiku --output-format json --max-budget-usd 0.0001 
   `api_error_status: 429`；`result` 的文字會提到 limit 與重設時間。這一點列為人工驗收項目，判讀規則的設計見決策 D4：
   即使判讀錯誤，也只會落在「中斷」而不是「失敗」，FR-021 的行為不變。
 - stdout 沒有可解析的結果物件（程序被終止、當機、Bash 工具逾時）視為「沒有回報就結束」。
+
+### E6. 以 session ID 接續（`--session-id` 與 `--resume`）
+
+```text
+claude -p "Remember the word KIWI. Reply OK." --model haiku --output-format json --session-id <uuid> </dev/null
+claude -p "What word did I ask you to remember? Reply with the word only." --model haiku --output-format json --resume <uuid> </dev/null
+```
+
+觀察：兩次結束碼皆為 0；兩次的 `session_id` 都等於預先指定的 UUID；第二次回答 `KIWI`，證明 `--resume` 帶回了第一次的對話內容，
+且可以與 `--model` 一起使用。因此腳本可以在啟動前產生 UUID 並寫入紀錄，即使子 session 中途被終止、沒有輸出結果物件，
+下一次也能以同一個 ID 接續（FR-022）。
+
+### E7. 其他機制（未實際啟動，依本 session 可見的工具定義與 help）
+
+- **Agent 工具（subagent）**：參數有 `model`（`sonnet`、`opus`、`haiku`、`fable`）、`run_in_background`（完成時通知主 session）、
+  `subagent_type`；完成後只把最終回報放進主 session 的上下文；同一個主 session 內可用 SendMessage 接續。它沒有結構化的結束狀態欄位，
+  主 session 重新開始（新的對話）後無法接續先前的 subagent。
+- **`claude --bg` 與 `claude agents`**：互動式的背景 session，`logs` 取得的是終端畫面文字，不是結構化結果；適合人操作，不適合腳本判讀。
+- **skill frontmatter 指定在 subagent 執行或指定模型**：本專案 `speckit-*` 的 frontmatter 只有 `name`、`description`、
+  `user-invocable`、`disable-model-invocation` 等欄位；是否支援其他欄位未查證，且 sdd-drive 不能修改 `speckit-*`（constitution 原則 I），
+  所以不採用這條路。
