@@ -2521,6 +2521,41 @@ def test_driver_survives_when_the_run_process_tree_is_killed(m, tmp_path, monkey
     assert status(m, root)["specs"][0]["state"] == "planned"
 
 
+def test_run_reports_finished_with_null_outcome_when_the_driver_is_killed(m, tmp_path, monkeypatch):
+    root = make_project(tmp_path, specs={"001-alpha": {}})
+    scenarios(monkeypatch, {"test_command": PASS_CMD, "sleep": 20})
+    kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    process = subprocess.Popen([PY, str(SCRIPT), "run", "--spec", "001-alpha", "--phase", "plan", "--model", "opus",
+                                "--reason", "Design."], cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, **kwargs)
+    try:
+        driver = wait_for(lambda: state_file(root).exists() and read_state(root)["driver"])
+        # Kill the driver and the child it started, so nothing keeps running; the record is left behind.
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(driver["pid"])], capture_output=True)
+        else:
+            try:
+                os.killpg(driver["pid"], signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                os.kill(driver["pid"], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        out, err = process.communicate(timeout=60)
+    finally:
+        if process.poll() is None:
+            kill_tree(process)
+    result = Result(process.returncode, out, err)
+    data = result.watched
+    assert data["status"] == "finished", result.describe()
+    last = data["attempts"][-1]
+    assert last["outcome"] is None and last["detail"] is None, result.describe()
+    state = read_state(root)
+    assert state["driver"] is not None and state["launch"] is None
+    assert status(m, root)["next"]["action"] == "finalize"
+
+
 # ======================================================== T044 clear
 
 
