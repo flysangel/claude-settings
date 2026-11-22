@@ -34,8 +34,15 @@ irm https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup
 
 確定要取代時加上 `--replace`，原檔會先備份：
 
+Linux：
+
 ```text
 curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.sh | bash -s -- --replace
+```
+
+Windows PowerShell：
+
+```text
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.ps1))) --replace
 ```
 
@@ -46,8 +53,15 @@ curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tool
 
 ## 移除
 
+Linux：
+
 ```text
 curl -fsSL https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.sh | bash -s -- remove
+```
+
+Windows PowerShell：
+
+```text
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/flysangel/claude-settings/main/tools/setup.ps1))) remove
 ```
 
