@@ -537,8 +537,11 @@ def make_old_project(
     return root
 
 
-def tree_snapshot(root: Path) -> dict[str, tuple]:
-    """Relative path -> (type, sha256 of the content, mode); directories and symlinks included."""
+def tree_snapshot(root: Path, exclude: tuple[str, ...] = ()) -> dict[str, tuple]:
+    """Relative path -> (type, sha256 of the content, mode); directories and symlinks included.
+
+    Paths in exclude (relative, with /) are left out without being opened.
+    """
     import hashlib
     import os
     import stat as stat_module
@@ -550,6 +553,8 @@ def tree_snapshot(root: Path) -> dict[str, tuple]:
         for name in sorted(dirs + names):
             path = Path(current) / name
             rel = path.relative_to(root).as_posix()
+            if rel in exclude:
+                continue
             info = path.lstat()
             if stat_module.S_ISLNK(info.st_mode):
                 result[rel] = ("link", os.readlink(path), None)
