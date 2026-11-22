@@ -305,3 +305,15 @@ Task: "T018 SKILL.md 的 frontmatter、通則與階段 1 的內容檢查 in test
 - **逐字比對的範圍**：測試只逐字比對設計文件有明寫的字串：`.specify/sdd-drive/.gitignore` 的兩行、自動接續的 `reason`（`Automatic resume after the usage limit reset.`）、`(not shown: looks like a secret)`、`(not shown)`、`(line not shown: looks like a secret)`、`reason` 與 `detail.code`、`outcome`、`auto_resume` 的列舉值、`status` 的 `next.action` 值；其餘以關鍵字與結構檢查
 - `SDD_DRIVE_CLAUDE` 與 `SDD_DRIVE_TEST_TIMING` 是測試用的環境變數（contracts/cli.md「共通」），SKILL.md 不提及；目前時間與重置時間以注入的值或假的 `resetsAt` 模擬，不改變判斷規則
 - 這個 repo 本身不是被驅動的專案：不要在其中產生 `.specify/sdd-drive/`；`tools/deploy.py`、`home/CLAUDE.md`、`.github/workflows/ci.yml` 不在本功能的修改範圍，除非 T001、T054 發現不符並經主代理同意
+
+---
+
+## Phase 8: Convergence
+
+對照檢查（`speckit-converge`）在 2026-11-22 找到的工作。設計文件已依維護者核可的修訂 A1／B1／C1 更新（commit `912ba86`）；A1 只改文件，沒有對應的任務。
+
+- [ ] T060 在 `home/skills/sdd-drive/SKILL.md` 的 Stage 3 表格新增一列：最後一筆嘗試的 `outcome` 是 `null`（`status: finished`，driver 異常消失）時，回到 Stage 1（`status` 會要求 `finalize`，交給 Stage 2）。在 `tests/unit/test_sdd_drive_skill.py` 把這一列加進 Stage 3 的列清單，並檢查它指向 Stage 1。依據：B1、contracts/skill.md 階段 3（新列）、contracts/cli.md「watch」（driver 異常消失）。現況證據：在暫存專案 `run` 一個 sleep 60 的假 `claude`，同時開一個 `watch`，再 `kill -9` 掉 driver；`run` 和 `watch` 都輸出 `status: finished`，最後一筆 `outcome: null`、`detail: null`；SKILL.md 的 Stage 3 沒有對應的列。結果總數變成 62（階段 3 共 29 列）。per contracts/skill.md 階段 3 (missing)
+- [ ] T061 在 `tests/unit/test_sdd_drive.py` 加一個測試：driver 被終止而沒有清掉記錄時（鎖已釋放、`driver` 不是 `null`、沒有 `launch`），`watch` 和 `run` 轉入的 watch 都輸出 `status: finished`，最後一筆嘗試是 `outcome: null`，之後 `status` 的 `next.action` 是 `finalize`。可以用寫入的紀錄模擬，不一定要真的終止行程。依據：B1、contracts/cli.md「watch」。現況證據：腳本 `watch_loop` 的「driver disappeared」分支已經會這樣輸出（實跑結果見 T060），但目前沒有測試直接檢查這個情況（`grep -n "disappear" tests/unit/test_sdd_drive.py` 沒有結果）。per contracts/cli.md watch (partial)
+- [ ] T062 把 `home/skills/sdd-drive/scripts/sdd_drive.py` 的 `REQUIRED_SKILLS` 加上 `speckit-converge`，讓 `status` 和 `run` 在缺少它時以結束碼 3、`reason: speckit-incomplete` 停止，並在 `missing` 列出它。同步更新 `tests/unit/test_sdd_drive.py`：`test_status_prerequisite_order` 預期的 `missing` 要包含 `speckit-converge`，另加一個只缺 `speckit-converge` 的案例。依據：C1、contracts/cli.md「結束碼與 reason」的 `speckit-incomplete`、FR-023。現況證據：`REQUIRED_SKILLS = ("speckit-plan", "speckit-tasks", "speckit-implement")`；少了 converge 時 `status` 回 `ok`，流程會一路跑完 plan、tasks、implement、test，直到 check 階段才由子 session 失敗。per contracts/cli.md speckit-incomplete (missing)
+- [ ] T063 在 `home/skills/sdd-drive/README.md` 的「前置需求」把 `speckit-converge` 列為必要的 skill（現在只列 `speckit-plan`、`speckit-tasks`、`speckit-implement`）。SKILL.md 的 Stage 1 `speckit-incomplete` 列如果要寫出必要 skill 的清單，也要列入它；`test_sdd_drive_skill.py` 視需要補上檢查。依據：C1、contracts/skill.md 階段 1 的 `speckit-incomplete` 列、contracts/skill.md「README.md」。現況證據：README.md 第 19 行。per contracts/skill.md 階段 1 (partial)
+- [ ] T064 **主代理推送分支後處理；implement 的 worker 不執行這一項，也不 push**（比照 T059）：維護者授權推送後，確認 `.github/workflows/ci.yml` 的 `test`（`ubuntu-latest` 與 `windows-latest`）、`cross-platform-produce`、`cross-platform` 都通過 T060–T063 的修改；失敗時依紀錄修正後再確認。per Constitution II (missing)
