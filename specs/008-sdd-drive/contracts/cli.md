@@ -58,7 +58,7 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 | 1 | `conflict` | 讀寫紀錄的指令 | `.specify/sdd-drive/` 有不是本 skill 的檔案 |
 | 1 | `os-error` | 寫入的指令 | 無法寫入或無法執行 git 指令；暫存檔已移除，已存在的檔案不變 |
 | 3 | `dependency` | 全部 | 相鄰的 sdd-grill 缺少 |
-| 3 | `speckit-missing`、`speckit-incomplete` | `status`、`run` | 未導入 Spec Kit，或缺少 `speckit-plan`、`speckit-tasks`、`speckit-implement` 任何一個（`missing` 列出） |
+| 3 | `speckit-missing`、`speckit-incomplete` | `status`、`run` | 未導入 Spec Kit，或缺少 `speckit-plan`、`speckit-tasks`、`speckit-implement`、`speckit-converge` 任何一個（`missing` 列出） |
 | 3 | `no-specs` | `status` | `specs/` 下沒有任何 spec |
 | 3 | `claude-missing` | `status`、`run` | 找不到 `claude` |
 | 3 | `state-unreadable` | 讀紀錄的指令（`clear` 除外） | `state.json` 無法解析、不符合結構或機密掃描命中（`detail` 指出欄位路徑；可 `clear`） |
@@ -165,6 +165,7 @@ uv run <skill>/scripts/sdd_drive.py clear                                    刪
 只讀。等待直到下列任一成立，輸出當時的結果後結束（結束碼 0）：driver 結束（`driver` 清除且鎖釋放）；driver 在這次 `watch` 期間由非等待轉入 `waiting`（每個等待中的嘗試只回報一次；
 啟動 `watch` 時已在等待者不立即回報，而是等到 driver 離開等待或時間到；`run` 啟動 driver 後轉為 `watch` 的那一段屬於同一次 `watch`）；`--minutes` 到時（預設 110，範圍 1–115；到時仍在等待則輸出 `status: waiting` 與 `waiting_until`）；`launch` 超過 60 秒仍未被 driver 取得（`launch-failed`）。
 沒有 driver、沒有 `launch`，且最後一筆嘗試已有結果時，回報該筆結果（讓剛結束的 driver 的結果不會遺失）；連嘗試都沒有時 `no-driver`。
+driver 異常消失（例如被終止或重新開機：鎖已釋放，但 `driver` 仍有記錄、沒有 `launch`）時，輸出 `status: finished`，`attempts` 的最後一筆 `outcome` 為 `null`（`detail` 為 `null`）；之後 `status` 的 `next.action` 為 `finalize`。
 
 輸出：
 

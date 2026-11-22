@@ -81,7 +81,7 @@ specs/008-sdd-drive/
 ├── quickstart.md        # 自動測試與人工驗收
 ├── contracts/
 │   ├── cli.md           # sdd_drive.py 的指令介面
-│   └── skill.md         # SKILL.md 的必要指示：階段 1–6 與 3B（7 個）、61 種結果的下一步（含 check 階段與既有的基準）；工作說明的必含事項
+│   └── skill.md         # SKILL.md 的必要指示：階段 1–6 與 3B（7 個）、62 種結果的下一步（含 check 階段與既有的基準）；工作說明的必含事項
 └── tasks.md             # Phase 2（/speckit-tasks 產生，不在本階段）
 ```
 

@@ -65,7 +65,7 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 |---|---|
 | 結束碼 3、`dependency` | 說明 sdd-grill 未安裝（以部署工具重新部署），停止 |
 | `speckit-missing` | 說明先執行 `/sdd-init`，再以 `/sdd-grill` 或 `/sdd-rebuild` 產生 spec；不開子 session，停止（Edge Case、FR-014） |
-| `speckit-incomplete` | 列出缺少的 `speckit-*`，說明可能是 Spec Kit 不相容的變更或需要 `/sdd-update`，停止（Edge Case） |
+| `speckit-incomplete` | 列出缺少的 `speckit-*`（必要的是 `speckit-plan`、`speckit-tasks`、`speckit-implement`、`speckit-converge`），說明可能是 Spec Kit 不相容的變更或需要 `/sdd-update`，停止（Edge Case） |
 | `no-specs` | 說明先以 `/sdd-grill` 或 `/sdd-rebuild` 產生 spec，停止 |
 | `claude-missing` | 說明找不到 `claude` 指令、無法開子 session，停止；不親自實作 |
 | `conflict` | 說明 `.specify/sdd-drive/` 有不是本 skill 的檔案，請維護者確認；不刪除，停止 |
@@ -116,6 +116,7 @@ SKILL.md 與腳本的分工見 [research.md](../research.md) 的 D1、D16；腳�
 | `outcome: api-error` | 回報 API 錯誤與 `detail.text`（例如未登入、模型不可用），不計入失敗、進度保留；不親自實作、不自動重試，停止；說明處理後再次 `/sdd-drive` 會接續 |
 | `outcome: interrupted` | 回報子 session 沒有回報就結束（`detail.code`），依 `state_after` 說明進度，不計入失敗；停止，再次 `/sdd-drive` 會接續（US3-3） |
 | `outcome: launch-failed` | 回報子 session 無法啟動與原因；不親自實作，停止（Edge Case、FR-014） |
+| 最後一筆嘗試的 `outcome` 為 `null`（`status: finished`，driver 異常消失） | 回到階段 1（`status` 會要求 `finalize`，依階段 2 處理）（US3-3） |
 | `resume_failed: true` | 回報無法接續原本的子 session（例如紀錄不在這台機器），改以 `--resume --fresh` 開新的子 session 執行同一階段一次；新的 session 仍依檔案狀態從未完成處繼續；若再次失敗依其 `outcome` 處理 |
 | `permission_denials` 不為空 | 在階段回報中列出被拒絕的工具；不改變上面的分支 |
 | `reason: secret` | 改寫理由（不含機密）後重新執行一次 |

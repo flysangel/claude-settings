@@ -145,7 +145,7 @@
  "phase_failures": 0, "models_used_this_run": ["opus", "sonnet"]}
 ```
 
-`models_used_this_run`：從最後一次 `none` 之後（或紀錄開頭）的嘗試中，依出現順序去重的 `model`。
+`models_used_this_run`：紀錄中所有嘗試（自紀錄開頭或上一次 `clear` 起）依出現順序去重的 `model`。它不區分批次：`status` 是唯讀的，紀錄也不記下何時回報過 `none`，因此無法從檔案分出「這一次流程」；先前批次用過的模型也會列入（對照檢查發現、維護者核可的修訂 A1）。
 
 `status` 另輸出 `last_attempt`：最近一筆有結果的嘗試的 `spec`、`phase`、`outcome`、`auto`、`limit`、`auto_resume`、`ended_at`，供主 session 回報「你不在時發生了什麼」（D20）。
 
