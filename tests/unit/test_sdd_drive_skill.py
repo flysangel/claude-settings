@@ -207,15 +207,27 @@ STAGE3_ROWS = [
     ("outcome: interrupted",), ("outcome: launch-failed",), ("resume_failed: true",), ("permission_denials",),
     ("reason: secret",), ("reason: running",), ("pending-finalize", "not-next"), ("reason: dirty",),
     ("branch-diverged",), ("speckit-missing", "state-unreadable"), ("os-error",), ("printed no JSON",),
-    ("stopped by a usage limit",),
+    ("stopped by a usage limit",), ("disappeared",),
 ]
 
 
-def test_stage_3_has_the_28_results():
-    assert len(rows("Stage 3:")) == 28
+def test_stage_3_has_the_29_results():
+    assert len(rows("Stage 3:")) == 29
     assert len([r for r in rows("Stage 3:") if r.split("|")[1].strip() == "`outcome: succeeded`"]) == 1
     for keys in STAGE3_ROWS:
         row("Stage 3:", *keys)
+
+
+def test_stage_3_driver_disappeared_row_goes_back_to_stage_1():
+    gone = row("Stage 3:", "disappeared")
+    assert "`outcome` is `null`" in gone and "`status: finished`" in gone
+    assert "Stage 1" in gone and "finalize" in gone and "Stage 2" in gone
+
+
+def test_stage_1_speckit_incomplete_lists_the_required_skills():
+    incomplete = row("Stage 1", "speckit-incomplete")
+    for name in ("speckit-plan", "speckit-tasks", "speckit-implement", "speckit-converge"):
+        assert f"`{name}`" in incomplete
 
 
 def test_stage_3_us1_rows():
@@ -447,3 +459,11 @@ def test_cross_references_point_at_existing_stages():
     for reference in set(re.findall(r"Stage (\d+B?)", text())):
         assert f"Stage {reference}" in titles, reference
     assert "Stage 3B" in row("Stage 6", "cancel_requested: true")
+
+
+def test_readme_prerequisites_list_every_required_speckit_skill():
+    text = README_MD.read_text(encoding="utf-8")
+    start = text.index("## 前置需求")
+    block = text[start:text.index("\n## ", start + 1)] if "\n## " in text[start + 1:] else text[start:]
+    for name in ("speckit-plan", "speckit-tasks", "speckit-implement", "speckit-converge"):
+        assert f"`{name}`" in block

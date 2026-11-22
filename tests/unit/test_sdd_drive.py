@@ -1204,7 +1204,15 @@ def test_status_prerequisite_order(m, tmp_path, monkeypatch):
     partial = make_project(tmp_path, "partial", skills=("speckit-plan",))
     result = drive(m, partial, "status")
     assert (result.code, result.json["reason"]) == (3, "speckit-incomplete")
-    assert result.json["missing"] == ["speckit-tasks", "speckit-implement"]
+    assert result.json["missing"] == ["speckit-tasks", "speckit-implement", "speckit-converge"]
+
+    no_converge = make_project(tmp_path, "no-converge", skills=("speckit-plan", "speckit-tasks", "speckit-implement"),
+                               specs={"001-alpha": {}})
+    result = drive(m, no_converge, "status")
+    assert (result.code, result.json["reason"]) == (3, "speckit-incomplete")
+    assert result.json["missing"] == ["speckit-converge"]
+    result = run_phase(m, no_converge, "001-alpha", "plan")
+    assert (result.code, result.json["reason"], result.json["missing"]) == (3, "speckit-incomplete", ["speckit-converge"])
 
     empty = make_project(tmp_path, "empty")
     assert drive(m, empty, "status").json["reason"] == "no-specs"
@@ -1551,6 +1559,17 @@ def test_watch_reports_the_last_finished_attempt(m, tmp_path):
     write_state(root, blank_state(attempts=[attempt(1)]))
     data = drive(m, root, "watch").watched
     assert data["status"] == "finished" and data["attempts"][0]["outcome"] == "succeeded"
+
+
+def test_watch_driver_disappeared_finishes_with_null_outcome(m, tmp_path):
+    root = make_project(tmp_path, specs={"001-alpha": {"plan": True}})
+    driver = {"token": UUID1, "pid": 2147483646, "phase": "running", "attempt": 1, "waiting_until": None,
+              "started_at": T0}
+    write_state(root, blank_state(attempts=[attempt(1, phase="tasks", outcome=None)], driver=driver))
+    data = drive(m, root, "watch").watched
+    assert data["status"] == "finished"
+    assert data["attempts"][-1]["outcome"] is None
+    assert status(m, root)["next"]["action"] == "finalize"
 
 
 def test_watch_minutes_range(m, tmp_path):
