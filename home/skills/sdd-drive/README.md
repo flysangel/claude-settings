@@ -16,7 +16,7 @@ spec 確認之後，由子 session 依編號一份一份地把每份 spec 做完
 
 ## 前置需求
 
-- 專案已導入 Spec Kit（`/sdd-init`），且有 `speckit-plan`、`speckit-tasks`、`speckit-implement` 這幾個 skill；已有 spec
+- 專案已導入 Spec Kit（`/sdd-init`），且有 `speckit-plan`、`speckit-tasks`、`speckit-implement`、`speckit-converge` 這幾個 skill；已有 spec
   （`/sdd-grill` 或 `/sdd-rebuild` 產生）。
 - 同時部署 `sdd-grill`：腳本載入它的 Spec Kit 狀態判定與機密樣式。
 - 只需要 Claude Code 本身與 `uv`：子 session 是腳本以 `claude -p` 啟動的無頭 session，腳本 `scripts/sdd_drive.py`
