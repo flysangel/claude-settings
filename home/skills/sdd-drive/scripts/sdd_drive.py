@@ -88,7 +88,7 @@ def G():
 PHASES = ("plan", "tasks", "implement", "check")
 FAILURE_KEYS = ("plan", "tasks", "implement", "test", "check")
 PHASE_SKILLS = {"plan": "speckit-plan", "tasks": "speckit-tasks", "implement": "speckit-implement", "check": "speckit-converge"}
-REQUIRED_SKILLS = ("speckit-plan", "speckit-tasks", "speckit-implement")
+REQUIRED_SKILLS = ("speckit-plan", "speckit-tasks", "speckit-implement", "speckit-converge")
 
 OWN_DIR = ".specify/sdd-drive"
 GITIGNORE_NAME = ".gitignore"
