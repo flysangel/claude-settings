@@ -71,7 +71,7 @@ Order: run `status`, handle it with the table below, announce, then go to Stage 
 |---|---|
 | exit code 3, `reason: dependency` | Say the sdd-grill skill is not installed next to this skill (redeploy with the deploy tool). Stop. |
 | `reason: speckit-missing` | Say Spec Kit is not set up: run `/sdd-init` first, then create specs with `/sdd-grill` or `/sdd-rebuild`. Do not start a child session. Stop. |
-| `reason: speckit-incomplete` | List the missing `speckit-*` skills from `missing`; say Spec Kit may have changed incompatibly or `/sdd-update` may be needed. Stop. |
+| `reason: speckit-incomplete` | List the missing `speckit-*` skills from `missing` (the required ones are `speckit-plan`, `speckit-tasks`, `speckit-implement` and `speckit-converge`); say Spec Kit may have changed incompatibly or `/sdd-update` may be needed. Stop. |
 | `reason: no-specs` | Say there is no spec yet: create specs with `/sdd-grill` or `/sdd-rebuild` first. Stop. |
 | `reason: claude-missing` | Say the `claude` command was not found, so no child session can start. Do not do the work yourself. Stop. |
 | `reason: conflict` | Say `.specify/sdd-drive/` holds files this skill did not create and ask the maintainer to check them. Do not delete anything. Stop. |
@@ -126,6 +126,7 @@ The output of `watch` (Stage 3B) has the same form and is handled with this tabl
 | `outcome: api-error` (and `resume_failed` is not `true`) | Report the API error and `detail.text` (for example not logged in, or the model is unavailable). It is not counted as a failure and progress is kept. Do not do the work yourself and do not retry automatically. Stop; say the next `/sdd-drive` resumes after it is handled. |
 | `outcome: interrupted` (and `resume_failed` is not `true`) | Report that the child ended without a report (`detail.code`) and the progress from `state_after`; it is not counted as a failure. Stop; the next `/sdd-drive` resumes. |
 | `outcome: launch-failed` | Report that the child session could not start and why (`detail.text`). Do not do the work yourself. Stop. |
+| the last attempt's `outcome` is `null` (`status: finished`: the driver disappeared without a report) | Go back to Stage 1: `status` will ask for `finalize`, handle it with Stage 2. Do not do the work yourself. |
 | `resume_failed: true` (whatever the `outcome`) | Report that the original child session could not be resumed (for example its history is not on this machine). Run the same phase once with a fresh session: `run ... --resume --fresh`. The new session still continues from the unfinished part of the files. If that fails too, handle its `outcome`. |
 | `permission_denials` is not empty | List the denied tools in the phase report; it does not change the other rows. |
 | `reason: secret` | Rewrite the reason without the secret and run once more. |
